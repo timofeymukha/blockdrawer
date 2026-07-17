@@ -54,6 +54,113 @@ class MeshModelTests(unittest.TestCase):
         self.assertEqual(model.block_cell_counts(model.blocks[1]), (23, 10, 1))
         model.validate()
 
+    def test_arc_type_creates_a_curved_edge_with_one_control_point(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v0", "v1")
+
+        model.set_edge_type(selected, "arc")
+
+        self.assertEqual(model.edge_type(selected), "arc")
+        point_x, point_y = model.arc_point(selected)
+        self.assertAlmostEqual(point_x, 0.5)
+        self.assertLess(point_y, 0.0)
+        self.assertEqual(model.edge_point(selected, 0.0), (0.0, 0.0))
+        self.assertAlmostEqual(model.edge_point(selected, 1.0)[0], 1.0)
+        self.assertLess(model.edge_point(selected, 0.5)[1], 0.0)
+        model.validate()
+
+    def test_arc_point_can_be_moved_and_collinear_move_is_rolled_back(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v0", "v1")
+        model.set_edge_type(selected, "arc")
+
+        model.set_arc_point(selected, 0.5, -0.5)
+        self.assertEqual(model.arc_point(selected), (0.5, -0.5))
+
+        with self.assertRaisesRegex(TopologyError, "collinear"):
+            model.set_arc_point(selected, 0.5, 0.0)
+
+        self.assertEqual(model.arc_point(selected), (0.5, -0.5))
+        model.validate()
+
+    def test_changing_arc_back_to_line_removes_optional_geometry(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v0", "v1")
+        model.set_edge_type(selected, "arc")
+
+        model.set_edge_type(selected, "line")
+
+        self.assertEqual(model.edge_type(selected), "line")
+        self.assertNotIn(selected, model.edge_geometry)
+        self.assertEqual(model.edge_point(selected, 0.5), (0.5, 0.0))
+
+    def test_polyline_points_define_length_based_edge_positions(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v0", "v1")
+        model.set_edge_type(selected, "polyLine")
+        model.set_edge_control_point(selected, 0, 0.0, 1.0)
+        second_index = model.add_polyline_point(selected, 0)
+        model.set_edge_control_point(selected, second_index, 1.0, 1.0)
+
+        self.assertEqual(model.edge_type(selected), "polyLine")
+        self.assertEqual(
+            model.edge_control_points(selected),
+            ((0.0, 1.0), (1.0, 1.0)),
+        )
+        self.assertEqual(model.edge_point(selected, 0.25), (0.0, 0.75))
+        self.assertEqual(model.edge_point(selected, 0.5), (0.5, 1.0))
+        self.assertEqual(model.edge_point(selected, 0.75), (1.0, 0.75))
+        model.validate()
+
+    def test_polyline_points_can_be_added_removed_and_reset(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v0", "v1")
+        model.set_edge_type(selected, "polyLine")
+        model.set_edge_control_point(selected, 0, 0.25, -0.25)
+        second = model.add_polyline_point(selected, 0)
+        model.set_edge_control_point(selected, second, 0.5, -0.5)
+        third = model.add_polyline_point(selected, second)
+        model.set_edge_control_point(selected, third, 0.8, -0.3)
+
+        model.reset_polyline_points(selected)
+        self.assertEqual(
+            model.edge_control_points(selected),
+            ((0.25, 0.0), (0.5, 0.0), (0.75, 0.0)),
+        )
+
+        model.remove_polyline_point(selected, 1)
+        model.remove_polyline_point(selected, 1)
+        self.assertEqual(model.edge_control_points(selected), ((0.25, 0.0),))
+        with self.assertRaisesRegex(TopologyError, "at least one"):
+            model.remove_polyline_point(selected, 0)
+
+    def test_polyline_rejects_coincident_adjacent_point_and_rolls_back(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v0", "v1")
+        model.set_edge_type(selected, "polyLine")
+        before = model.edge_control_points(selected)
+
+        with self.assertRaisesRegex(TopologyError, "coincide"):
+            model.set_edge_control_point(selected, 0, 0.0, 0.0)
+
+        self.assertEqual(model.edge_control_points(selected), before)
+        model.validate()
+
+    def test_vertex_move_that_invalidates_an_arc_is_rolled_back(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v0", "v1")
+        model.set_edge_type(selected, "arc")
+        model.set_arc_point(selected, 0.5, -0.5)
+
+        with self.assertRaisesRegex(TopologyError, "collinear"):
+            model.move_vertex("v1", 1.0, -1.0)
+
+        self.assertEqual(
+            (model.vertices["v1"].x, model.vertices["v1"].y),
+            (1.0, 0.0),
+        )
+        model.validate()
+
     def test_new_block_inherits_source_counts(self) -> None:
         model = MeshModel()
         model.set_edge_cells(edge_key("v0", "v1"), 7)
@@ -142,13 +249,16 @@ class MeshModelTests(unittest.TestCase):
     def test_removing_boundary_edge_removes_its_block_and_orphans(self) -> None:
         model = MeshModel()
         model.add_block(edge_key("v1", "v2"))
+        removed_edge = edge_key("v4", "v5")
+        model.set_edge_type(removed_edge, "arc")
 
-        removed = model.remove_edge(edge_key("v4", "v5"))
+        removed = model.remove_edge(removed_edge)
 
         self.assertEqual([block.id for block in removed], ["b1"])
         self.assertEqual([block.id for block in model.blocks], ["b0"])
         self.assertEqual(set(model.vertices), {"v0", "v1", "v2", "v3"})
-        self.assertNotIn(edge_key("v4", "v5"), model.edge_cells)
+        self.assertNotIn(removed_edge, model.edge_cells)
+        self.assertNotIn(removed_edge, model.edge_geometry)
         model.validate()
 
     def test_edge_removal_cannot_delete_every_remaining_block(self) -> None:

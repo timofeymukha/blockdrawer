@@ -49,6 +49,66 @@ class FoamExportTests(unittest.TestCase):
         self.assertEqual(edges_section.group(1).strip(), "")
         self.assertEqual(boundary_section.group(1).strip(), "")
 
+    def test_arc_is_exported_on_lower_and_upper_extruded_edges(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v0", "v1")
+        model.set_edge_type(selected, "arc")
+        model.set_arc_point(selected, 0.5, -0.25)
+        model.set_z_extents(-1.0, 2.0)
+
+        result = block_mesh_dict(model)
+
+        edges_section = re.search(r"edges\s*\((.*?)\)\s*;", result, re.DOTALL)
+        self.assertIsNotNone(edges_section)
+        arc_lines = [
+            line.strip()
+            for line in edges_section.group(1).splitlines()
+            if line.strip()
+        ]
+        self.assertEqual(arc_lines, [
+            "arc 0 1 (0.5 -0.25 -1)",
+            "arc 4 5 (0.5 -0.25 2)",
+        ])
+
+    def test_arc_shared_by_two_blocks_is_not_duplicated(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v1", "v2")
+        model.set_edge_type(selected, "arc")
+        model.set_arc_point(selected, 1.2, 0.5)
+        model.add_block(selected)
+
+        result = block_mesh_dict(model)
+
+        self.assertEqual(result.count("    arc "), 2)
+
+    def test_polyline_point_lists_are_exported_on_both_z_planes(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v0", "v1")
+        model.set_edge_type(selected, "polyLine")
+        model.set_edge_control_point(selected, 0, 0.25, -0.4)
+        second = model.add_polyline_point(selected, 0)
+        model.set_edge_control_point(selected, second, 0.75, -0.2)
+        model.set_z_extents(-1.0, 2.0)
+
+        result = block_mesh_dict(model)
+
+        self.assertIn(
+            """    polyLine 0 1
+    (
+        (0.25 -0.4 -1)
+        (0.75 -0.2 -1)
+    )""",
+            result,
+        )
+        self.assertIn(
+            """    polyLine 4 5
+    (
+        (0.25 -0.4 2)
+        (0.75 -0.2 2)
+    )""",
+            result,
+        )
+
     def test_empty_topology_cannot_be_exported(self) -> None:
         model = MeshModel(initialize=False)
 

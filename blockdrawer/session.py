@@ -6,11 +6,18 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .model import Block, MeshModel, TopologyError, Vertex, edge_key
+from .model import (
+    Block,
+    EdgeGeometry,
+    MeshModel,
+    TopologyError,
+    Vertex,
+    edge_key,
+)
 
 
 FORMAT_NAME = "blockDrawer"
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 
 
 class SessionError(ValueError):
@@ -40,6 +47,18 @@ def to_data(model: MeshModel) -> dict[str, Any]:
             {"vertices": list(current), "cells": model.edge_cells[current]}
             for current in model.edges()
         ],
+        "edgeGeometry": [
+            {
+                "vertices": list(current),
+                "type": geometry.kind,
+                "points": [
+                    {"x": point[0], "y": point[1]}
+                    for point in geometry.points
+                ],
+            }
+            for current in model.edges()
+            if (geometry := model.edge_geometry.get(current)) is not None
+        ],
     }
 
 
@@ -49,15 +68,19 @@ def from_data(data: Any) -> MeshModel:
             raise SessionError("The session root must be a JSON object")
         if data.get("format") != FORMAT_NAME:
             raise SessionError("This is not a BlockDrawer session")
-        if data.get("version") != FORMAT_VERSION:
+        version = data.get("version")
+        if version not in (1, FORMAT_VERSION):
             raise SessionError(
-                f"Unsupported BlockDrawer session version {data.get('version')!r}"
+                f"Unsupported BlockDrawer session version {version!r}"
             )
 
         settings = _mapping(data, "settings")
         vertices_data = _list(data, "vertices")
         blocks_data = _list(data, "blocks")
         cells_data = _list(data, "edgeCells")
+        # Version 1 stored straight edges only. Treat the absent geometry list
+        # as an explicit migration to version 2's implicit-line representation.
+        geometry_data = [] if version == 1 else _list(data, "edgeGeometry")
 
         model = MeshModel(initialize=False)
         for item in vertices_data:
@@ -95,6 +118,28 @@ def from_data(data: Any) -> MeshModel:
             if current in model.edge_cells:
                 raise SessionError(f"Duplicate edge cell data for {current!r}")
             model.edge_cells[current] = _integer(item, "cells")
+
+        for item in geometry_data:
+            if not isinstance(item, dict):
+                raise SessionError("Each edgeGeometry entry must be an object")
+            vertex_ids = _list(item, "vertices")
+            if len(vertex_ids) != 2 or not all(isinstance(value, str)
+                                                for value in vertex_ids):
+                raise SessionError("An edgeGeometry entry needs two vertex IDs")
+            current = edge_key(vertex_ids[0], vertex_ids[1])
+            if current in model.edge_geometry:
+                raise SessionError(f"Duplicate edge geometry for {current!r}")
+            points_data = _list(item, "points")
+            points: list[tuple[float, float]] = []
+            for point in points_data:
+                if not isinstance(point, dict):
+                    raise SessionError(
+                        "Each edge interpolation point must be an object"
+                    )
+                points.append((_number(point, "x"), _number(point, "y")))
+            model.edge_geometry[current] = EdgeGeometry(
+                _string(item, "type"), tuple(points)
+            )
 
         model.z_cells = _integer(settings, "zCells")
         model.z_min = _number(settings, "zMin")

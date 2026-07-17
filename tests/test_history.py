@@ -63,6 +63,52 @@ class ModelHistoryTests(unittest.TestCase):
         self.assertFalse(history.record(model))
         self.assertFalse(history.can_undo)
 
+    def test_arc_creation_and_point_move_are_undoable(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v0", "v1")
+        history = ModelHistory(model)
+
+        model.set_edge_type(selected, "arc")
+        history.record(model)
+        default_point = model.arc_point(selected)
+        model.set_arc_point(selected, 0.5, -0.5)
+        history.record(model)
+
+        restored = history.undo()
+        self.assertEqual(restored.edge_type(selected), "arc")
+        self.assertEqual(restored.arc_point(selected), default_point)
+        restored = history.undo()
+        self.assertEqual(restored.edge_type(selected), "line")
+        restored = history.redo()
+        self.assertEqual(restored.edge_type(selected), "arc")
+        restored = history.redo()
+        self.assertEqual(restored.arc_point(selected), (0.5, -0.5))
+
+    def test_polyline_point_reset_is_undoable(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v0", "v1")
+        model.set_edge_type(selected, "polyLine")
+        model.set_edge_control_point(selected, 0, 0.25, -0.4)
+        second = model.add_polyline_point(selected, 0)
+        model.set_edge_control_point(selected, second, 0.8, -0.2)
+        history = ModelHistory(model)
+        before = model.edge_control_points(selected)
+
+        model.reset_polyline_points(selected)
+        history.record(model)
+
+        self.assertEqual(
+            model.edge_control_points(selected),
+            ((1.0 / 3.0, 0.0), (2.0 / 3.0, 0.0)),
+        )
+        restored = history.undo()
+        self.assertEqual(restored.edge_control_points(selected), before)
+        restored = history.redo()
+        self.assertEqual(
+            restored.edge_control_points(selected),
+            ((1.0 / 3.0, 0.0), (2.0 / 3.0, 0.0)),
+        )
+
     def test_edge_deletion_and_all_incident_blocks_undo_atomically(self) -> None:
         model = MeshModel()
         internal = edge_key("v1", "v2")

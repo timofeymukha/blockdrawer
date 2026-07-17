@@ -17,6 +17,7 @@ from .session import SessionError, load_session, save_session
 
 APP_NAME = "BlockDrawer"
 MAX_VISIBLE_EDGE_MARKERS = 500
+CURVE_RENDER_SEGMENTS = 64
 
 
 class BlockDrawerApp:
@@ -30,10 +31,13 @@ class BlockDrawerApp:
         self.dirty = False
         self.selected_vertex: str | None = None
         self.selected_edge: EdgeKey | None = None
+        self.selected_control_point_index: int | None = None
         self.block_vertex_selection: list[str] | None = None
         self.item_targets: dict[int, tuple[str, object]] = {}
         self.drag_vertex: str | None = None
+        self.drag_control_point: tuple[EdgeKey, int] | None = None
         self.drag_changed = False
+        self.last_pressed_target: tuple[str, object] | None = None
         self.pan_anchor: tuple[float, float, float, float] | None = None
 
         self.system_tk_scaling = float(self.root.tk.call("tk", "scaling"))
@@ -80,6 +84,10 @@ class BlockDrawerApp:
         self.vertex_x_var: tk.StringVar | None = None
         self.vertex_y_var: tk.StringVar | None = None
         self.edge_cells_var: tk.StringVar | None = None
+        self.edge_type_var: tk.StringVar | None = None
+        self.point_x_var: tk.StringVar | None = None
+        self.point_y_var: tk.StringVar | None = None
+        self.polyline_point_var: tk.StringVar | None = None
 
         self._build_window()
         self._sync_global_values()
@@ -147,12 +155,32 @@ class BlockDrawerApp:
         )
         self.canvas.grid(row=0, column=0, sticky="nsew")
 
-        self.sidebar = ttk.Frame(
-            main, width=self._px(300), padding=self._px(12)
+        self.sidebar_host = ttk.Frame(main, width=self._px(300))
+        self.sidebar_host.grid(row=0, column=1, sticky="ns")
+        self.sidebar_host.grid_propagate(False)
+        self.sidebar_host.columnconfigure(0, weight=1)
+        self.sidebar_host.rowconfigure(0, weight=1)
+        self.sidebar_canvas = tk.Canvas(
+            self.sidebar_host,
+            highlightthickness=0,
+            borderwidth=0,
+            background=self.root.cget("background"),
         )
-        self.sidebar.grid(row=0, column=1, sticky="ns")
-        self.sidebar.grid_propagate(False)
+        self.sidebar_canvas.grid(row=0, column=0, sticky="nsew")
+        self.sidebar_scrollbar = ttk.Scrollbar(
+            self.sidebar_host,
+            orient="vertical",
+            command=self.sidebar_canvas.yview,
+        )
+        self.sidebar_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.sidebar_canvas.configure(yscrollcommand=self.sidebar_scrollbar.set)
+        self.sidebar = ttk.Frame(self.sidebar_canvas, padding=self._px(12))
+        self.sidebar_window = self.sidebar_canvas.create_window(
+            (0, 0), window=self.sidebar, anchor="nw"
+        )
         self.sidebar.columnconfigure(0, weight=1)
+        self.sidebar.bind("<Configure>", self._on_sidebar_content_configure)
+        self.sidebar_canvas.bind("<Configure>", self._on_sidebar_canvas_configure)
         self._build_sidebar()
 
         self.status_bar = ttk.Label(
@@ -178,6 +206,9 @@ class BlockDrawerApp:
         self.canvas.bind("<MouseWheel>", self._on_mousewheel)
         self.canvas.bind("<Button-4>", self._on_mousewheel)
         self.canvas.bind("<Button-5>", self._on_mousewheel)
+        self.root.bind("<MouseWheel>", self._on_sidebar_mousewheel, add="+")
+        self.root.bind("<Button-4>", self._on_sidebar_mousewheel, add="+")
+        self.root.bind("<Button-5>", self._on_sidebar_mousewheel, add="+")
         self.canvas.bind("<Configure>", lambda _event: self.redraw())
 
         self.root.bind("<Control-n>", lambda _event: self.new_session())
@@ -259,6 +290,27 @@ class BlockDrawerApp:
         menu.add_cascade(label="View", menu=view_menu)
         self.root.configure(menu=menu)
 
+    def _on_sidebar_content_configure(self, _event: tk.Event) -> None:
+        bounds = self.sidebar_canvas.bbox("all")
+        if bounds is not None:
+            self.sidebar_canvas.configure(scrollregion=bounds)
+
+    def _on_sidebar_canvas_configure(self, event: tk.Event) -> None:
+        self.sidebar_canvas.itemconfigure(self.sidebar_window, width=event.width)
+
+    def _on_sidebar_mousewheel(self, event: tk.Event) -> str | None:
+        widget: tk.Misc | None = event.widget
+        while widget is not None and widget is not self.sidebar_host:
+            widget = getattr(widget, "master", None)
+        if widget is None:
+            return None
+        if getattr(event, "num", None) == 4 or getattr(event, "delta", 0) > 0:
+            direction = -1
+        else:
+            direction = 1
+        self.sidebar_canvas.yview_scroll(direction, "units")
+        return "break"
+
     def _build_sidebar(self) -> None:
         title = ttk.Label(
             self.sidebar, text="Properties", font=self._font(15, "bold")
@@ -324,6 +376,10 @@ class BlockDrawerApp:
         self.vertex_x_var = None
         self.vertex_y_var = None
         self.edge_cells_var = None
+        self.edge_type_var = None
+        self.point_x_var = None
+        self.point_y_var = None
+        self.polyline_point_var = None
 
         if self.block_vertex_selection is not None:
             count = len(self.block_vertex_selection)
@@ -397,6 +453,14 @@ class BlockDrawerApp:
         elif self.selected_edge is not None:
             first, second = self.selected_edge
             cells = self.model.edge_cells[self.selected_edge]
+            edge_type = self.model.edge_type(self.selected_edge)
+            control_points = self.model.edge_control_points(self.selected_edge)
+            if control_points:
+                if self.selected_control_point_index is None \
+                        or self.selected_control_point_index >= len(control_points):
+                    self.selected_control_point_index = 0
+            else:
+                self.selected_control_point_index = None
             affected = self.model.edge_constraint_component(self.selected_edge)
             boundary = self.model.is_boundary_edge(self.selected_edge)
             ttk.Label(
@@ -409,6 +473,20 @@ class BlockDrawerApp:
             )
             self.edge_cells_var = tk.StringVar(value=str(cells))
             self._field(self.selection_frame, 1, "Cells", self.edge_cells_var)
+            ttk.Label(self.selection_frame, text="Type").grid(
+                row=2, column=0, sticky="w",
+                padx=(0, self._px(8)), pady=self._px(3),
+            )
+            self.edge_type_var = tk.StringVar(value=edge_type)
+            type_selector = ttk.Combobox(
+                self.selection_frame,
+                textvariable=self.edge_type_var,
+                values=MeshModel.SUPPORTED_EDGE_TYPES,
+                state="readonly",
+                width=14,
+            )
+            type_selector.grid(row=2, column=1, sticky="ew", pady=self._px(3))
+            type_selector.bind("<<ComboboxSelected>>", self._edge_type_selected)
             ttk.Label(
                 self.selection_frame,
                 text=(
@@ -419,21 +497,133 @@ class BlockDrawerApp:
                 foreground="#52606d",
                 wraplength=self._px(245),
             ).grid(
-                row=2, column=0, columnspan=2, sticky="w",
+                row=3, column=0, columnspan=2, sticky="w",
                 pady=(self._px(5), self._px(8)),
             )
             ttk.Button(
                 self.selection_frame,
                 text="Apply cell count",
                 command=self.apply_edge_cells,
-            ).grid(row=3, column=0, columnspan=2, sticky="ew")
+            ).grid(row=4, column=0, columnspan=2, sticky="ew")
+
+            next_row = 5
+            if control_points and self.selected_control_point_index is not None:
+                point_index = self.selected_control_point_index
+                point_x, point_y = control_points[point_index]
+                ttk.Label(
+                    self.selection_frame,
+                    text=(
+                        "Arc interpolation point"
+                        if edge_type == "arc"
+                        else "polyLine interpolation points"
+                    ),
+                    font=self._font(10, "bold"),
+                ).grid(
+                    row=next_row, column=0, columnspan=2, sticky="w",
+                    pady=(self._px(10), self._px(3)),
+                )
+                next_row += 1
+                if edge_type == "polyLine":
+                    ttk.Label(self.selection_frame, text="Selected point").grid(
+                        row=next_row, column=0, sticky="w",
+                        padx=(0, self._px(8)), pady=self._px(3),
+                    )
+                    self.polyline_point_var = tk.StringVar(
+                        value=str(point_index + 1)
+                    )
+                    point_selector = ttk.Combobox(
+                        self.selection_frame,
+                        textvariable=self.polyline_point_var,
+                        values=tuple(
+                            str(index + 1) for index in range(len(control_points))
+                        ),
+                        state="readonly",
+                        width=14,
+                    )
+                    point_selector.grid(
+                        row=next_row, column=1, sticky="ew", pady=self._px(3)
+                    )
+                    point_selector.bind(
+                        "<<ComboboxSelected>>", self._polyline_point_selected
+                    )
+                    next_row += 1
+
+                self.point_x_var = tk.StringVar(value=_display_number(point_x))
+                self.point_y_var = tk.StringVar(value=_display_number(point_y))
+                self._field(
+                    self.selection_frame, next_row, "Point X", self.point_x_var
+                )
+                self._field(
+                    self.selection_frame, next_row + 1, "Point Y", self.point_y_var
+                )
+                ttk.Button(
+                    self.selection_frame,
+                    text="Apply point coordinates",
+                    command=self.apply_control_point,
+                ).grid(
+                    row=next_row + 2, column=0, columnspan=2, sticky="ew",
+                    pady=(self._px(6), 0),
+                )
+                next_row += 3
+
+                if edge_type == "polyLine":
+                    point_actions = ttk.Frame(self.selection_frame)
+                    point_actions.grid(
+                        row=next_row, column=0, columnspan=2, sticky="ew",
+                        pady=(self._px(6), 0),
+                    )
+                    for column in range(3):
+                        point_actions.columnconfigure(column, weight=1)
+                    ttk.Button(
+                        point_actions,
+                        text="Add",
+                        command=self.add_polyline_point,
+                    ).grid(
+                        row=0, column=0, sticky="ew",
+                        padx=(0, self._px(2)),
+                    )
+                    ttk.Button(
+                        point_actions,
+                        text="Remove",
+                        command=self.remove_polyline_point,
+                        state="normal" if len(control_points) > 1 else "disabled",
+                    ).grid(
+                        row=0, column=1, sticky="ew",
+                        padx=self._px(2),
+                    )
+                    ttk.Button(
+                        point_actions,
+                        text="Reset",
+                        command=self.reset_polyline_points,
+                    ).grid(
+                        row=0, column=2, sticky="ew",
+                        padx=(self._px(2), 0),
+                    )
+                    next_row += 1
+
+                ttk.Label(
+                    self.selection_frame,
+                    text=(
+                        "Purple points are numbered in path order and can be "
+                        "dragged on the canvas."
+                        if edge_type == "polyLine"
+                        else "The purple point can also be dragged on the canvas."
+                    ),
+                    foreground="#7048a8",
+                    wraplength=self._px(245),
+                ).grid(
+                    row=next_row, column=0, columnspan=2, sticky="w",
+                    pady=(self._px(5), 0),
+                )
+                next_row += 1
+
             if boundary:
                 ttk.Button(
                     self.selection_frame,
                     text="Add block on this side",
                     command=self.add_selected_block,
                 ).grid(
-                    row=4, column=0, columnspan=2, sticky="ew",
+                    row=next_row, column=0, columnspan=2, sticky="ew",
                     pady=(self._px(7), 0),
                 )
             else:
@@ -443,7 +633,7 @@ class BlockDrawerApp:
                     foreground="#52606d",
                     wraplength=self._px(245),
                 ).grid(
-                    row=4, column=0, columnspan=2, sticky="w",
+                    row=next_row, column=0, columnspan=2, sticky="w",
                     pady=(self._px(7), 0),
                 )
             incident_count = len(
@@ -461,7 +651,7 @@ class BlockDrawerApp:
                 command=self.delete_selected_edge,
                 state="normal" if can_delete else "disabled",
             ).grid(
-                row=5, column=0, columnspan=2, sticky="ew",
+                row=next_row + 1, column=0, columnspan=2, sticky="ew",
                 pady=(self._px(9), 0),
             )
         else:
@@ -554,6 +744,103 @@ class BlockDrawerApp:
             f"{'s' if len(affected) != 1 else ''}."
         )
 
+    def _edge_type_selected(self, _event: tk.Event) -> None:
+        self.apply_edge_type()
+
+    def apply_edge_type(self) -> None:
+        if self.selected_edge is None or self.edge_type_var is None:
+            return
+        selected = self.selected_edge
+        kind = self.edge_type_var.get()
+        try:
+            self.model.set_edge_type(selected, kind)
+        except TopologyError as exc:
+            self._show_error("Invalid edge type", exc)
+            self._update_property_panel()
+            return
+        self.selected_control_point_index = None if kind == "line" else 0
+        self._commit_edit()
+        self.redraw()
+        self._update_property_panel()
+        self.status.set(f"Set edge {selected[0]} — {selected[1]} to {kind}.")
+
+    def _polyline_point_selected(self, _event: tk.Event) -> None:
+        if self.polyline_point_var is None:
+            return
+        self.selected_control_point_index = int(self.polyline_point_var.get()) - 1
+        self._update_property_panel()
+        self.redraw()
+
+    def apply_control_point(self) -> None:
+        if self.selected_edge is None or self.selected_control_point_index is None \
+                or self.point_x_var is None or self.point_y_var is None:
+            return
+        selected = self.selected_edge
+        index = self.selected_control_point_index
+        try:
+            self.model.set_edge_control_point(
+                selected,
+                index,
+                float(self.point_x_var.get()),
+                float(self.point_y_var.get()),
+            )
+        except (ValueError, TopologyError) as exc:
+            self._show_error("Invalid interpolation point", exc)
+            self._sync_property_values()
+            return
+        self._commit_edit()
+        self.redraw()
+        self._sync_property_values()
+        self.status.set(
+            f"Moved interpolation point {index + 1} on edge "
+            f"{selected[0]} — {selected[1]}."
+        )
+
+    def add_polyline_point(self) -> None:
+        if self.selected_edge is None or self.selected_control_point_index is None:
+            return
+        try:
+            new_index = self.model.add_polyline_point(
+                self.selected_edge, self.selected_control_point_index
+            )
+        except TopologyError as exc:
+            self._show_error("Cannot add interpolation point", exc)
+            return
+        self.selected_control_point_index = new_index
+        self._commit_edit()
+        self._update_property_panel()
+        self.redraw()
+        self.status.set(f"Added polyLine interpolation point {new_index + 1}.")
+
+    def remove_polyline_point(self) -> None:
+        if self.selected_edge is None or self.selected_control_point_index is None:
+            return
+        removed_index = self.selected_control_point_index
+        try:
+            self.model.remove_polyline_point(self.selected_edge, removed_index)
+        except TopologyError as exc:
+            self._show_error("Cannot remove interpolation point", exc)
+            return
+        point_count = len(self.model.edge_control_points(self.selected_edge))
+        self.selected_control_point_index = min(removed_index, point_count - 1)
+        self._commit_edit()
+        self._update_property_panel()
+        self.redraw()
+        self.status.set(f"Removed polyLine interpolation point {removed_index + 1}.")
+
+    def reset_polyline_points(self) -> None:
+        if self.selected_edge is None:
+            return
+        try:
+            self.model.reset_polyline_points(self.selected_edge)
+        except TopologyError as exc:
+            self._show_error("Cannot reset interpolation points", exc)
+            return
+        self._commit_edit()
+        self._update_property_panel()
+        self.redraw()
+        self.status.set("Reset polyLine points to equidistant chord positions.")
+
     def add_selected_block(self) -> None:
         if self.selected_edge is None:
             self.status.set("Select an exterior edge before adding a block.")
@@ -565,6 +852,7 @@ class BlockDrawerApp:
             return
         self.selected_vertex = None
         self.selected_edge = edge_key(*block.directed_edge(2))
+        self.selected_control_point_index = None
         self._commit_edit()
         self.fit_view()
         self._update_property_panel()
@@ -576,7 +864,9 @@ class BlockDrawerApp:
         self.block_vertex_selection = []
         self.selected_vertex = None
         self.selected_edge = None
+        self.selected_control_point_index = None
         self.drag_vertex = None
+        self.drag_control_point = None
         self.drag_changed = False
         self.canvas.focus_set()
         self._update_property_panel()
@@ -627,6 +917,7 @@ class BlockDrawerApp:
         self.block_vertex_selection = None
         self.selected_vertex = None
         self.selected_edge = None
+        self.selected_control_point_index = None
         self._commit_edit()
         self._update_property_panel()
         self.redraw()
@@ -647,6 +938,7 @@ class BlockDrawerApp:
             return
         self.selected_edge = None
         self.selected_vertex = None
+        self.selected_control_point_index = None
         self._commit_edit()
         self._update_property_panel()
         self.redraw()
@@ -676,22 +968,36 @@ class BlockDrawerApp:
             )
 
         for current in self.model.edges():
-            first = self.model.vertices[current[0]]
-            second = self.model.vertices[current[1]]
-            x1, y1 = self.world_to_screen(first.x, first.y)
-            x2, y2 = self.world_to_screen(second.x, second.y)
             selected = current == self.selected_edge
             color = "#e8590c" if selected else "#334e68"
+            edge_type = self.model.edge_type(current)
+            screen_points: list[float] = []
+            if edge_type == "polyLine":
+                first = self.model.vertices[current[0]]
+                second = self.model.vertices[current[1]]
+                render_points = [
+                    (first.x, first.y),
+                    *self.model.edge_control_points(current),
+                    (second.x, second.y),
+                ]
+            else:
+                segment_count = CURVE_RENDER_SEGMENTS if edge_type == "arc" else 1
+                render_points = [
+                    self.model.edge_point(current, index / segment_count)
+                    for index in range(segment_count + 1)
+                ]
+            for world_x, world_y in render_points:
+                screen_points.extend(self.world_to_screen(world_x, world_y))
             line = self.canvas.create_line(
-                x1, y1, x2, y2,
+                *screen_points,
                 fill=color,
                 width=self._px(4 if selected else 2),
             )
             self.item_targets[line] = ("edge", current)
-            self._draw_edge_nodes(current, x1, y1, x2, y2, color)
+            self._draw_edge_nodes(current, color)
 
-            midpoint_x = (x1 + x2) / 2.0
-            midpoint_y = (y1 + y2) / 2.0
+            midpoint_world = self.model.edge_point(current, 0.5)
+            midpoint_x, midpoint_y = self.world_to_screen(*midpoint_world)
             label = self.canvas.create_text(
                 midpoint_x,
                 midpoint_y - self._px(11),
@@ -700,6 +1006,36 @@ class BlockDrawerApp:
                 font=self._font(9, "bold" if selected else "normal"),
             )
             self.item_targets[label] = ("edge", current)
+
+            for point_index, (point_x, point_y) in enumerate(
+                self.model.edge_control_points(current)
+            ):
+                control_x, control_y = self.world_to_screen(point_x, point_y)
+                point_selected = selected \
+                    and point_index == self.selected_control_point_index
+                control_radius = self._px(8 if point_selected else 6)
+                control = self.canvas.create_oval(
+                    control_x - control_radius,
+                    control_y - control_radius,
+                    control_x + control_radius,
+                    control_y + control_radius,
+                    fill="#7048a8",
+                    outline="#e8590c" if point_selected else "#ffffff",
+                    width=self._px(2),
+                )
+                point_target = (current, point_index)
+                self.item_targets[control] = ("control_point", point_target)
+                if edge_type == "polyLine":
+                    order_label = self.canvas.create_text(
+                        control_x,
+                        control_y,
+                        text=str(point_index + 1),
+                        fill="#ffffff",
+                        font=self._font(7, "bold"),
+                    )
+                    self.item_targets[order_label] = (
+                        "control_point", point_target
+                    )
 
         for identifier, vertex in self.model.vertices.items():
             x, y = self.world_to_screen(vertex.x, vertex.y)
@@ -745,16 +1081,15 @@ class BlockDrawerApp:
             )
             self.item_targets[label] = ("vertex", identifier)
 
-    def _draw_edge_nodes(self, current: EdgeKey, x1: float, y1: float,
-                         x2: float, y2: float, color: str) -> None:
+    def _draw_edge_nodes(self, current: EdgeKey, color: str) -> None:
         cells = self.model.edge_cells[current]
         if cells <= 1:
             return
         stride = max(1, math.ceil((cells - 1) / MAX_VISIBLE_EDGE_MARKERS))
         for index in range(stride, cells, stride):
             ratio = index / cells
-            x = x1 + ratio * (x2 - x1)
-            y = y1 + ratio * (y2 - y1)
+            world_x, world_y = self.model.edge_point(current, ratio)
+            x, y = self.world_to_screen(world_x, world_y)
             item = self.canvas.create_oval(
                 x - self._px(2.4),
                 y - self._px(2.4),
@@ -844,6 +1179,16 @@ class BlockDrawerApp:
         self.root.update_idletasks()
         xs = [vertex.x for vertex in self.model.vertices.values()]
         ys = [vertex.y for vertex in self.model.vertices.values()]
+        for current in self.model.edge_geometry:
+            for x, y in self.model.edge_control_points(current):
+                xs.append(x)
+                ys.append(y)
+            for index in range(CURVE_RENDER_SEGMENTS + 1):
+                x, y = self.model.edge_point(
+                    current, index / CURVE_RENDER_SEGMENTS
+                )
+                xs.append(x)
+                ys.append(y)
         min_x, max_x = min(xs), max(xs)
         min_y, max_y = min(ys), max(ys)
         span_x = max(max_x - min_x, 0.25)
@@ -888,7 +1233,8 @@ class BlockDrawerApp:
         self._set_minimum_window_size()
         self.toolbar.configure(padding=(self._px(8), self._px(6)))
         self.status_bar.configure(padding=(self._px(8), self._px(5)))
-        self.sidebar.configure(width=self._px(300), padding=self._px(12))
+        self.sidebar_host.configure(width=self._px(300))
+        self.sidebar.configure(padding=self._px(12))
         for child in self.sidebar.winfo_children():
             child.destroy()
         self._build_sidebar()
@@ -921,7 +1267,9 @@ class BlockDrawerApp:
     def _on_left_press(self, event: tk.Event) -> None:
         self.canvas.focus_set()
         target = self._target_at_cursor()
+        self.last_pressed_target = target
         self.drag_vertex = None
+        self.drag_control_point = None
         self.drag_changed = False
         if self.block_vertex_selection is not None:
             if target is not None and target[0] == "vertex":
@@ -934,22 +1282,38 @@ class BlockDrawerApp:
         if target is None:
             self.selected_vertex = None
             self.selected_edge = None
+            self.selected_control_point_index = None
         elif target[0] == "vertex":
             self.selected_vertex = str(target[1])
             self.selected_edge = None
+            self.selected_control_point_index = None
             self.drag_vertex = self.selected_vertex
         elif target[0] == "edge":
             self.selected_vertex = None
             self.selected_edge = target[1]  # type: ignore[assignment]
+            self.selected_control_point_index = (
+                0 if self.model.edge_control_points(self.selected_edge) else None
+            )
+        elif target[0] == "control_point":
+            point_target = target[1]
+            edge, point_index = point_target  # type: ignore[misc]
+            self.selected_vertex = None
+            self.selected_edge = edge
+            self.selected_control_point_index = point_index
+            self.drag_control_point = (edge, point_index)
         self._update_property_panel()
         self.redraw()
 
     def _on_left_drag(self, event: tk.Event) -> None:
-        if self.drag_vertex is None:
+        if self.drag_vertex is None and self.drag_control_point is None:
             return
         x, y = self.screen_to_world(event.x, event.y)
         try:
-            self.model.move_vertex(self.drag_vertex, x, y)
+            if self.drag_vertex is not None:
+                self.model.move_vertex(self.drag_vertex, x, y)
+            elif self.drag_control_point is not None:
+                edge, point_index = self.drag_control_point
+                self.model.set_edge_control_point(edge, point_index, x, y)
         except TopologyError as exc:
             self.status.set(str(exc))
             return
@@ -957,21 +1321,34 @@ class BlockDrawerApp:
         self._refresh_dirty()
         self._sync_property_values()
         self.redraw()
+        target_name = (
+            self.drag_vertex
+            if self.drag_vertex is not None
+            else f"Point {self.drag_control_point[1] + 1}"
+        )
         self.status.set(
-            f"{self.drag_vertex}: ({_display_number(x)}, {_display_number(y)})"
+            f"{target_name}: ({_display_number(x)}, {_display_number(y)})"
         )
 
     def _on_left_release(self, _event: tk.Event) -> None:
-        if self.drag_vertex is not None and self.drag_changed:
+        if (self.drag_vertex is not None or self.drag_control_point is not None) \
+                and self.drag_changed:
             self._commit_edit()
         self.drag_vertex = None
+        self.drag_control_point = None
         self.drag_changed = False
 
     def _on_double_click(self, _event: tk.Event) -> None:
         target = self._target_at_cursor()
-        if target is not None and target[0] == "edge":
-            self.selected_vertex = None
-            self.selected_edge = target[1]  # type: ignore[assignment]
+        authoritative = (
+            target
+            if target is not None
+            else self.last_pressed_target
+        )
+        if authoritative is None or authoritative[0] != "edge":
+            return
+        self.selected_vertex = None
+        self.selected_edge = authoritative[1]  # type: ignore[assignment]
         # The preceding ButtonPress binding redraws the canvas, which can clear
         # Tk's transient "current" item before this double-click binding runs.
         # In that case the edge selected by the press is still authoritative.
@@ -1020,7 +1397,12 @@ class BlockDrawerApp:
         self.session_path = None
         self.selected_vertex = None
         self.selected_edge = None
+        self.selected_control_point_index = None
         self.block_vertex_selection = None
+        self.drag_vertex = None
+        self.drag_control_point = None
+        self.drag_changed = False
+        self.last_pressed_target = None
         self._refresh_dirty()
         self._update_history_controls()
         self._sync_global_values()
@@ -1048,7 +1430,12 @@ class BlockDrawerApp:
         self.session_path = Path(filename)
         self.selected_vertex = None
         self.selected_edge = None
+        self.selected_control_point_index = None
         self.block_vertex_selection = None
+        self.drag_vertex = None
+        self.drag_control_point = None
+        self.drag_changed = False
+        self.last_pressed_target = None
         self._refresh_dirty()
         self._update_history_controls()
         self._sync_global_values()
@@ -1140,7 +1527,9 @@ class BlockDrawerApp:
             self.selected_vertex = None
         if self.selected_edge not in self.model.edge_cells:
             self.selected_edge = None
+            self.selected_control_point_index = None
         self.drag_vertex = None
+        self.drag_control_point = None
         self.drag_changed = False
         self._sync_global_values()
         self._update_property_panel()
@@ -1214,6 +1603,13 @@ class BlockDrawerApp:
             self.vertex_y_var.set(_display_number(vertex.y))
         if self.selected_edge is not None and self.edge_cells_var is not None:
             self.edge_cells_var.set(str(self.model.edge_cells[self.selected_edge]))
+        if self.selected_edge is not None \
+                and self.selected_control_point_index is not None \
+                and self.point_x_var is not None and self.point_y_var is not None:
+            points = self.model.edge_control_points(self.selected_edge)
+            point_x, point_y = points[self.selected_control_point_index]
+            self.point_x_var.set(_display_number(point_x))
+            self.point_y_var.set(_display_number(point_y))
 
     def _show_error(self, title: str, error: Exception) -> None:
         self.status.set(str(error))

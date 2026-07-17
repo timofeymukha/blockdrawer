@@ -61,12 +61,38 @@ def block_mesh_dict(model: MeshModel) -> str:
             f" // {block.id}"
         )
 
+    lines.extend([")", ";", "", "edges", "("])
+    for current in model.edges():
+        geometry = model.edge_geometry.get(current)
+        if geometry is None:
+            continue
+        first_index = bottom_index[current[0]]
+        second_index = bottom_index[current[1]]
+        if geometry.kind == "arc":
+            point_x, point_y = geometry.points[0]
+            lines.append(
+                f"    arc {first_index} {second_index} "
+                f"({_scalar(point_x)} {_scalar(point_y)} {_scalar(model.z_min)})"
+            )
+            lines.append(
+                f"    arc {first_index + top_offset} "
+                f"{second_index + top_offset} "
+                f"({_scalar(point_x)} {_scalar(point_y)} {_scalar(model.z_max)})"
+            )
+            continue
+
+        for z, offset in ((model.z_min, 0), (model.z_max, top_offset)):
+            lines.append(
+                f"    polyLine {first_index + offset} {second_index + offset}"
+            )
+            lines.append("    (")
+            for point_x, point_y in geometry.points:
+                lines.append(
+                    f"        ({_scalar(point_x)} {_scalar(point_y)} {_scalar(z)})"
+                )
+            lines.append("    )")
+
     lines.extend([
-        ")",
-        ";",
-        "",
-        "edges",
-        "(",
         ")",
         ";",
         "",

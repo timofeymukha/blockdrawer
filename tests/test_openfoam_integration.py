@@ -38,6 +38,50 @@ class OpenFoamIntegrationTests(unittest.TestCase):
 
         self._assert_block_mesh_accepts(model)
 
+    def test_block_mesh_accepts_arc_on_both_extruded_planes(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v0", "v1")
+        model.set_edge_type(selected, "arc")
+        model.set_arc_point(selected, 0.5, -0.25)
+        model.set_edge_cells(selected, 8)
+
+        self._assert_block_mesh_accepts(model)
+
+    def test_block_mesh_accepts_arc_shared_by_two_blocks(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v1", "v2")
+        model.set_edge_type(selected, "arc")
+        model.set_arc_point(selected, 1.2, 0.5)
+        model.add_block(selected)
+
+        self._assert_block_mesh_accepts(model)
+
+    def test_block_mesh_accepts_polyline_with_multiple_points(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v0", "v1")
+        model.set_edge_type(selected, "polyLine")
+        model.set_edge_control_point(selected, 0, 0.25, -0.2)
+        second = model.add_polyline_point(selected, 0)
+        model.set_edge_control_point(selected, second, 0.75, -0.3)
+        model.set_edge_cells(selected, 8)
+
+        self._assert_block_mesh_accepts(model)
+
+    def test_block_mesh_accepts_reset_equidistant_polyline(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v0", "v1")
+        model.set_edge_type(selected, "polyLine")
+        second = model.add_polyline_point(selected, 0)
+        model.add_polyline_point(selected, second)
+
+        model.reset_polyline_points(selected)
+
+        self.assertEqual(
+            model.edge_control_points(selected),
+            ((0.25, 0.0), (0.5, 0.0), (0.75, 0.0)),
+        )
+        self._assert_block_mesh_accepts(model)
+
     def _assert_block_mesh_accepts(self, model: MeshModel) -> None:
         with tempfile.TemporaryDirectory() as directory:
             case = Path(directory)

@@ -2,14 +2,14 @@
 
 ## Product boundary
 
-BlockDrawer is a graphical editor for straight-edged, 2D block topologies that are
-extruded into OpenFOAM hexahedra. It does **not** generate a mesh. Its primary
-artifact is a valid `system/blockMeshDict`; OpenFOAM's `blockMesh` remains the
-mesher.
+BlockDrawer is a graphical editor for 2D block topologies with straight,
+circular-arc, or piecewise-linear edges that are extruded into OpenFOAM
+hexahedra. It does **not** generate a mesh. Its primary artifact is a valid
+`system/blockMeshDict`; OpenFOAM's `blockMesh` remains the mesher.
 
-The current scope intentionally excludes curved edges, grading, named boundary
-patches, and 3D editing. Preserve extension points for those features instead of
-encoding them in the canvas widgets.
+The current scope intentionally excludes spline/polySpline edges, grading, named
+boundary patches, and 3D editing. Preserve extension points for those features
+instead of encoding them in the canvas widgets.
 
 ## Stack and commands
 
@@ -26,7 +26,8 @@ encoding them in the canvas widgets.
 
 - `blockdrawer/model.py`: authoritative topology and validation. Vertices are
   shared objects referenced by counter-clockwise quadrilateral blocks. Edges are
-  derived from block vertex pairs, not duplicated as geometry.
+  derived from block vertex pairs. Optional `EdgeGeometry` is keyed by that shared
+  edge and stores a type plus ordered interpolation points.
 - `blockdrawer/session.py`: versioned JSON persistence. Keep this independent of
   Tk so sessions can be tested and converted headlessly.
 - `blockdrawer/foam.py`: deterministic `blockMeshDict` serialization. Each 2D
@@ -45,6 +46,20 @@ encoding them in the canvas widgets.
   remain strictly convex.
 - A topological edge is the canonical, unordered pair of its vertex IDs. It is a
   boundary edge when used by one block and internal when used by two.
+- Straight (`line`) geometry is implicit. An `arc` stores exactly one finite,
+  non-collinear interpolation point. A `polyLine` stores one or more ordered,
+  finite interpolation points, and no adjacent path points may coincide. Geometry
+  is shared by every block incident to the topological edge.
+- `MeshModel.edge_point()` evaluates lines and arcs geometrically. For polyLines,
+  its parameter is cumulative path length so uniform cell fractions match
+  OpenFOAM's piecewise-linear edge node locations.
+- Selecting `arc` or `polyLine` creates a deterministic point offset outward from
+  the first incident block. GUI points are purple; polyLine points are numbered in
+  their canonical edge-path order. Points can be selected, moved, inserted,
+  and removed while retaining at least one. Reset preserves the current point
+  count and distributes the points at equal fractions of the straight vertex-to-
+  vertex chord. Each button/property mutation is one history action; a complete
+  point drag is recorded once on mouse release.
 - Opposite edges of every quadrilateral must have the same cell count. Calling
   `MeshModel.set_edge_cells()` updates the complete transitive constraint
   component, including shared edges in neighboring blocks.
@@ -62,25 +77,31 @@ encoding them in the canvas widgets.
   vertices are numbered and clicking one again deselects it. Only successful
   completion enters history; it is one undoable action.
 - Removing an edge removes every incident block (one for a boundary edge, two for
-  an internal edge) and prunes only vertices/edge data unused by surviving blocks.
-  This is one undoable operation.
+  an internal edge) and prunes only vertices, cell counts, and curved-edge data
+  unused by surviving blocks. This is one undoable operation.
 - A topology always contains at least one block. Reject any edge deletion whose
   complete incident-block set would leave zero blocks (including deleting the
   shared edge when exactly two blocks remain).
-- Moving a shared vertex updates every incident block. Invalid/inverted moves are
-  rejected and rolled back.
+- Moving a shared vertex updates every incident block. Invalid/inverted moves and
+  moves that invalidate attached arc or polyLine geometry are rejected and rolled
+  back.
 - The z direction is not drawn. `zCells` defaults to 1 and `zMin`/`zMax` default
   to 0/1.
 
 ## Data and compatibility
 
-Session files contain a format marker and integer version. Add migrations (or a
-clear unsupported-version error) when the shape changes; never silently reinterpret
-old data. JSON is a project/session format, not an OpenFOAM format.
+Session files contain a format marker and integer version. Version 2 adds an
+`edgeGeometry` array whose entries contain `vertices`, `type`, and an ordered
+`points` array. Version 1 straight-edge sessions migrate by treating geometry as
+empty. Add migrations (or a clear unsupported-version error) when the shape
+changes; never silently reinterpret old data. JSON is a project/session format,
+not an OpenFOAM format.
 
-`blockMeshDict` output uses straight edges and `simpleGrading (1 1 1)`. An empty
-`boundary` list deliberately lets `blockMesh` create its default outer patch until
-boundary editing is implemented.
+Each non-straight 2D edge is emitted twice: `arc` uses its single point and
+`polyLine` uses its ordered point list, with matching x/y at `zMin` and `zMax`.
+Shared edges are emitted only once per z plane. Straight edges remain implicit and
+all blocks use `simpleGrading (1 1 1)`. An empty `boundary` list deliberately lets
+`blockMesh` create its default outer patch until boundary editing is implemented.
 
 ## Working conventions
 
