@@ -86,7 +86,7 @@ class FoamExportTests(unittest.TestCase):
         selected = edge_key("v0", "v1")
         model.set_edge_type(selected, "polyLine")
         model.set_edge_control_point(selected, 0, 0.25, -0.4)
-        second = model.add_polyline_point(selected, 0)
+        second = model.add_edge_control_point(selected, 0)
         model.set_edge_control_point(selected, second, 0.75, -0.2)
         model.set_z_extents(-1.0, 2.0)
 
@@ -109,6 +109,33 @@ class FoamExportTests(unittest.TestCase):
             result,
         )
 
+    def test_spline_is_exported_on_both_planes(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v0", "v1")
+        model.set_edge_type(selected, "spline")
+        model.set_edge_control_point(selected, 0, 0.25, -0.4)
+        second = model.add_edge_control_point(selected, 0)
+        model.set_edge_control_point(selected, second, 0.75, -0.2)
+        model.set_z_extents(-1.0, 2.0)
+
+        result = block_mesh_dict(model)
+
+        self.assertIn(
+            """    spline 0 1
+    (
+        (0.25 -0.4 -1)
+        (0.75 -0.2 -1)
+    )""",
+            result,
+        )
+        self.assertIn(
+            """    spline 4 5
+    (
+        (0.25 -0.4 2)
+        (0.75 -0.2 2)
+    )""",
+            result,
+        )
     def test_empty_topology_cannot_be_exported(self) -> None:
         model = MeshModel(initialize=False)
 

@@ -89,12 +89,12 @@ class ModelHistoryTests(unittest.TestCase):
         selected = edge_key("v0", "v1")
         model.set_edge_type(selected, "polyLine")
         model.set_edge_control_point(selected, 0, 0.25, -0.4)
-        second = model.add_polyline_point(selected, 0)
+        second = model.add_edge_control_point(selected, 0)
         model.set_edge_control_point(selected, second, 0.8, -0.2)
         history = ModelHistory(model)
         before = model.edge_control_points(selected)
 
-        model.reset_polyline_points(selected)
+        model.reset_edge_control_points(selected)
         history.record(model)
 
         self.assertEqual(
@@ -108,6 +108,23 @@ class ModelHistoryTests(unittest.TestCase):
             restored.edge_control_points(selected),
             ((1.0 / 3.0, 0.0), (2.0 / 3.0, 0.0)),
         )
+
+    def test_spline_point_list_edit_is_undoable(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v0", "v1")
+        model.set_edge_type(selected, "spline")
+        history = ModelHistory(model)
+
+        new_index = model.add_edge_control_point(selected, 0)
+        history.record(model)
+
+        self.assertEqual(len(model.edge_control_points(selected)), 2)
+        restored = history.undo()
+        self.assertEqual(restored.edge_type(selected), "spline")
+        self.assertEqual(len(restored.edge_control_points(selected)), 1)
+        restored = history.redo()
+        self.assertEqual(len(restored.edge_control_points(selected)), 2)
+        self.assertEqual(new_index, 1)
 
     def test_edge_deletion_and_all_incident_blocks_undo_atomically(self) -> None:
         model = MeshModel()

@@ -3,12 +3,12 @@
 ## Product boundary
 
 BlockDrawer is a graphical editor for 2D block topologies with straight,
-circular-arc, or piecewise-linear edges that are extruded into OpenFOAM
+circular-arc, piecewise-linear, or spline edges that are extruded into OpenFOAM
 hexahedra. It does **not** generate a mesh. Its primary artifact is a valid
 `system/blockMeshDict`; OpenFOAM's `blockMesh` remains the mesher.
 
-The current scope intentionally excludes spline/polySpline edges, grading, named
-boundary patches, and 3D editing. Preserve extension points for those features
+The current scope intentionally excludes polySpline edges, grading, named boundary
+patches, and 3D editing. Preserve extension points for those features
 instead of encoding them in the canvas widgets.
 
 ## Stack and commands
@@ -47,16 +47,16 @@ instead of encoding them in the canvas widgets.
 - A topological edge is the canonical, unordered pair of its vertex IDs. It is a
   boundary edge when used by one block and internal when used by two.
 - Straight (`line`) geometry is implicit. An `arc` stores exactly one finite,
-  non-collinear interpolation point. A `polyLine` stores one or more ordered,
-  finite interpolation points, and no adjacent path points may coincide. Geometry
-  is shared by every block incident to the topological edge.
+  non-collinear interpolation point. A `polyLine` or `spline` stores one or
+  more ordered, finite interpolation points, and no adjacent path points may
+  coincide. Geometry is shared by every block incident to the topological edge.
 - `MeshModel.edge_point()` evaluates lines and arcs geometrically. For polyLines,
-  its parameter is cumulative path length so uniform cell fractions match
-  OpenFOAM's piecewise-linear edge node locations.
-- Selecting `arc` or `polyLine` creates a deterministic point offset outward from
-  the first incident block. GUI points are purple; polyLine points are numbered in
-  their canonical edge-path order. Points can be selected, moved, inserted,
-  and removed while retaining at least one. Reset preserves the current point
+  its parameter is cumulative path length. Splines use OpenFOAM's
+  through-point Catmull-Rom interpolation with chord-length segment parameters.
+- Selecting any curved type creates a deterministic point offset outward from the
+  first incident block. GUI points are purple; point-list types are numbered in
+  their canonical edge-path order. Points can be selected, moved, inserted, and
+  removed while retaining at least one. Reset preserves the current point
   count and distributes the points at equal fractions of the straight vertex-to-
   vertex chord. Each button/property mutation is one history action; a complete
   point drag is recorded once on mouse release.
@@ -83,7 +83,7 @@ instead of encoding them in the canvas widgets.
   complete incident-block set would leave zero blocks (including deleting the
   shared edge when exactly two blocks remain).
 - Moving a shared vertex updates every incident block. Invalid/inverted moves and
-  moves that invalidate attached arc or polyLine geometry are rejected and rolled
+  moves that invalidate attached curved-edge geometry are rejected and rolled
   back.
 - The z direction is not drawn. `zCells` defaults to 1 and `zMin`/`zMax` default
   to 0/1.
@@ -98,10 +98,11 @@ changes; never silently reinterpret old data. JSON is a project/session format,
 not an OpenFOAM format.
 
 Each non-straight 2D edge is emitted twice: `arc` uses its single point and
-`polyLine` uses its ordered point list, with matching x/y at `zMin` and `zMax`.
-Shared edges are emitted only once per z plane. Straight edges remain implicit and
-all blocks use `simpleGrading (1 1 1)`. An empty `boundary` list deliberately lets
-`blockMesh` create its default outer patch until boundary editing is implemented.
+`polyLine`/`spline` use ordered point lists, with matching x/y at `zMin` and
+`zMax`. Shared edges are emitted only once per z plane. Straight edges remain
+implicit and all blocks use `simpleGrading (1 1 1)`. An empty `boundary` list
+deliberately lets `blockMesh` create its default outer patch until boundary editing
+is implemented.
 
 ## Working conventions
 

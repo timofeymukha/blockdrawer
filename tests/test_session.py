@@ -75,13 +75,31 @@ class SessionTests(unittest.TestCase):
         selected = edge_key("v0", "v1")
         model.set_edge_type(selected, "polyLine")
         model.set_edge_control_point(selected, 0, 0.25, -0.4)
-        second = model.add_polyline_point(selected, 0)
+        second = model.add_edge_control_point(selected, 0)
         model.set_edge_control_point(selected, second, 0.75, -0.2)
 
         data = to_data(model)
         restored = from_data(data)
 
         self.assertEqual(data["edgeGeometry"][0]["type"], "polyLine")
+        self.assertEqual(
+            restored.edge_control_points(selected),
+            ((0.25, -0.4), (0.75, -0.2)),
+        )
+
+    def test_spline_point_list_round_trips_in_version_two(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v0", "v1")
+        model.set_edge_type(selected, "spline")
+        model.set_edge_control_point(selected, 0, 0.25, -0.4)
+        second = model.add_edge_control_point(selected, 0)
+        model.set_edge_control_point(selected, second, 0.75, -0.2)
+
+        data = to_data(model)
+        restored = from_data(data)
+
+        self.assertEqual(data["edgeGeometry"][0]["type"], "spline")
+        self.assertEqual(restored.edge_type(selected), "spline")
         self.assertEqual(
             restored.edge_control_points(selected),
             ((0.25, -0.4), (0.75, -0.2)),

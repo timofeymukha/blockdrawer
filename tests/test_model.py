@@ -1,3 +1,4 @@
+import math
 import unittest
 
 from blockdrawer.model import MeshModel, TopologyError, edge_key
@@ -99,7 +100,7 @@ class MeshModelTests(unittest.TestCase):
         selected = edge_key("v0", "v1")
         model.set_edge_type(selected, "polyLine")
         model.set_edge_control_point(selected, 0, 0.0, 1.0)
-        second_index = model.add_polyline_point(selected, 0)
+        second_index = model.add_edge_control_point(selected, 0)
         model.set_edge_control_point(selected, second_index, 1.0, 1.0)
 
         self.assertEqual(model.edge_type(selected), "polyLine")
@@ -117,22 +118,64 @@ class MeshModelTests(unittest.TestCase):
         selected = edge_key("v0", "v1")
         model.set_edge_type(selected, "polyLine")
         model.set_edge_control_point(selected, 0, 0.25, -0.25)
-        second = model.add_polyline_point(selected, 0)
+        second = model.add_edge_control_point(selected, 0)
         model.set_edge_control_point(selected, second, 0.5, -0.5)
-        third = model.add_polyline_point(selected, second)
+        third = model.add_edge_control_point(selected, second)
         model.set_edge_control_point(selected, third, 0.8, -0.3)
 
-        model.reset_polyline_points(selected)
+        model.reset_edge_control_points(selected)
         self.assertEqual(
             model.edge_control_points(selected),
             ((0.25, 0.0), (0.5, 0.0), (0.75, 0.0)),
         )
 
-        model.remove_polyline_point(selected, 1)
-        model.remove_polyline_point(selected, 1)
+        model.remove_edge_control_point(selected, 1)
+        model.remove_edge_control_point(selected, 1)
         self.assertEqual(model.edge_control_points(selected), ((0.25, 0.0),))
         with self.assertRaisesRegex(TopologyError, "at least one"):
-            model.remove_polyline_point(selected, 0)
+            model.remove_edge_control_point(selected, 0)
+
+    def test_spline_intersects_all_ordered_points(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v0", "v1")
+        model.set_edge_type(selected, "spline")
+        model.set_edge_control_point(selected, 0, 0.25, -0.4)
+        second = model.add_edge_control_point(selected, 0)
+        model.set_edge_control_point(selected, second, 0.75, -0.2)
+
+        first_fraction = math.hypot(0.25, -0.4)
+        second_length = math.hypot(0.5, 0.2)
+        third_length = math.hypot(0.25, 0.2)
+        total = first_fraction + second_length + third_length
+
+        self.assertEqual(model.edge_type(selected), "spline")
+        first_point = model.edge_point(selected, first_fraction / total)
+        second_point = model.edge_point(
+            selected, (first_fraction + second_length) / total
+        )
+        self.assertAlmostEqual(first_point[0], 0.25)
+        self.assertAlmostEqual(first_point[1], -0.4)
+        self.assertAlmostEqual(second_point[0], 0.75)
+        self.assertAlmostEqual(second_point[1], -0.2)
+        self.assertNotEqual(model.edge_point(selected, 0.5)[1], 0.0)
+        model.validate()
+
+    def test_spline_supports_add_remove_and_reset(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v0", "v1")
+        model.set_edge_type(selected, "spline")
+        second = model.add_edge_control_point(selected, 0)
+        model.set_edge_control_point(selected, second, 0.8, -0.3)
+
+        model.reset_edge_control_points(selected)
+
+        self.assertEqual(
+            model.edge_control_points(selected),
+            ((1.0 / 3.0, 0.0), (2.0 / 3.0, 0.0)),
+        )
+        model.remove_edge_control_point(selected, 1)
+        with self.assertRaisesRegex(TopologyError, "at least one"):
+            model.remove_edge_control_point(selected, 0)
 
     def test_polyline_rejects_coincident_adjacent_point_and_rolls_back(self) -> None:
         model = MeshModel()

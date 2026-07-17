@@ -83,7 +83,7 @@ def block_mesh_dict(model: MeshModel) -> str:
 
         for z, offset in ((model.z_min, 0), (model.z_max, top_offset)):
             lines.append(
-                f"    polyLine {first_index + offset} {second_index + offset}"
+                f"    {geometry.kind} {first_index + offset} {second_index + offset}"
             )
             lines.append("    (")
             for point_x, point_y in geometry.points:

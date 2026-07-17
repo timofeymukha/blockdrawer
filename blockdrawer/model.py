@@ -62,7 +62,8 @@ class MeshModel:
 
     DEFAULT_EDGE_CELLS = 10
     COORDINATE_TOLERANCE = 1.0e-9
-    SUPPORTED_EDGE_TYPES = ("line", "arc", "polyLine")
+    SUPPORTED_EDGE_TYPES = ("line", "arc", "polyLine", "spline")
+    MULTI_POINT_EDGE_TYPES = ("polyLine", "spline")
     DEFAULT_CONTROL_POINT_OFFSET_RATIO = 0.2
 
     def __init__(self, *, initialize: bool = True) -> None:
@@ -162,7 +163,7 @@ class MeshModel:
     def set_edge_type(self, edge: EdgeKey, kind: str) -> None:
         """Change an edge between the supported OpenFOAM geometry types.
 
-        A new arc or polyLine receives a deterministic interpolation point offset
+        A new curved edge receives a deterministic interpolation point offset
         outward from the first incident block.
         """
         current = edge_key(*edge)
@@ -238,14 +239,16 @@ class MeshModel:
             self.edge_geometry[current] = previous
             raise
 
-    def add_polyline_point(
+    def add_edge_control_point(
         self, edge: EdgeKey, after_index: int | None = None
     ) -> int:
         """Insert a point after ``after_index`` and return its new index."""
         current = edge_key(*edge)
         geometry = self.edge_geometry.get(current)
-        if geometry is None or geometry.kind != "polyLine":
-            raise TopologyError(f"Edge {current!r} is not a polyLine")
+        if geometry is None or geometry.kind not in self.MULTI_POINT_EDGE_TYPES:
+            raise TopologyError(
+                f"Edge {current!r} does not use a point-list geometry"
+            )
         if after_index is None:
             after_index = len(geometry.points) - 1
         if isinstance(after_index, bool) or not isinstance(after_index, int) \
@@ -265,33 +268,39 @@ class MeshModel:
         inserted = ((left[0] + right[0]) / 2.0, (left[1] + right[1]) / 2.0)
         new_index = after_index + 1
         points.insert(new_index, inserted)
-        replacement = EdgeGeometry("polyLine", tuple(points))
+        replacement = EdgeGeometry(geometry.kind, tuple(points))
         self._validate_edge_geometry(current, replacement)
         self.edge_geometry[current] = replacement
         return new_index
 
-    def remove_polyline_point(self, edge: EdgeKey, index: int) -> None:
+    def remove_edge_control_point(self, edge: EdgeKey, index: int) -> None:
         current = edge_key(*edge)
         geometry = self.edge_geometry.get(current)
-        if geometry is None or geometry.kind != "polyLine":
-            raise TopologyError(f"Edge {current!r} is not a polyLine")
+        if geometry is None or geometry.kind not in self.MULTI_POINT_EDGE_TYPES:
+            raise TopologyError(
+                f"Edge {current!r} does not use a point-list geometry"
+            )
         if len(geometry.points) <= 1:
-            raise TopologyError("A polyLine needs at least one interpolation point")
+            raise TopologyError(
+                f"A {geometry.kind} needs at least one interpolation point"
+            )
         if isinstance(index, bool) or not isinstance(index, int) \
                 or not 0 <= index < len(geometry.points):
             raise TopologyError("Interpolation point index is out of range")
         points = list(geometry.points)
         del points[index]
-        replacement = EdgeGeometry("polyLine", tuple(points))
+        replacement = EdgeGeometry(geometry.kind, tuple(points))
         self._validate_edge_geometry(current, replacement)
         self.edge_geometry[current] = replacement
 
-    def reset_polyline_points(self, edge: EdgeKey) -> None:
+    def reset_edge_control_points(self, edge: EdgeKey) -> None:
         """Distribute all interpolation points evenly along the edge chord."""
         current = edge_key(*edge)
         geometry = self.edge_geometry.get(current)
-        if geometry is None or geometry.kind != "polyLine":
-            raise TopologyError(f"Edge {current!r} is not a polyLine")
+        if geometry is None or geometry.kind not in self.MULTI_POINT_EDGE_TYPES:
+            raise TopologyError(
+                f"Edge {current!r} does not use a point-list geometry"
+            )
         first = self.vertices[current[0]]
         second = self.vertices[current[1]]
         denominator = len(geometry.points) + 1
@@ -302,7 +311,7 @@ class MeshModel:
             )
             for index in range(1, denominator)
         )
-        replacement = EdgeGeometry("polyLine", points)
+        replacement = EdgeGeometry(geometry.kind, points)
         self._validate_edge_geometry(current, replacement)
         self.edge_geometry[current] = replacement
 
@@ -335,6 +344,8 @@ class MeshModel:
                 center_x + radius * math.cos(angle),
                 center_y + radius * math.sin(angle),
             )
+        if geometry.kind == "spline":
+            return self._spline_point(current, geometry, fraction)
         return self._polyline_point(current, geometry, fraction)
 
     def set_z_cells(self, cells: int) -> None:
@@ -674,14 +685,16 @@ class MeshModel:
     ) -> None:
         if not isinstance(geometry, EdgeGeometry):
             raise TopologyError(f"Edge {current!r} has invalid geometry data")
-        if geometry.kind not in ("arc", "polyLine"):
+        if geometry.kind not in ("arc", *self.MULTI_POINT_EDGE_TYPES):
             raise TopologyError(
                 f"Edge {current!r} has unsupported type {geometry.kind!r}"
             )
         if geometry.kind == "arc" and len(geometry.points) != 1:
             raise TopologyError("An arc edge needs exactly one interpolation point")
-        if geometry.kind == "polyLine" and not geometry.points:
-            raise TopologyError("A polyLine needs at least one interpolation point")
+        if geometry.kind in self.MULTI_POINT_EDGE_TYPES and not geometry.points:
+            raise TopologyError(
+                f"A {geometry.kind} needs at least one interpolation point"
+            )
         for point in geometry.points:
             if len(point) != 2 or not all(math.isfinite(value) for value in point):
                 raise TopologyError("Interpolation point coordinates must be finite")
@@ -696,7 +709,7 @@ class MeshModel:
             if math.hypot(end[0] - start[0], end[1] - start[1]) \
                     <= self.COORDINATE_TOLERANCE:
                 raise TopologyError(
-                    "polyLine interpolation points must not coincide with "
+                    f"{geometry.kind} interpolation points must not coincide with "
                     "adjacent points"
                 )
 
@@ -742,6 +755,61 @@ class MeshModel:
                 )
             traversed += length
         return path[-1]
+
+    def _spline_point(
+        self, current: EdgeKey, geometry: EdgeGeometry, fraction: float
+    ) -> tuple[float, float]:
+        """Evaluate OpenFOAM's through-point Catmull-Rom spline."""
+        first = self.vertices[current[0]]
+        second = self.vertices[current[1]]
+        path = [(first.x, first.y), *geometry.points, (second.x, second.y)]
+        lengths = [
+            math.hypot(end[0] - start[0], end[1] - start[1])
+            for start, end in zip(path, path[1:])
+        ]
+        target = fraction * sum(lengths)
+        traversed = 0.0
+        segment = len(lengths) - 1
+        local = 1.0
+        for index, length in enumerate(lengths):
+            if target <= traversed + length or index == len(lengths) - 1:
+                segment = index
+                local = min(1.0, max(0.0, (target - traversed) / length))
+                break
+            traversed += length
+
+        p0 = path[segment]
+        p1 = path[segment + 1]
+        before = (
+            path[segment - 1]
+            if segment > 0
+            else (2.0 * p0[0] - p1[0], 2.0 * p0[1] - p1[1])
+        )
+        after = (
+            path[segment + 2]
+            if segment + 2 < len(path)
+            else (2.0 * p1[0] - p0[0], 2.0 * p1[1] - p0[1])
+        )
+        local_squared = local * local
+        local_cubed = local_squared * local
+        return (
+            0.5 * (
+                2.0 * p0[0]
+                + (-before[0] + p1[0]) * local
+                + (2.0 * before[0] - 5.0 * p0[0]
+                   + 4.0 * p1[0] - after[0]) * local_squared
+                + (-before[0] + 3.0 * p0[0]
+                   - 3.0 * p1[0] + after[0]) * local_cubed
+            ),
+            0.5 * (
+                2.0 * p0[1]
+                + (-before[1] + p1[1]) * local
+                + (2.0 * before[1] - 5.0 * p0[1]
+                   + 4.0 * p1[1] - after[1]) * local_squared
+                + (-before[1] + 3.0 * p0[1]
+                   - 3.0 * p1[1] + after[1]) * local_cubed
+            ),
+        )
 
     def _arc_circle(
         self, current: EdgeKey, geometry: EdgeGeometry

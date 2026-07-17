@@ -87,7 +87,7 @@ class BlockDrawerApp:
         self.edge_type_var: tk.StringVar | None = None
         self.point_x_var: tk.StringVar | None = None
         self.point_y_var: tk.StringVar | None = None
-        self.polyline_point_var: tk.StringVar | None = None
+        self.point_list_index_var: tk.StringVar | None = None
 
         self._build_window()
         self._sync_global_values()
@@ -379,7 +379,7 @@ class BlockDrawerApp:
         self.edge_type_var = None
         self.point_x_var = None
         self.point_y_var = None
-        self.polyline_point_var = None
+        self.point_list_index_var = None
 
         if self.block_vertex_selection is not None:
             count = len(self.block_vertex_selection)
@@ -515,7 +515,7 @@ class BlockDrawerApp:
                     text=(
                         "Arc interpolation point"
                         if edge_type == "arc"
-                        else "polyLine interpolation points"
+                        else f"{edge_type} interpolation points"
                     ),
                     font=self._font(10, "bold"),
                 ).grid(
@@ -523,17 +523,17 @@ class BlockDrawerApp:
                     pady=(self._px(10), self._px(3)),
                 )
                 next_row += 1
-                if edge_type == "polyLine":
+                if edge_type in MeshModel.MULTI_POINT_EDGE_TYPES:
                     ttk.Label(self.selection_frame, text="Selected point").grid(
                         row=next_row, column=0, sticky="w",
                         padx=(0, self._px(8)), pady=self._px(3),
                     )
-                    self.polyline_point_var = tk.StringVar(
+                    self.point_list_index_var = tk.StringVar(
                         value=str(point_index + 1)
                     )
                     point_selector = ttk.Combobox(
                         self.selection_frame,
-                        textvariable=self.polyline_point_var,
+                        textvariable=self.point_list_index_var,
                         values=tuple(
                             str(index + 1) for index in range(len(control_points))
                         ),
@@ -544,7 +544,7 @@ class BlockDrawerApp:
                         row=next_row, column=1, sticky="ew", pady=self._px(3)
                     )
                     point_selector.bind(
-                        "<<ComboboxSelected>>", self._polyline_point_selected
+                        "<<ComboboxSelected>>", self._control_point_selected
                     )
                     next_row += 1
 
@@ -566,7 +566,7 @@ class BlockDrawerApp:
                 )
                 next_row += 3
 
-                if edge_type == "polyLine":
+                if edge_type in MeshModel.MULTI_POINT_EDGE_TYPES:
                     point_actions = ttk.Frame(self.selection_frame)
                     point_actions.grid(
                         row=next_row, column=0, columnspan=2, sticky="ew",
@@ -577,7 +577,7 @@ class BlockDrawerApp:
                     ttk.Button(
                         point_actions,
                         text="Add",
-                        command=self.add_polyline_point,
+                        command=self.add_edge_control_point,
                     ).grid(
                         row=0, column=0, sticky="ew",
                         padx=(0, self._px(2)),
@@ -585,7 +585,7 @@ class BlockDrawerApp:
                     ttk.Button(
                         point_actions,
                         text="Remove",
-                        command=self.remove_polyline_point,
+                        command=self.remove_edge_control_point,
                         state="normal" if len(control_points) > 1 else "disabled",
                     ).grid(
                         row=0, column=1, sticky="ew",
@@ -594,7 +594,7 @@ class BlockDrawerApp:
                     ttk.Button(
                         point_actions,
                         text="Reset",
-                        command=self.reset_polyline_points,
+                        command=self.reset_edge_control_points,
                     ).grid(
                         row=0, column=2, sticky="ew",
                         padx=(self._px(2), 0),
@@ -606,7 +606,7 @@ class BlockDrawerApp:
                     text=(
                         "Purple points are numbered in path order and can be "
                         "dragged on the canvas."
-                        if edge_type == "polyLine"
+                        if edge_type in MeshModel.MULTI_POINT_EDGE_TYPES
                         else "The purple point can also be dragged on the canvas."
                     ),
                     foreground="#7048a8",
@@ -764,10 +764,12 @@ class BlockDrawerApp:
         self._update_property_panel()
         self.status.set(f"Set edge {selected[0]} — {selected[1]} to {kind}.")
 
-    def _polyline_point_selected(self, _event: tk.Event) -> None:
-        if self.polyline_point_var is None:
+    def _control_point_selected(self, _event: tk.Event) -> None:
+        if self.point_list_index_var is None:
             return
-        self.selected_control_point_index = int(self.polyline_point_var.get()) - 1
+        self.selected_control_point_index = int(
+            self.point_list_index_var.get()
+        ) - 1
         self._update_property_panel()
         self.redraw()
 
@@ -796,11 +798,11 @@ class BlockDrawerApp:
             f"{selected[0]} — {selected[1]}."
         )
 
-    def add_polyline_point(self) -> None:
+    def add_edge_control_point(self) -> None:
         if self.selected_edge is None or self.selected_control_point_index is None:
             return
         try:
-            new_index = self.model.add_polyline_point(
+            new_index = self.model.add_edge_control_point(
                 self.selected_edge, self.selected_control_point_index
             )
         except TopologyError as exc:
@@ -810,14 +812,19 @@ class BlockDrawerApp:
         self._commit_edit()
         self._update_property_panel()
         self.redraw()
-        self.status.set(f"Added polyLine interpolation point {new_index + 1}.")
+        edge_type = self.model.edge_type(self.selected_edge)
+        self.status.set(
+            f"Added {edge_type} interpolation point {new_index + 1}."
+        )
 
-    def remove_polyline_point(self) -> None:
+    def remove_edge_control_point(self) -> None:
         if self.selected_edge is None or self.selected_control_point_index is None:
             return
         removed_index = self.selected_control_point_index
         try:
-            self.model.remove_polyline_point(self.selected_edge, removed_index)
+            self.model.remove_edge_control_point(
+                self.selected_edge, removed_index
+            )
         except TopologyError as exc:
             self._show_error("Cannot remove interpolation point", exc)
             return
@@ -826,20 +833,26 @@ class BlockDrawerApp:
         self._commit_edit()
         self._update_property_panel()
         self.redraw()
-        self.status.set(f"Removed polyLine interpolation point {removed_index + 1}.")
+        edge_type = self.model.edge_type(self.selected_edge)
+        self.status.set(
+            f"Removed {edge_type} interpolation point {removed_index + 1}."
+        )
 
-    def reset_polyline_points(self) -> None:
+    def reset_edge_control_points(self) -> None:
         if self.selected_edge is None:
             return
         try:
-            self.model.reset_polyline_points(self.selected_edge)
+            self.model.reset_edge_control_points(self.selected_edge)
         except TopologyError as exc:
             self._show_error("Cannot reset interpolation points", exc)
             return
         self._commit_edit()
         self._update_property_panel()
         self.redraw()
-        self.status.set("Reset polyLine points to equidistant chord positions.")
+        edge_type = self.model.edge_type(self.selected_edge)
+        self.status.set(
+            f"Reset {edge_type} points to equidistant chord positions."
+        )
 
     def add_selected_block(self) -> None:
         if self.selected_edge is None:
@@ -981,7 +994,11 @@ class BlockDrawerApp:
                     (second.x, second.y),
                 ]
             else:
-                segment_count = CURVE_RENDER_SEGMENTS if edge_type == "arc" else 1
+                segment_count = (
+                    CURVE_RENDER_SEGMENTS
+                    if edge_type in ("arc", "spline")
+                    else 1
+                )
                 render_points = [
                     self.model.edge_point(current, index / segment_count)
                     for index in range(segment_count + 1)
@@ -1025,7 +1042,7 @@ class BlockDrawerApp:
                 )
                 point_target = (current, point_index)
                 self.item_targets[control] = ("control_point", point_target)
-                if edge_type == "polyLine":
+                if edge_type in MeshModel.MULTI_POINT_EDGE_TYPES:
                     order_label = self.canvas.create_text(
                         control_x,
                         control_y,

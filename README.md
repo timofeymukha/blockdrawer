@@ -1,7 +1,7 @@
 # BlockDrawer
 
 BlockDrawer is a small graphical editor for structured 2D block topologies with
-straight, circular-arc, or piecewise-linear edges. It exports an OpenFOAM
+straight, circular-arc, piecewise-linear, or spline edges. It exports an OpenFOAM
 `blockMeshDict`; OpenFOAM's `blockMesh` does the actual meshing.
 
 The editor starts with one quadrilateral block. Vertices can be dragged, exterior
@@ -34,13 +34,14 @@ blockdrawer
 - Click an edge to edit its number of cells. The small edge markers are the
   uniform subdivision locations. Opposite edges in every affected block are
   updated automatically, including transitive constraints through shared edges.
-- Use the selected edge's **Type** control to choose `line`, `arc`, or `polyLine`.
+- Use the selected edge's **Type** control to choose `line`, `arc`, `polyLine`, or
+  `spline`.
   An arc has one purple interpolation point through which its circle passes. A
-  polyline has one or more numbered purple points joined by straight segments.
-  Drag points or enter exact X/Y coordinates; polyline points can also be added or
-  removed. **Reset** distributes every existing point equidistantly along the
-  straight line between the edge vertices. Displayed mesh nodes follow the
-  resulting path length.
+  polyline has one or more numbered purple points joined by straight segments. A
+  spline is a smooth Catmull-Rom curve passing through every numbered
+  purple point. Drag points or enter exact X/Y coordinates; point-list types also
+  support **Add**, **Remove**, and **Reset**. Reset distributes every existing
+  point equidistantly along the straight line between the edge vertices.
 - Select an exterior edge and press **Add block**, or double-click that edge. The
   new block extrudes along that edge's outward normal, using the source block's
   average perpendicular thickness. Its new exterior edge remains selected, making
@@ -76,8 +77,8 @@ choices multiply the system scale rather than replacing it, while **System
 its controls exceed the available window height.
 
 BlockDrawer rejects vertex moves that would invert or collapse a block, make an
-arc point collinear with its endpoints, or collapse a polyline segment. Spline
-edges, grading, named boundaries, and 3D editing are deliberately outside the
+arc point collinear with its endpoints, or collapse adjacent point-list entries.
+Poly-spline edges, grading, named boundaries, and 3D editing are deliberately outside the
 current scope.
 
 ## Save and export
@@ -92,8 +93,8 @@ version 1 sessions remain loadable.
 - two z planes for every drawn vertex;
 - one `hex` per quadrilateral;
 - the propagated x/y counts and global z count;
-- matching lower/upper `arc` or `polyLine` definitions for each non-straight 2D
-  edge;
+- matching lower/upper `arc`, `polyLine`, or `spline` definitions for each
+  non-straight 2D edge;
 - implicit straight edges and `simpleGrading (1 1 1)`;
 - an empty `boundary` list, allowing `blockMesh` to create its default outer patch.
 
@@ -115,7 +116,7 @@ python -m unittest discover -s tests -v
 ```
 
 An optional integration test asks a real OpenFOAM installation to parse and mesh
-generated multi-block, circular-arc, and polyline dictionaries:
+generated multi-block, circular-arc, polyline, and spline dictionaries:
 
 ```bash
 BLOCKMESH_COMMAND='apptainer exec /path/to/openfoam.sif blockMesh' \

@@ -1,5 +1,7 @@
+import math
 import os
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import tempfile
@@ -61,7 +63,7 @@ class OpenFoamIntegrationTests(unittest.TestCase):
         selected = edge_key("v0", "v1")
         model.set_edge_type(selected, "polyLine")
         model.set_edge_control_point(selected, 0, 0.25, -0.2)
-        second = model.add_polyline_point(selected, 0)
+        second = model.add_edge_control_point(selected, 0)
         model.set_edge_control_point(selected, second, 0.75, -0.3)
         model.set_edge_cells(selected, 8)
 
@@ -71,10 +73,10 @@ class OpenFoamIntegrationTests(unittest.TestCase):
         model = MeshModel()
         selected = edge_key("v0", "v1")
         model.set_edge_type(selected, "polyLine")
-        second = model.add_polyline_point(selected, 0)
-        model.add_polyline_point(selected, second)
+        second = model.add_edge_control_point(selected, 0)
+        model.add_edge_control_point(selected, second)
 
-        model.reset_polyline_points(selected)
+        model.reset_edge_control_points(selected)
 
         self.assertEqual(
             model.edge_control_points(selected),
@@ -82,7 +84,27 @@ class OpenFoamIntegrationTests(unittest.TestCase):
         )
         self._assert_block_mesh_accepts(model)
 
-    def _assert_block_mesh_accepts(self, model: MeshModel) -> None:
+    def test_block_mesh_accepts_spline_with_multiple_points(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v0", "v1")
+        model.set_edge_type(selected, "spline")
+        model.set_edge_control_point(selected, 0, 0.3, -0.25)
+        second = model.add_edge_control_point(selected, 0)
+        model.set_edge_control_point(selected, second, 0.7, -0.35)
+        model.set_edge_cells(selected, 12)
+
+        expected_nodes = [
+            (*model.edge_point(selected, index / 12), model.z_min)
+            for index in range(1, 12)
+        ]
+        self._assert_block_mesh_accepts(model, expected_points=expected_nodes)
+
+    def _assert_block_mesh_accepts(
+        self,
+        model: MeshModel,
+        *,
+        expected_points: list[tuple[float, float, float]] | None = None,
+    ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             case = Path(directory)
             (case / "system").mkdir()
@@ -121,7 +143,21 @@ writeInterval 1;
             )
 
             self.assertEqual(completed.returncode, 0, completed.stdout)
-            self.assertTrue((case / "constant" / "polyMesh" / "points").exists())
+            points_path = case / "constant" / "polyMesh" / "points"
+            self.assertTrue(points_path.exists())
+            if expected_points:
+                number = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
+                tuples = re.findall(
+                    rf"\(\s*({number})\s+({number})\s+({number})\s*\)",
+                    points_path.read_text(encoding="utf-8"),
+                )
+                generated = [tuple(map(float, values)) for values in tuples]
+                for expected in expected_points:
+                    self.assertTrue(
+                        any(math.dist(expected, actual) < 1.0e-7
+                            for actual in generated),
+                        f"Preview point {expected!r} is absent from blockMesh output",
+                    )
 
 
 if __name__ == "__main__":
