@@ -1,0 +1,1 @@
+"""BlockDrawer test suite."""

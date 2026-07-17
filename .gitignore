@@ -1,0 +1,27 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local editor and operating-system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# BlockDrawer session output (the default Save As filename)
+mesh-blocks.json
+
+# OpenFOAM-generated mesh and run output
+blockMeshDict
+constant/polyMesh/
+processor*/
+postProcessing/
+log.*
