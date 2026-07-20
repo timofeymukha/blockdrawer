@@ -72,6 +72,32 @@ blockdrawer
   valid selection creates the block immediately. Click a staged vertex again to
   deselect it, or press `Esc` to cancel the mode. The four vertices must form a
   convex, consistently oriented block topology.
+- Select an edge and press `S` to split its complete conformal block strip. A
+  purple marker appears on the selected edge; click or drag anywhere along that
+  edge to position it. Mouse release only leaves the marker in place, so it can be
+  repositioned as often as needed. The exact percentage can also be entered under
+  **Current split (%)**. Press `Enter` or click **Execute split** to apply the cut;
+  `Esc` cancels before the topology changes. The cut propagates through every
+  block connected by the opposite-edge constraint, so no hanging vertices are
+  created. Cell counts are divided at the nearest existing mesh node; a one-cell
+  edge becomes two one-cell edges. Splitting is one undoable action.
+- The two resulting portions of every affected edge retain the source edge type.
+  Arcs are divided exactly, polyLines retain their piecewise-linear path, and
+  splines are resampled from the original curve. Existing cell-to-cell grading is
+  retained on both portions; a split placed on an existing graded node preserves
+  the original selected-edge node locations to numerical precision. New internal
+  cut edges use grading interpolated from the block's transverse sides. Boundary
+  assignments on a split exterior edge are copied to both resulting edges.
+- Select an internal edge and press `Shift+S` to perform the reverse operation.
+  Every pair of blocks across the connected conformal cut is combined, preventing
+  hanging vertices when the cut crosses multiple block rows. The removed outer
+  edge segments are joined with their cell counts summed. Compatible grading is
+  reconstructed from the first and last cell widths, so edges produced by a
+  previous graded split recover their node distribution to numerical precision.
+  Collinear lines, same-circle arcs, and polyLines retain their exact paths;
+  splines and mixed curve types are joined as close spline approximations. Two
+  boundary segments must have the same boundary assignment before they can be
+  joined. Combining is one undoable action and is distinct from deleting an edge.
 - Press `B` or click **Set boundaries** to switch the right-hand panel to boundary
   editing. Add a named patch, select it in the list, then click exterior edges to
   assign them; clicking an edge already assigned to the active patch unassigns it,
@@ -233,6 +259,9 @@ Every keyboard action is configurable. A Linux/Windows default file looks like:
     "undo": ["Ctrl+Z"],
     "redo": ["Ctrl+Y", "Ctrl+Shift+Z"],
     "delete_edge": ["Delete", "Backspace", "NumpadDelete", "X"],
+    "split_edge": ["S"],
+    "execute_split": ["Enter", "NumpadEnter"],
+    "combine_blocks": ["Shift+S"],
     "new_block": ["N"],
     "add_vertex": ["V"],
     "set_boundaries": ["B"],
@@ -302,7 +331,7 @@ python -m unittest discover -s tests -v
 
 An optional integration test asks a real OpenFOAM installation to parse and mesh
 generated multi-block, graded, circular-arc, polyline, spline, named-patch, and
-cyclic dictionaries:
+cyclic dictionaries, including conformally split block strips:
 
 ```bash
 BLOCKMESH_COMMAND='apptainer exec /path/to/openfoam.sif blockMesh' \

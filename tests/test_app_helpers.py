@@ -6,7 +6,9 @@ from blockdrawer.app import (
     BlockDrawerApp,
     MAX_ZOOM_PIXELS_PER_UNIT,
     _is_text_input_class,
+    _nearest_edge_fraction,
     _scaled_named_font_size,
+    _split_fraction_from_text,
     _system_display_scale,
     _visible_control_point_indices,
 )
@@ -229,6 +231,161 @@ class DpiScalingTests(unittest.TestCase):
             app._export_shortcut(SimpleNamespace(widget=entry))
         )
         self.assertEqual(calls, [True])
+
+    def test_s_shortcut_starts_split_only_outside_text_input(self) -> None:
+        app = BlockDrawerApp.__new__(BlockDrawerApp)
+        calls: list[bool] = []
+        app.start_edge_split = lambda: calls.append(True)
+        canvas = SimpleNamespace(winfo_class=lambda: "Canvas")
+        entry = SimpleNamespace(winfo_class=lambda: "TEntry")
+
+        self.assertEqual(
+            app._split_shortcut(SimpleNamespace(widget=canvas)), "break"
+        )
+        self.assertEqual(calls, [True])
+        self.assertIsNone(
+            app._split_shortcut(SimpleNamespace(widget=entry))
+        )
+        self.assertEqual(calls, [True])
+
+    def test_split_pointer_finds_nearest_line_and_arc_fraction(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v0", "v1")
+
+        self.assertAlmostEqual(
+            _nearest_edge_fraction(model, selected, 0.73, -0.4), 0.73
+        )
+
+        model.set_edge_type(selected, "arc")
+        model.set_arc_point(selected, 0.5, -0.25)
+        point = model.edge_point(selected, 0.31)
+        self.assertAlmostEqual(
+            _nearest_edge_fraction(model, selected, *point),
+            0.31,
+            places=6,
+        )
+
+    def test_split_percentage_accepts_exact_values_and_optional_suffix(self) -> None:
+        self.assertEqual(_split_fraction_from_text("37.125"), 0.37125)
+        self.assertEqual(_split_fraction_from_text(" 12.5% "), 0.125)
+        for value in ("", "half", "0", "100", "nan", "inf"):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                ValueError, "between|strictly"
+            ):
+                _split_fraction_from_text(value)
+
+    def test_execute_split_shortcut_only_applies_in_split_mode(self) -> None:
+        app = BlockDrawerApp.__new__(BlockDrawerApp)
+        calls: list[bool] = []
+        app.execute_edge_split = lambda: calls.append(True)
+        app.split_edge_active = None
+
+        self.assertIsNone(
+            app._execute_split_shortcut(SimpleNamespace())
+        )
+        app.split_edge_active = edge_key("v0", "v1")
+        self.assertEqual(
+            app._execute_split_shortcut(SimpleNamespace()), "break"
+        )
+        self.assertEqual(calls, [True])
+
+    def test_shift_s_combines_only_outside_text_input(self) -> None:
+        app = BlockDrawerApp.__new__(BlockDrawerApp)
+        calls: list[bool] = []
+        app.combine_selected_blocks = lambda: calls.append(True)
+        canvas = SimpleNamespace(winfo_class=lambda: "Canvas")
+        entry = SimpleNamespace(winfo_class=lambda: "TEntry")
+
+        self.assertEqual(
+            app._combine_shortcut(SimpleNamespace(widget=canvas)), "break"
+        )
+        self.assertEqual(calls, [True])
+        self.assertIsNone(
+            app._combine_shortcut(SimpleNamespace(widget=entry))
+        )
+        self.assertEqual(calls, [True])
+
+    def test_combining_selected_blocks_commits_once_and_selects_joined_edge(
+        self,
+    ) -> None:
+        app = BlockDrawerApp.__new__(BlockDrawerApp)
+        app.model = MeshModel()
+        split = app.model.split_edge(edge_key("v0", "v1"), 0.4)
+        app.selected_edge = split.cut_edges[0]
+        app.selected_vertex = None
+        app.selected_control_point_index = None
+        app.selected_geometry_curve = None
+        app.selected_geometry_point_index = None
+        app.split_edge_active = None
+        app.export_mode_active = False
+        app.boundary_mode_active = False
+        app.projection_stage = None
+        app.status = FakeStringVar()
+        commits: list[bool] = []
+        app._commit_edit = lambda: commits.append(True)
+        app._update_property_panel = lambda: None
+        app.redraw = lambda: None
+
+        app.combine_selected_blocks()
+
+        self.assertEqual(commits, [True])
+        self.assertEqual(len(app.model.blocks), 1)
+        self.assertIsNotNone(app.selected_edge)
+        self.assertIn(app.selected_edge, app.model.edge_cells)
+
+    def test_execute_split_uses_exact_panel_percentage(self) -> None:
+        app = BlockDrawerApp.__new__(BlockDrawerApp)
+        app.split_edge_active = edge_key("v0", "v1")
+        app.split_fraction = 0.5
+        app.split_fraction_var = FakeStringVar("31.875")
+        applied: list[float] = []
+        app._finish_edge_split = lambda: applied.append(app.split_fraction)
+
+        app.execute_edge_split()
+
+        self.assertEqual(applied, [0.31875])
+
+    def test_releasing_split_marker_only_finishes_placement(self) -> None:
+        app = BlockDrawerApp.__new__(BlockDrawerApp)
+        app.drag_split_marker = True
+        app.status = FakeStringVar()
+        executions: list[bool] = []
+        app._finish_edge_split = lambda: executions.append(True)
+
+        app._on_left_release(SimpleNamespace())
+
+        self.assertFalse(app.drag_split_marker)
+        self.assertEqual(executions, [])
+        self.assertIn("Split location set", app.status.get())
+
+    def test_finishing_split_commits_one_edit_and_selects_cut_edge(self) -> None:
+        app = BlockDrawerApp.__new__(BlockDrawerApp)
+        app.model = MeshModel()
+        app.split_edge_active = edge_key("v0", "v1")
+        app.split_fraction = 0.4
+        app.split_fraction_var = None
+        app.split_cells_var = None
+        app.drag_split_marker = False
+        app.selected_vertex = None
+        app.selected_edge = app.split_edge_active
+        app.selected_control_point_index = None
+        app.selected_geometry_curve = None
+        app.selected_geometry_point_index = None
+        app.status = FakeStringVar()
+        commits: list[bool] = []
+        app._commit_edit = lambda: commits.append(True)
+        app._update_property_panel = lambda: None
+        app.redraw = lambda: None
+
+        app._finish_edge_split()
+
+        self.assertEqual(commits, [True])
+        self.assertEqual(len(app.model.blocks), 2)
+        self.assertIsNone(app.split_edge_active)
+        self.assertIsNotNone(app.selected_edge)
+        self.assertEqual(
+            len(app.model.edge_occurrences()[app.selected_edge]), 2
+        )
 
     def test_export_applies_panel_settings_only_after_destination_is_chosen(
         self,

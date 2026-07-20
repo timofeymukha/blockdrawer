@@ -54,6 +54,11 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(macos.shortcuts["redo"], ("Cmd+Shift+Z",))
         self.assertEqual(linux.shortcuts["export_block_mesh_dict"], ("E",))
         self.assertEqual(macos.shortcuts["export_block_mesh_dict"], ("E",))
+        self.assertEqual(linux.shortcuts["split_edge"], ("S",))
+        self.assertEqual(
+            linux.shortcuts["execute_split"], ("Enter", "NumpadEnter")
+        )
+        self.assertEqual(linux.shortcuts["combine_blocks"], ("Shift+S",))
         self.assertEqual(linux.shortcuts["project"], ("P",))
         self.assertEqual(linux.shortcuts["toggle_geometry"], ("G",))
         self.assertEqual(linux.shortcuts["fit_view"], ())
@@ -74,6 +79,14 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(
             shortcut_to_tk_sequences("NumpadDelete"),
             ("<KP_Delete>",),
+        )
+        self.assertEqual(
+            shortcut_to_tk_sequences("NumpadEnter"),
+            ("<KP_Enter>",),
+        )
+        self.assertEqual(
+            shortcut_to_tk_sequences("Shift+S"),
+            ("<Shift-KeyPress-S>",),
         )
         self.assertEqual(
             shortcut_to_tk_sequences("Cmd+Z"),

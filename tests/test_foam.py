@@ -6,6 +6,43 @@ from blockdrawer.model import MeshModel, TopologyError, edge_key
 
 
 class FoamExportTests(unittest.TestCase):
+    def test_combined_split_block_exports_one_hex_with_joined_counts(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v0", "v1")
+        split = model.split_edge(selected, 0.4)
+        model.combine_blocks(split.cut_edges[0])
+
+        exported = block_mesh_dict(model)
+
+        self.assertEqual(sum(
+            line.strip().startswith("hex")
+            for line in exported.splitlines()
+        ), 1)
+        self.assertIn("(10 10 1)", exported)
+
+    def test_split_curved_block_exports_conformal_hexes_and_edge_segments(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v0", "v1")
+        model.set_edge_type(selected, "arc")
+        model.set_arc_point(selected, 0.5, -0.25)
+        result = model.split_edge(selected, 0.4)
+
+        exported = block_mesh_dict(model)
+
+        self.assertEqual(sum(
+            line.strip().startswith("hex")
+            for line in exported.splitlines()
+        ), 2)
+        self.assertEqual(exported.count("    arc "), 4)
+        self.assertIn(
+            f"({model.edge_cells[result.selected_segments[0]]} 10 1)",
+            exported,
+        )
+        self.assertIn(
+            f"({model.edge_cells[result.selected_segments[1]]} 10 1)",
+            exported,
+        )
+
     def test_reference_geometry_is_not_exported(self) -> None:
         model = MeshModel()
         baseline = block_mesh_dict(model)

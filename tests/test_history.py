@@ -7,6 +7,52 @@ from tests.helpers import build_ring_model, center_vertex_ids
 
 
 class ModelHistoryTests(unittest.TestCase):
+    def test_block_combination_is_one_undoable_action(self) -> None:
+        model = MeshModel()
+        split = model.split_edge(edge_key("v0", "v1"), 0.4)
+        history = ModelHistory(model)
+
+        model.combine_blocks(split.cut_edges[0])
+        history.record(model)
+
+        restored = history.undo()
+        self.assertIsNotNone(restored)
+        assert restored is not None
+        self.assertEqual(len(restored.blocks), 2)
+        self.assertIn(split.cut_edges[0], restored.edge_cells)
+
+        redone = history.redo()
+        self.assertIsNotNone(redone)
+        assert redone is not None
+        self.assertEqual(len(redone.blocks), 1)
+        self.assertNotIn(split.cut_edges[0], redone.edge_cells)
+
+    def test_conformal_edge_split_is_one_undoable_action(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v0", "v1")
+        model.set_edge_type(selected, "arc")
+        model.set_arc_point(selected, 0.5, -0.25)
+        history = ModelHistory(model)
+
+        result = model.split_edge(selected, 0.4)
+        history.record(model)
+
+        restored = history.undo()
+        self.assertIsNotNone(restored)
+        assert restored is not None
+        self.assertEqual(len(restored.blocks), 1)
+        self.assertIn(selected, restored.edge_cells)
+        self.assertEqual(restored.edge_type(selected), "arc")
+
+        redone = history.redo()
+        self.assertIsNotNone(redone)
+        assert redone is not None
+        self.assertEqual(len(redone.blocks), 2)
+        self.assertTrue(all(
+            redone.edge_type(current) == "arc"
+            for current in result.selected_segments
+        ))
+
     def test_export_settings_are_undoable_session_state(self) -> None:
         model = MeshModel()
         history = ModelHistory(model)

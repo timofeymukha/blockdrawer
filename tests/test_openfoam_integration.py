@@ -17,6 +17,55 @@ from tests.helpers import build_ring_model, center_vertex_ids
     "set BLOCKMESH_COMMAND to run the OpenFOAM integration test",
 )
 class OpenFoamIntegrationTests(unittest.TestCase):
+    def test_block_mesh_accepts_combined_curved_graded_split(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v0", "v1")
+        model.set_edge_type(selected, "arc")
+        model.set_arc_point(selected, 0.5, -0.25)
+        model.set_edge_cells(selected, 10)
+        model.set_edge_grading(selected, "total_ratio", 7.0)
+        split = model.split_edge(selected, model.edge_node_fraction(selected, 4))
+
+        model.combine_blocks(split.cut_edges[0])
+
+        self._assert_block_mesh_accepts(model)
+
+    def test_block_mesh_accepts_conformal_multiblock_strip_split(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v1", "v2")
+        model.add_block(selected)
+        model.set_edge_type(selected, "arc")
+        model.set_arc_point(selected, 1.15, 0.5)
+
+        result = model.split_edge(selected, 0.37)
+
+        self.assertEqual(len(result.new_block_ids), 2)
+        self._assert_block_mesh_accepts(model)
+
+    def test_block_mesh_accepts_graded_arc_split_at_existing_node(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v0", "v1")
+        model.set_edge_type(selected, "arc")
+        model.set_arc_point(selected, 0.5, -0.25)
+        model.set_edge_cells(selected, 8)
+        model.set_edge_grading(selected, "total_ratio", 6.0)
+        original_nodes = [
+            (
+                *model.edge_point(
+                    selected, model.edge_node_fraction(selected, index)
+                ),
+                model.z_min,
+            )
+            for index in range(1, 8)
+        ]
+        split_fraction = model.edge_node_fraction(selected, 3)
+
+        model.split_edge(selected, split_fraction)
+
+        self._assert_block_mesh_accepts(
+            model, expected_points=original_nodes
+        )
+
     def test_block_mesh_accepts_exported_multiblock_dictionary(self) -> None:
         model = MeshModel()
         model.add_block(edge_key("v1", "v2"))

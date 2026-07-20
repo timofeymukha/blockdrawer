@@ -170,6 +170,46 @@ them in the canvas widgets.
   edge component as `set_edge_cells()`, reversing canonical ratios where needed
   so the grading follows one physical block direction. Each Set action is one
   history entry.
+- `MeshModel.split_edge()` cuts the complete opposite-edge constraint component,
+  not only the incident block. Every touched block is replaced by two conformal
+  quadrilaterals, shared affected edges receive one shared split vertex, and
+  boundary assignments on exterior affected edges are copied to both segments.
+  Reject a constraint component that touches all four sides of one block because
+  that would branch or cross the cut. A one-cell component becomes two one-cell
+  components; otherwise the selected fraction chooses the nearest existing mesh
+  node and preserves the original total cell count.
+- Edge splitting retains each affected edge's type. Arc halves use points on the
+  original circle and polyLine halves retain the exact original path, inserting
+  a path midpoint only when a half would otherwise have no interpolation point.
+  Spline halves retain at least one point and are sampled from the original
+  through-point curve. Sub-edge grading keeps the original cell-to-cell ratio;
+  therefore a node-aligned split preserves selected-edge node locations up to
+  floating-point error. Each new internal cut edge log-interpolates the directed
+  total grading ratios of the block's transverse sides. The complete model
+  mutation validates and rolls back atomically.
+- In the GUI, configurable shortcut `S` enters split mode only when a mesh edge
+  is selected. A purple marker starts at a central existing mesh node, follows
+  the closest location on straight or curved edges while clicking/dragging, and
+  remains movable after mouse release. Mouse interaction never commits the split;
+  the editable `Current split (%)` field, configurable `Enter`/keypad-Enter execute
+  action, and `Execute split` button are the only execution paths. `Esc` cancels
+  without mutation. A successful strip split is one history action and selects
+  the first new internal cut edge.
+- `MeshModel.combine_blocks()` is the conformal inverse operation. It accepts only
+  an internal edge with two incident blocks, follows the cut through four-block
+  junctions, and rejects branches, turns, uncovered incident blocks, and merges
+  that would not produce strictly convex quadrilaterals. Each block may occur in
+  only one merged pair. Cut vertices and the two consecutive edge segments at
+  each cut endpoint are pruned atomically.
+- A combined edge sums the two source cell counts. Its total grading ratio is
+  reconstructed from the directed first source start-cell width and second source
+  end-cell width; this exactly recovers compatible split grading and gives a
+  stable approximation otherwise. Collinear lines remain lines, kinked line and
+  polyLine combinations become an exact polyLine, compatible same-circle arcs
+  remain arcs, spline pairs concatenate their through-points, and mixed curve
+  types are sampled into a spline. Boundary assignments must match exactly on the
+  two joined segments. `Shift+S` invokes the operation immediately, records one
+  history entry, and remains distinct from destructive edge deletion.
 - A new block is appended only across a boundary edge. It shares that edge and
   translates both endpoints by the same outward-normal vector. The distance is the
   source block's average perpendicular thickness at the edge endpoints, producing
@@ -239,7 +279,7 @@ through the View menu. Geometry-layer visibility is the configurable
 `Ctrl+E`/`Cmd+E` default migrates to `E`, while custom bindings are preserved.
 `shortcuts` maps every application
 action to a list of readable combinations such as `Ctrl+S`, `Cmd+Z`, `Delete`,
-`B`, `G`, or `P`; an empty list disables that action. Missing actions inherit
+`B`, `G`, `P`, or `S`; an empty list disables that action. Missing actions inherit
 current platform defaults so newer releases can add actions compatibly. Unknown
 actions, invalid combinations, and duplicate combinations are rejected without
 preventing the GUI from starting; the invalid file is left untouched and

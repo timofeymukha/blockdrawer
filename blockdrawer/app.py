@@ -33,6 +33,8 @@ CURVE_RENDER_SEGMENTS = 64
 SPLINE_SAMPLES_PER_SPAN = 4
 GEOMETRY_SAMPLES_PER_SPAN = 4
 MAX_ZOOM_PIXELS_PER_UNIT = 10_000_000.0
+MIN_SPLIT_FRACTION = 1.0e-4
+MAX_SPLIT_PICK_SAMPLES = 4096
 PROJECTION_DIRECTION_LABELS = {
     "Orthogonal (shortest path)": "orthogonal",
     "Along x": "x",
@@ -58,6 +60,9 @@ class BlockDrawerApp:
         self.vertex_placement_active = False
         self.boundary_mode_active = False
         self.export_mode_active = False
+        self.split_edge_active: EdgeKey | None = None
+        self.split_fraction = 0.5
+        self.drag_split_marker = False
         self.projection_stage: str | None = None
         self.projection_entity_kind: str | None = None
         self.projection_vertex_ids: list[str] = []
@@ -153,6 +158,8 @@ class BlockDrawerApp:
         self.point_y_var: tk.StringVar | None = None
         self.point_list_index_var: tk.StringVar | None = None
         self.edge_point_count_var: tk.StringVar | None = None
+        self.split_fraction_var: tk.StringVar | None = None
+        self.split_cells_var: tk.StringVar | None = None
         self.geometry_name_var: tk.StringVar | None = None
         self.geometry_point_x_var: tk.StringVar | None = None
         self.geometry_point_y_var: tk.StringVar | None = None
@@ -398,6 +405,18 @@ class BlockDrawerApp:
             command=self.start_projection,
         )
         self.edit_menu.add_command(
+            label="Split selected edge",
+            accelerator=self._shortcut_label("split_edge"),
+            command=self.start_edge_split,
+        )
+        self.split_edge_menu_index = self.edit_menu.index("end")
+        self.edit_menu.add_command(
+            label="Combine blocks across edge",
+            accelerator=self._shortcut_label("combine_blocks"),
+            command=self.combine_selected_blocks,
+        )
+        self.combine_blocks_menu_index = self.edit_menu.index("end")
+        self.edit_menu.add_command(
             label="Delete selected entity",
             accelerator=self._shortcut_label("delete_edge"),
             command=self.delete_selected_entity,
@@ -473,6 +492,9 @@ class BlockDrawerApp:
             "undo": lambda _event: self._shortcut(self.undo),
             "redo": lambda _event: self._shortcut(self.redo),
             "delete_edge": self._delete_shortcut,
+            "split_edge": self._split_shortcut,
+            "execute_split": self._execute_split_shortcut,
+            "combine_blocks": self._combine_shortcut,
             "new_block": self._new_block_shortcut,
             "add_vertex": self._new_vertex_shortcut,
             "set_boundaries": self._boundary_shortcut,
@@ -557,7 +579,9 @@ class BlockDrawerApp:
                 "Mouse wheel: zoom\nMiddle/right drag: pan\n"
                 "Double-click an exterior edge: add block\n"
                 "V: place vertex · N: connect 4 vertices\n"
-                "B: boundaries · P: project · E: export · Esc: cancel"
+                "S: split edge · Shift+S: combine\n"
+                "B: boundaries · P: project\n"
+                "E: export · Esc: cancel"
             ),
             foreground="#52606d",
             justify="left",
@@ -641,6 +665,8 @@ class BlockDrawerApp:
         self.point_y_var = None
         self.point_list_index_var = None
         self.edge_point_count_var = None
+        self.split_fraction_var = None
+        self.split_cells_var = None
         self.geometry_name_var = None
         self.geometry_point_x_var = None
         self.geometry_point_y_var = None
@@ -663,6 +689,12 @@ class BlockDrawerApp:
             self.edit_menu.entryconfigure(
                 self.delete_edge_menu_index, state="disabled"
             )
+            self.edit_menu.entryconfigure(
+                self.split_edge_menu_index, state="disabled"
+            )
+            self.edit_menu.entryconfigure(
+                self.combine_blocks_menu_index, state="disabled"
+            )
             return
 
         if getattr(self, "projection_stage", None) is not None:
@@ -681,6 +713,12 @@ class BlockDrawerApp:
             self.edit_menu.entryconfigure(
                 self.delete_edge_menu_index, state="disabled"
             )
+            self.edit_menu.entryconfigure(
+                self.split_edge_menu_index, state="disabled"
+            )
+            self.edit_menu.entryconfigure(
+                self.combine_blocks_menu_index, state="disabled"
+            )
             return
 
         if self.boundary_mode_active:
@@ -698,6 +736,37 @@ class BlockDrawerApp:
             self.edit_menu.entryconfigure(
                 self.delete_edge_menu_index, state="disabled"
             )
+            self.edit_menu.entryconfigure(
+                self.split_edge_menu_index, state="disabled"
+            )
+            self.edit_menu.entryconfigure(
+                self.combine_blocks_menu_index, state="disabled"
+            )
+            return
+
+        if self.split_edge_active is not None:
+            self.sidebar_title.configure(text="Split block")
+            self.selection_frame.configure(text="Conformal edge split")
+            self.selection_frame.grid_configure(row=1, pady=0)
+            self.sidebar_help.configure(
+                text=(
+                    "Click or drag on the selected edge to place the split.\n"
+                    "Reposition it as often as needed, then press Enter or "
+                    "use Execute split.\n"
+                    "Esc: cancel split"
+                )
+            )
+            self._build_split_panel()
+            self.add_button.configure(state="disabled")
+            self.edit_menu.entryconfigure(
+                self.delete_edge_menu_index, state="disabled"
+            )
+            self.edit_menu.entryconfigure(
+                self.split_edge_menu_index, state="disabled"
+            )
+            self.edit_menu.entryconfigure(
+                self.combine_blocks_menu_index, state="disabled"
+            )
             return
 
         self.sidebar_title.configure(text="Properties")
@@ -708,7 +777,9 @@ class BlockDrawerApp:
                 "Mouse wheel: zoom\nMiddle/right drag: pan\n"
                 "Double-click an exterior edge: add block\n"
                 "V: place vertex · N: connect 4 vertices\n"
-                "B: boundaries · P: project · E: export · Esc: cancel"
+                "S: split edge · Shift+S: combine\n"
+                "B: boundaries · P: project\n"
+                "E: export · Esc: cancel"
             )
         )
 
@@ -1151,6 +1222,108 @@ class BlockDrawerApp:
         self.edit_menu.entryconfigure(
             self.delete_edge_menu_index, state=delete_state
         )
+        self.edit_menu.entryconfigure(
+            self.split_edge_menu_index,
+            state="normal" if self.selected_edge is not None else "disabled",
+        )
+        self.edit_menu.entryconfigure(
+            self.combine_blocks_menu_index,
+            state=(
+                "normal"
+                if self.selected_edge is not None
+                and self.model.can_combine_edge(self.selected_edge)
+                else "disabled"
+            ),
+        )
+
+    def _build_split_panel(self) -> None:
+        assert self.split_edge_active is not None
+        first, second = self.split_edge_active
+        affected = self.model.edge_constraint_component(
+            self.split_edge_active
+        )
+        affected_blocks = sum(
+            any(
+                edge_key(*block.directed_edge(index)) in affected
+                for index in range(4)
+            )
+            for block in self.model.blocks
+        )
+        ttk.Label(
+            self.selection_frame,
+            text=f"Edge {first} — {second}",
+            font=self._font(11, "bold"),
+            foreground="#7b2cbf",
+        ).grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(
+            self.selection_frame,
+            text=(
+                f"The cut propagates across {affected_blocks} block"
+                f"{'s' if affected_blocks != 1 else ''} and splits "
+                f"{len(affected)} aligned edge"
+                f"{'s' if len(affected) != 1 else ''}."
+            ),
+            foreground="#52606d",
+            wraplength=self._px(245),
+        ).grid(
+            row=1, column=0, columnspan=2, sticky="w",
+            pady=(self._px(6), self._px(10)),
+        )
+        self.split_fraction_var = tk.StringVar()
+        self._field(
+            self.selection_frame,
+            2,
+            "Current split (%)",
+            self.split_fraction_var,
+            on_confirm=self.execute_edge_split,
+        )
+        self.split_cells_var = tk.StringVar()
+        ttk.Label(self.selection_frame, text="Cell allocation").grid(
+            row=3, column=0, sticky="w",
+            padx=(0, self._px(8)), pady=self._px(3),
+        )
+        ttk.Label(
+            self.selection_frame,
+            textvariable=self.split_cells_var,
+            font=self._font(10, "bold"),
+            foreground="#7b2cbf",
+        ).grid(row=3, column=1, sticky="w", pady=self._px(3))
+        self._sync_split_panel_value()
+        ttk.Label(
+            self.selection_frame,
+            text=(
+                "The cell counts are chosen at the nearest existing mesh node. "
+                "Arcs and polyLines retain their paths; splines are resampled "
+                "from the original curve."
+            ),
+            foreground="#52606d",
+            wraplength=self._px(245),
+        ).grid(
+            row=4, column=0, columnspan=2, sticky="w",
+            pady=(self._px(9), 0),
+        )
+        ttk.Button(
+            self.selection_frame,
+            text="Execute split",
+            command=self.execute_edge_split,
+        ).grid(
+            row=5, column=0, columnspan=2, sticky="ew",
+            pady=(self._px(10), 0),
+        )
+
+    def _sync_split_panel_value(self) -> None:
+        if self.split_edge_active is None or self.split_fraction_var is None:
+            return
+        first_cells, second_cells = self.model.edge_split_cell_counts(
+            self.split_edge_active, self.split_fraction
+        )
+        self.split_fraction_var.set(
+            _display_split_percentage(self.split_fraction)
+        )
+        if self.split_cells_var is not None:
+            self.split_cells_var.set(
+                f"{first_cells} + {second_cells} cells"
+            )
 
     def _build_export_panel(self) -> None:
         ttk.Label(
@@ -1790,6 +1963,7 @@ class BlockDrawerApp:
 
     def toggle_boundary_mode(self) -> None:
         self.boundary_mode_active = not self.boundary_mode_active
+        self._clear_split_state()
         self._clear_export_mode()
         self._clear_projection_state()
         self.vertex_placement_active = False
@@ -1821,6 +1995,7 @@ class BlockDrawerApp:
 
     def toggle_export_mode(self) -> None:
         activating = not self.export_mode_active
+        self._clear_split_state()
         self.export_mode_active = activating
         self._clear_projection_state()
         self.boundary_mode_active = False
@@ -2395,6 +2570,7 @@ class BlockDrawerApp:
             self.show_block_mesh_var.set(True)
             self.show_geometry_var.set(True)
             self.apply_visibility()
+        self._clear_split_state()
         self._clear_export_mode()
         self.boundary_mode_active = False
         self.boundary_button.configure(text="Set boundaries")
@@ -2602,6 +2778,144 @@ class BlockDrawerApp:
             f"{direction}." + converted + fitted
         )
 
+    def start_edge_split(self) -> None:
+        if self.selected_edge is None \
+                or self.selected_edge not in self.model.edge_cells:
+            self.status.set("Select a mesh edge before starting a split.")
+            return
+        self._clear_export_mode()
+        self._clear_projection_state()
+        self.boundary_mode_active = False
+        self.boundary_button.configure(text="Set boundaries")
+        self.vertex_placement_active = False
+        self.block_vertex_selection = None
+        self.selected_vertex = None
+        self.selected_control_point_index = None
+        self.selected_geometry_curve = None
+        self.selected_geometry_point_index = None
+        self.drag_vertex = None
+        self.drag_control_point = None
+        self.drag_geometry_point = None
+        self.drag_changed = False
+        self.drag_split_marker = False
+        self.split_edge_active = self.selected_edge
+        cells = self.model.edge_cells[self.split_edge_active]
+        self.split_fraction = (
+            0.5
+            if cells == 1
+            else self.model.edge_node_fraction(
+                self.split_edge_active, max(1, cells // 2)
+            )
+        )
+        self.canvas.focus_set()
+        self._update_property_panel()
+        self.redraw()
+        self.status.set(
+            "Split mode: position the marker, then press Enter or use Execute split."
+        )
+
+    def cancel_edge_split(self) -> None:
+        if self.split_edge_active is None:
+            return
+        self._clear_split_state()
+        self._update_property_panel()
+        self.redraw()
+        self.status.set("Cancelled edge split.")
+
+    def _clear_split_state(self) -> None:
+        self.split_edge_active = None
+        self.drag_split_marker = False
+        self.split_fraction_var = None
+        self.split_cells_var = None
+
+    def _update_split_marker_from_pointer(self, event: tk.Event) -> None:
+        if self.split_edge_active is None:
+            return
+        x, y = self.screen_to_world(event.x, event.y)
+        fraction = _nearest_edge_fraction(
+            self.model, self.split_edge_active, x, y
+        )
+        self.split_fraction = min(
+            1.0 - MIN_SPLIT_FRACTION,
+            max(MIN_SPLIT_FRACTION, fraction),
+        )
+        self._sync_split_panel_value()
+        self.redraw()
+
+    def _finish_edge_split(self) -> None:
+        if self.split_edge_active is None:
+            return
+        selected = self.split_edge_active
+        try:
+            result = self.model.split_edge(selected, self.split_fraction)
+        except TopologyError as exc:
+            self._show_error("Cannot split edge", exc)
+            self.redraw()
+            return
+        self._clear_split_state()
+        self.selected_vertex = None
+        self.selected_edge = result.cut_edges[0] if result.cut_edges else None
+        self.selected_control_point_index = None
+        self.selected_geometry_curve = None
+        self.selected_geometry_point_index = None
+        self._commit_edit()
+        self._update_property_panel()
+        self.redraw()
+        self.status.set(
+            f"Split {len(result.new_block_ids)} block"
+            f"{'s' if len(result.new_block_ids) != 1 else ''} at "
+            f"{_display_split_percentage(result.fraction)}% into "
+            f"{result.first_cells} + {result.second_cells} cells."
+        )
+
+    def execute_edge_split(self) -> None:
+        """Apply the split percentage currently shown in the properties panel."""
+        if self.split_edge_active is None:
+            return
+        if self.split_fraction_var is not None:
+            try:
+                self.split_fraction = _split_fraction_from_text(
+                    self.split_fraction_var.get()
+                )
+            except ValueError as exc:
+                self._show_error("Cannot split edge", exc)
+                return
+        self._finish_edge_split()
+
+    def combine_selected_blocks(self) -> None:
+        """Combine the conformal block pairs across the selected internal cut."""
+        if self.split_edge_active is not None \
+                or self.export_mode_active \
+                or self.boundary_mode_active \
+                or self.projection_stage is not None:
+            self.status.set("Finish the active editing mode before combining blocks.")
+            return
+        if self.selected_edge is None:
+            self.status.set("Select an internal edge before combining blocks.")
+            return
+        selected = self.selected_edge
+        try:
+            result = self.model.combine_blocks(selected)
+        except TopologyError as exc:
+            self._show_error("Cannot combine blocks", exc)
+            return
+        self.selected_vertex = None
+        self.selected_edge = (
+            result.merged_edges[0] if result.merged_edges else None
+        )
+        self.selected_control_point_index = None
+        self.selected_geometry_curve = None
+        self.selected_geometry_point_index = None
+        self._commit_edit()
+        self._update_property_panel()
+        self.redraw()
+        self.status.set(
+            f"Combined {len(result.removed_block_ids)} block pair"
+            f"{'s' if len(result.removed_block_ids) != 1 else ''}; removed "
+            f"{len(result.removed_edges)} internal edge"
+            f"{'s' if len(result.removed_edges) != 1 else ''}."
+        )
+
     def add_selected_block(self) -> None:
         if self.selected_edge is None:
             self.status.set("Select an exterior edge before adding a block.")
@@ -2624,6 +2938,7 @@ class BlockDrawerApp:
         )
 
     def start_block_from_vertices(self) -> None:
+        self._clear_split_state()
         self._clear_export_mode()
         self._clear_projection_state()
         self.boundary_mode_active = False
@@ -2647,6 +2962,7 @@ class BlockDrawerApp:
         )
 
     def start_vertex_placement(self) -> None:
+        self._clear_split_state()
         self._clear_export_mode()
         self._clear_projection_state()
         self.boundary_mode_active = False
@@ -2919,6 +3235,40 @@ class BlockDrawerApp:
 
         if self.show_geometry_var.get():
             self._draw_geometry_curves()
+        if self.split_edge_active is not None:
+            self._draw_split_marker()
+
+    def _draw_split_marker(self) -> None:
+        if self.split_edge_active is None \
+                or self.split_edge_active not in self.model.edge_cells:
+            return
+        world_x, world_y = self.model.edge_point(
+            self.split_edge_active, self.split_fraction
+        )
+        x, y = self.world_to_screen(world_x, world_y)
+        radius = self._px(10)
+        marker = self.canvas.create_polygon(
+            x, y - radius,
+            x + radius, y,
+            x, y + radius,
+            x - radius, y,
+            fill="#9c36b5",
+            outline="#ffffff",
+            width=self._px(2),
+        )
+        self.item_targets[marker] = (
+            "split_marker", self.split_edge_active
+        )
+        label = self.canvas.create_text(
+            x,
+            y - radius - self._px(8),
+            text=f"{self.split_fraction * 100:.1f}%",
+            fill="#7b2cbf",
+            font=self._font(9, "bold"),
+        )
+        self.item_targets[label] = (
+            "split_marker", self.split_edge_active
+        )
 
     def _draw_geometry_curves(self) -> None:
         for curve_id, curve in self.model.geometry_curves.items():
@@ -3194,6 +3544,7 @@ class BlockDrawerApp:
             show_edge_interpolation_points=show_edge_interpolation_points,
         )
         if not show_block_mesh:
+            self._clear_split_state()
             self._clear_projection_state()
             self.selected_vertex = None
             self.selected_edge = None
@@ -3262,6 +3613,14 @@ class BlockDrawerApp:
         self.drag_control_point = None
         self.drag_geometry_point = None
         self.drag_changed = False
+        if self.split_edge_active is not None:
+            self.drag_split_marker = True
+            self._update_split_marker_from_pointer(event)
+            self.status.set(
+                "Positioning split marker; release it anywhere, then press "
+                "Enter or use Execute split."
+            )
+            return
         if self.export_mode_active:
             self.status.set(
                 "Export settings are open; press E or Esc to return to editing."
@@ -3395,6 +3754,9 @@ class BlockDrawerApp:
         self.redraw()
 
     def _on_left_drag(self, event: tk.Event) -> None:
+        if self.drag_split_marker:
+            self._update_split_marker_from_pointer(event)
+            return
         if self.drag_vertex is None and self.drag_control_point is None \
                 and self.drag_geometry_point is None:
             return
@@ -3429,6 +3791,13 @@ class BlockDrawerApp:
         )
 
     def _on_left_release(self, _event: tk.Event) -> None:
+        if self.drag_split_marker:
+            self.drag_split_marker = False
+            self.status.set(
+                "Split location set. Reposition it if needed, then press "
+                "Enter or use Execute split."
+            )
+            return
         if (self.drag_vertex is not None or self.drag_control_point is not None
                 or self.drag_geometry_point is not None) \
                 and self.drag_changed:
@@ -3439,7 +3808,8 @@ class BlockDrawerApp:
         self.drag_changed = False
 
     def _on_double_click(self, _event: tk.Event) -> None:
-        if self.export_mode_active or self.boundary_mode_active \
+        if self.split_edge_active is not None or self.export_mode_active \
+                or self.boundary_mode_active \
                 or self.projection_stage is not None:
             return
         target = self._target_at_cursor()
@@ -3538,6 +3908,7 @@ class BlockDrawerApp:
         self.block_vertex_selection = None
         self.vertex_placement_active = False
         self.boundary_mode_active = False
+        self._clear_split_state()
         self._clear_export_mode()
         self._clear_projection_state()
         self.active_boundary_name = None
@@ -3580,6 +3951,7 @@ class BlockDrawerApp:
         self.block_vertex_selection = None
         self.vertex_placement_active = False
         self.boundary_mode_active = False
+        self._clear_split_state()
         self._clear_export_mode()
         self._clear_projection_state()
         self.active_boundary_name = next(iter(self.model.boundaries), None)
@@ -3704,6 +4076,7 @@ class BlockDrawerApp:
 
     def _restore_model(self, restored: MeshModel) -> None:
         self.model = restored
+        self._clear_split_state()
         self._clear_projection_state()
         self.block_vertex_selection = None
         self.vertex_placement_active = False
@@ -3766,6 +4139,7 @@ class BlockDrawerApp:
         if _is_text_input_class(event.widget.winfo_class()):
             return None
         if getattr(self, "export_mode_active", False) \
+                or getattr(self, "split_edge_active", None) is not None \
                 or getattr(self, "projection_stage", None) is not None:
             return "break"
         self.delete_selected_entity()
@@ -3775,6 +4149,24 @@ class BlockDrawerApp:
         if _is_text_input_class(event.widget.winfo_class()):
             return None
         self.start_block_from_vertices()
+        return "break"
+
+    def _split_shortcut(self, event: tk.Event) -> str | None:
+        if _is_text_input_class(event.widget.winfo_class()):
+            return None
+        self.start_edge_split()
+        return "break"
+
+    def _execute_split_shortcut(self, _event: tk.Event) -> str | None:
+        if getattr(self, "split_edge_active", None) is None:
+            return None
+        self.execute_edge_split()
+        return "break"
+
+    def _combine_shortcut(self, event: tk.Event) -> str | None:
+        if _is_text_input_class(event.widget.winfo_class()):
+            return None
+        self.combine_selected_blocks()
         return "break"
 
     def _new_vertex_shortcut(self, event: tk.Event) -> str | None:
@@ -3809,6 +4201,9 @@ class BlockDrawerApp:
         return "break"
 
     def _escape_shortcut(self, _event: tk.Event) -> str | None:
+        if getattr(self, "split_edge_active", None) is not None:
+            self.cancel_edge_split()
+            return "break"
         if getattr(self, "export_mode_active", False):
             self.toggle_export_mode()
             return "break"
@@ -3903,6 +4298,69 @@ class BlockDrawerApp:
     def _show_error(self, title: str, error: Exception) -> None:
         self.status.set(str(error))
         messagebox.showerror(title, str(error), parent=self.root)
+
+
+def _nearest_edge_fraction(
+    model: MeshModel, edge: EdgeKey, x: float, y: float
+) -> float:
+    """Return the edge parameter closest to a 2D pointer location."""
+    current = edge_key(*edge)
+    if model.edge_type(current) == "line":
+        first = model.vertices[current[0]]
+        second = model.vertices[current[1]]
+        dx = second.x - first.x
+        dy = second.y - first.y
+        length_squared = dx * dx + dy * dy
+        if length_squared == 0.0:
+            return 0.5
+        return min(1.0, max(
+            0.0,
+            ((x - first.x) * dx + (y - first.y) * dy) / length_squared,
+        ))
+
+    point_count = len(model.edge_control_points(current))
+    samples = min(
+        MAX_SPLIT_PICK_SAMPLES,
+        max(64, (point_count + 1) * 16),
+    )
+
+    def distance_squared(fraction: float) -> float:
+        point_x, point_y = model.edge_point(current, fraction)
+        return (point_x - x) ** 2 + (point_y - y) ** 2
+
+    best_index = min(
+        range(samples + 1),
+        key=lambda index: distance_squared(index / samples),
+    )
+    low = max(0.0, (best_index - 1) / samples)
+    high = min(1.0, (best_index + 1) / samples)
+    for _ in range(36):
+        first_third = low + (high - low) / 3.0
+        second_third = high - (high - low) / 3.0
+        if distance_squared(first_third) <= distance_squared(second_third):
+            high = second_third
+        else:
+            low = first_third
+    return (low + high) / 2.0
+
+
+def _split_fraction_from_text(value: str) -> float:
+    """Parse a user-facing percentage into an edge fraction."""
+    text = value.strip()
+    if text.endswith("%"):
+        text = text[:-1].strip()
+    try:
+        percentage = float(text)
+    except ValueError as exc:
+        raise ValueError("Current split must be a percentage between 0 and 100") \
+            from exc
+    if not math.isfinite(percentage) or not 0.0 < percentage < 100.0:
+        raise ValueError("Current split must be strictly between 0 and 100 percent")
+    return percentage / 100.0
+
+
+def _display_split_percentage(fraction: float) -> str:
+    return format(fraction * 100.0, ".12g")
 
 
 def _positive_integer(value: str, label: str) -> int:
