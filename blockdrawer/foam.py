@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 from .model import MeshModel, TopologyError
@@ -12,6 +13,7 @@ def block_mesh_dict(model: MeshModel) -> str:
     model.validate()
     if not model.blocks:
         raise TopologyError("Cannot export blockMeshDict without at least one block")
+    _validate_cyclic_boundaries(model)
     vertex_ids = list(model.vertices)
     bottom_index = {identifier: index for index, identifier in enumerate(vertex_ids)}
     top_offset = len(vertex_ids)
@@ -56,8 +58,11 @@ def block_mesh_dict(model: MeshModel) -> str:
         upper = [index + top_offset for index in lower]
         nx, ny, nz = model.block_cell_counts(block)
         indices = " ".join(str(index) for index in lower + upper)
+        grading = " ".join(
+            _scalar(value) for value in _block_edge_grading(model, block.vertices)
+        )
         lines.append(
-            f"    hex ({indices}) ({nx} {ny} {nz}) simpleGrading (1 1 1)"
+            f"    hex ({indices}) ({nx} {ny} {nz}) edgeGrading ({grading})"
             f" // {block.id}"
         )
 
@@ -98,6 +103,37 @@ def block_mesh_dict(model: MeshModel) -> str:
         "",
         "boundary",
         "(",
+    ])
+    occurrences = model.edge_occurrences()
+    for boundary in model.boundaries.values():
+        lines.extend([
+            f"    {boundary.name}",
+            "    {",
+            f"        type {boundary.kind};",
+        ])
+        if boundary.neighbour_patch is not None:
+            lines.append(
+                f"        neighbourPatch {boundary.neighbour_patch};"
+            )
+        lines.extend([
+            "        faces",
+            "        (",
+        ])
+        for current in model.boundary_edges(boundary.name):
+            _, _, directed = occurrences[current][0]
+            first, second = directed
+            first_index = bottom_index[first]
+            second_index = bottom_index[second]
+            lines.append(
+                f"            ({first_index} {second_index} "
+                f"{second_index + top_offset} {first_index + top_offset})"
+            )
+        lines.extend([
+            "        );",
+            "    }",
+        ])
+
+    lines.extend([
         ")",
         ";",
         "",
@@ -120,3 +156,64 @@ def _scalar(value: float) -> str:
     if value == 0.0:
         return "0"
     return format(value, ".15g")
+
+
+def _block_edge_grading(
+    model: MeshModel,
+    vertices: tuple[str, str, str, str],
+) -> tuple[float, ...]:
+    """Return OpenFOAM's 12 directed edge ratios for an extruded 2D block."""
+    first, second, third, fourth = vertices
+    x_first = model.edge_expansion_in_direction(first, second)
+    x_second = model.edge_expansion_in_direction(fourth, third)
+    y_first = model.edge_expansion_in_direction(first, fourth)
+    y_second = model.edge_expansion_in_direction(second, third)
+    return (
+        x_first,
+        x_second,
+        x_second,
+        x_first,
+        y_first,
+        y_second,
+        y_second,
+        y_first,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+    )
+
+
+def _validate_cyclic_boundaries(model: MeshModel) -> None:
+    """Reject incomplete cyclic pairs before writing an unusable dictionary."""
+    checked: set[str] = set()
+    for boundary in model.boundaries.values():
+        if boundary.kind != "cyclic" or boundary.name in checked:
+            continue
+        assert boundary.neighbour_patch is not None
+        partner = model.boundaries[boundary.neighbour_patch]
+        first_edges = model.boundary_edges(boundary.name)
+        second_edges = model.boundary_edges(partner.name)
+        if not first_edges or not second_edges:
+            raise TopologyError(
+                f"Cyclic pair {boundary.name!r}/{partner.name!r} needs "
+                "at least one assigned edge on each patch"
+            )
+        first_cells = sorted(model.edge_cells[current] for current in first_edges)
+        second_cells = sorted(model.edge_cells[current] for current in second_edges)
+        if first_cells != second_cells:
+            raise TopologyError(
+                f"Cyclic pair {boundary.name!r}/{partner.name!r} needs matching "
+                "edge subdivisions"
+            )
+        first_lengths = sorted(model.edge_length(current) for current in first_edges)
+        second_lengths = sorted(model.edge_length(current) for current in second_edges)
+        if len(first_lengths) != len(second_lengths) or any(
+            not math.isclose(first, second, rel_tol=1.0e-9, abs_tol=1.0e-12)
+            for first, second in zip(first_lengths, second_lengths)
+        ):
+            raise TopologyError(
+                f"Cyclic pair {boundary.name!r}/{partner.name!r} needs matching "
+                "edge lengths"
+            )
+        checked.update((boundary.name, partner.name))

@@ -159,6 +159,64 @@ class ModelHistoryTests(unittest.TestCase):
         restored = history.redo()
         self.assertEqual(len(restored.blocks), 9)
 
+    def test_standalone_vertex_addition_is_undoable(self) -> None:
+        model = MeshModel()
+        history = ModelHistory(model)
+
+        added = model.add_vertex(2.0, 3.0)
+        history.record(model)
+
+        restored = history.undo()
+        self.assertNotIn(added.id, restored.vertices)
+        restored = history.redo()
+        self.assertEqual(
+            (restored.vertices[added.id].x, restored.vertices[added.id].y),
+            (2.0, 3.0),
+        )
+
+    def test_edge_grading_is_undoable(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v0", "v1")
+        history = ModelHistory(model)
+
+        model.set_edge_grading(
+            selected, "start_width", 0.025, propagate=True
+        )
+        history.record(model)
+        graded_ratio = model.edge_total_expansion(selected)
+        opposite = edge_key("v2", "v3")
+        self.assertNotEqual(model.edge_total_expansion(opposite), 1.0)
+
+        restored = history.undo()
+        self.assertEqual(restored.edge_total_expansion(selected), 1.0)
+        self.assertEqual(restored.edge_total_expansion(opposite), 1.0)
+        restored = history.redo()
+        self.assertAlmostEqual(
+            restored.edge_total_expansion(selected), graded_ratio
+        )
+        self.assertAlmostEqual(
+            restored.edge_total_expansion(opposite), 1.0 / graded_ratio
+        )
+
+    def test_boundary_creation_assignment_and_removal_are_undoable(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v0", "v3")
+        history = ModelHistory(model)
+
+        model.add_boundary("inlet")
+        model.set_edge_boundary(selected, "inlet")
+        history.record(model)
+        assigned = to_data(model)
+        model.remove_boundary("inlet")
+        history.record(model)
+
+        restored = history.undo()
+        self.assertEqual(to_data(restored), assigned)
+        self.assertEqual(restored.edge_boundaries[selected], "inlet")
+        restored = history.redo()
+        self.assertEqual(restored.boundaries, {})
+        self.assertEqual(restored.edge_boundaries, {})
+
 
 if __name__ == "__main__":
     unittest.main()

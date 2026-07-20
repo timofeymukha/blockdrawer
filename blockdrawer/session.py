@@ -8,6 +8,7 @@ from typing import Any
 
 from .model import (
     Block,
+    Boundary,
     EdgeGeometry,
     MeshModel,
     TopologyError,
@@ -17,7 +18,7 @@ from .model import (
 
 
 FORMAT_NAME = "blockDrawer"
-FORMAT_VERSION = 2
+FORMAT_VERSION = 4
 
 
 class SessionError(ValueError):
@@ -59,6 +60,34 @@ def to_data(model: MeshModel) -> dict[str, Any]:
             for current in model.edges()
             if (geometry := model.edge_geometry.get(current)) is not None
         ],
+        "edgeGrading": [
+            {
+                "vertices": list(current),
+                "expansionRatio": model.edge_grading[current],
+            }
+            for current in model.edges()
+            if current in model.edge_grading
+        ],
+        "boundaries": [
+            {
+                "name": boundary.name,
+                "type": boundary.kind,
+                "color": boundary.color,
+                **(
+                    {"neighbourPatch": boundary.neighbour_patch}
+                    if boundary.neighbour_patch is not None else {}
+                ),
+            }
+            for boundary in model.boundaries.values()
+        ],
+        "edgeBoundaries": [
+            {
+                "vertices": list(current),
+                "boundary": model.edge_boundaries[current],
+            }
+            for current in model.edges()
+            if current in model.edge_boundaries
+        ],
     }
 
 
@@ -69,7 +98,7 @@ def from_data(data: Any) -> MeshModel:
         if data.get("format") != FORMAT_NAME:
             raise SessionError("This is not a BlockDrawer session")
         version = data.get("version")
-        if version not in (1, FORMAT_VERSION):
+        if version not in (1, 2, 3, FORMAT_VERSION):
             raise SessionError(
                 f"Unsupported BlockDrawer session version {version!r}"
             )
@@ -81,6 +110,11 @@ def from_data(data: Any) -> MeshModel:
         # Version 1 stored straight edges only. Treat the absent geometry list
         # as an explicit migration to version 2's implicit-line representation.
         geometry_data = [] if version == 1 else _list(data, "edgeGeometry")
+        grading_data = [] if version in (1, 2) else _list(data, "edgeGrading")
+        boundaries_data = [] if version in (1, 2, 3) else _list(data, "boundaries")
+        edge_boundaries_data = (
+            [] if version in (1, 2, 3) else _list(data, "edgeBoundaries")
+        )
 
         model = MeshModel(initialize=False)
         for item in vertices_data:
@@ -140,6 +174,49 @@ def from_data(data: Any) -> MeshModel:
             model.edge_geometry[current] = EdgeGeometry(
                 _string(item, "type"), tuple(points)
             )
+
+        for item in grading_data:
+            if not isinstance(item, dict):
+                raise SessionError("Each edgeGrading entry must be an object")
+            vertex_ids = _list(item, "vertices")
+            if len(vertex_ids) != 2 or not all(isinstance(value, str)
+                                                for value in vertex_ids):
+                raise SessionError("An edgeGrading entry needs two vertex IDs")
+            current = edge_key(vertex_ids[0], vertex_ids[1])
+            if current in model.edge_grading:
+                raise SessionError(f"Duplicate edge grading for {current!r}")
+            model.edge_grading[current] = _number(item, "expansionRatio")
+
+        for item in boundaries_data:
+            if not isinstance(item, dict):
+                raise SessionError("Each boundary entry must be an object")
+            name = _string(item, "name")
+            if name in model.boundaries:
+                raise SessionError(f"Duplicate boundary name {name!r}")
+            neighbour_patch = item.get("neighbourPatch")
+            if neighbour_patch is not None and not isinstance(neighbour_patch, str):
+                raise SessionError("neighbourPatch must be a string when present")
+            model.boundaries[name] = Boundary(
+                name,
+                _string(item, "type"),
+                _string(item, "color"),
+                neighbour_patch,
+            )
+
+        for item in edge_boundaries_data:
+            if not isinstance(item, dict):
+                raise SessionError("Each edgeBoundaries entry must be an object")
+            vertex_ids = _list(item, "vertices")
+            if len(vertex_ids) != 2 or not all(
+                isinstance(value, str) for value in vertex_ids
+            ):
+                raise SessionError("An edgeBoundaries entry needs two vertex IDs")
+            current = edge_key(vertex_ids[0], vertex_ids[1])
+            if current in model.edge_boundaries:
+                raise SessionError(
+                    f"Duplicate boundary assignment for edge {current!r}"
+                )
+            model.edge_boundaries[current] = _string(item, "boundary")
 
         model.z_cells = _integer(settings, "zCells")
         model.z_min = _number(settings, "zMin")

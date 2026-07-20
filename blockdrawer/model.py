@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from collections import deque
+import colorsys
 from dataclasses import dataclass
 import math
+import re
+import sys
 from typing import Iterable, TypeAlias
 
 
@@ -41,6 +44,27 @@ class EdgeGeometry:
     points: tuple[tuple[float, float], ...]
 
 
+@dataclass(frozen=True)
+class EdgeGradingValues:
+    """Equivalent grading representations for one directed edge."""
+
+    length: float
+    cell_ratio: float
+    total_ratio: float
+    start_width: float
+    end_width: float
+
+
+@dataclass(frozen=True)
+class Boundary:
+    """One named OpenFOAM boundary patch and its display metadata."""
+
+    name: str
+    kind: str
+    color: str
+    neighbour_patch: str | None = None
+
+
 EdgeKey: TypeAlias = tuple[str, str]
 EdgeOccurrence: TypeAlias = tuple[Block, int, tuple[str, str]]
 
@@ -50,6 +74,108 @@ def edge_key(first: str, second: str) -> EdgeKey:
     if first == second:
         raise TopologyError("An edge must connect two distinct vertices")
     return (first, second) if first < second else (second, first)
+
+
+def _finite_expansion_ratio(logarithm: float) -> float:
+    minimum = math.log(sys.float_info.min)
+    maximum = math.log(sys.float_info.max)
+    if not math.isfinite(logarithm) or not minimum <= logarithm <= maximum:
+        raise TopologyError(
+            "That grading is too extreme to represent as an OpenFOAM ratio"
+        )
+    ratio = math.exp(logarithm)
+    if not math.isfinite(ratio) or ratio <= 0.0 \
+            or not math.isfinite(1.0 / ratio):
+        raise TopologyError(
+            "That grading is too extreme to represent as an OpenFOAM ratio"
+        )
+    return ratio
+
+
+def _log_geometric_sum(log_ratio: float, cells: int) -> float:
+    """Return log(sum(exp(i*log_ratio), i=0..cells-1)) stably."""
+    if log_ratio == 0.0:
+        return math.log(cells)
+    if log_ratio < 0.0:
+        return math.log(-math.expm1(cells * log_ratio)) \
+            - math.log(-math.expm1(log_ratio))
+
+    def log_expm1(value: float) -> float:
+        if value > 50.0:
+            return value + math.log1p(-math.exp(-value))
+        return math.log(math.expm1(value))
+
+    return log_expm1(cells * log_ratio) - log_expm1(log_ratio)
+
+
+def _cell_ratio_log_from_start_width(
+    length: float, cells: int, start_width: float
+) -> float:
+    if not math.isfinite(start_width) or not 0.0 < start_width < length:
+        raise TopologyError(
+            "A start or end width must be positive and smaller than the "
+            "edge length when there is more than one cell"
+        )
+    uniform_width = length / cells
+    if math.isclose(
+        start_width, uniform_width, rel_tol=1.0e-12, abs_tol=1.0e-15
+    ):
+        return 0.0
+
+    target = math.log(length / start_width)
+    low = -1.0
+    while _log_geometric_sum(low, cells) > target:
+        low *= 2.0
+    high = 1.0
+    while _log_geometric_sum(high, cells) < target:
+        high *= 2.0
+    for _ in range(120):
+        middle = (low + high) / 2.0
+        if _log_geometric_sum(middle, cells) < target:
+            low = middle
+        else:
+            high = middle
+    return (low + high) / 2.0
+
+
+def _grading_from_total_ratio(
+    length: float, cells: int, total_ratio: float
+) -> tuple[float, float, float]:
+    """Return cell ratio, start width and end width."""
+    if not math.isfinite(length) or length <= 0.0:
+        raise TopologyError("An edge must have positive finite length")
+    if not math.isfinite(total_ratio) or total_ratio <= 0.0 \
+            or not math.isfinite(1.0 / total_ratio):
+        raise TopologyError("The total expansion ratio must be positive and finite")
+    if cells == 1:
+        if total_ratio != 1.0:
+            raise TopologyError("A one-cell edge can only use uniform grading")
+        return 1.0, length, length
+
+    log_cell_ratio = math.log(total_ratio) / (cells - 1)
+    if abs(log_cell_ratio) <= 1.0e-14:
+        width = length / cells
+        return 1.0, width, width
+
+    cell_ratio = math.exp(log_cell_ratio)
+    if log_cell_ratio > 0.0:
+        end_width = length * (
+            -math.expm1(-log_cell_ratio)
+        ) / (-math.expm1(-cells * log_cell_ratio))
+        start_width = end_width / total_ratio
+    else:
+        start_width = length * math.expm1(log_cell_ratio) / math.expm1(
+            cells * log_cell_ratio
+        )
+        end_width = start_width * total_ratio
+    if not all(
+        math.isfinite(value) and value > 0.0
+        for value in (cell_ratio, start_width, end_width)
+    ):
+        raise TopologyError(
+            "That grading is too extreme to produce finite cell widths"
+        )
+    return cell_ratio, start_width, end_width
 
 
 class MeshModel:
@@ -65,12 +191,40 @@ class MeshModel:
     SUPPORTED_EDGE_TYPES = ("line", "arc", "polyLine", "spline")
     MULTI_POINT_EDGE_TYPES = ("polyLine", "spline")
     DEFAULT_CONTROL_POINT_OFFSET_RATIO = 0.2
+    GRADING_PARAMETERS = (
+        "cell_ratio",
+        "total_ratio",
+        "start_width",
+        "end_width",
+    )
+    SPLINE_LENGTH_SAMPLES = 512
+    SUPPORTED_BOUNDARY_TYPES = ("patch", "symmetry", "wall", "cyclic", "empty")
+    BOUNDARY_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+    BOUNDARY_COLORS = (
+        "#d9485f",
+        "#2f9e44",
+        "#7b2cbf",
+        "#e67700",
+        "#0b7285",
+        "#c2255c",
+        "#5f3dc4",
+        "#2b8a3e",
+        "#a61e4d",
+        "#1864ab",
+        "#9c36b5",
+        "#087f5b",
+    )
 
     def __init__(self, *, initialize: bool = True) -> None:
         self.vertices: dict[str, Vertex] = {}
         self.blocks: list[Block] = []
         self.edge_cells: dict[EdgeKey, int] = {}
         self.edge_geometry: dict[EdgeKey, EdgeGeometry] = {}
+        # Non-uniform total end/start ratios in canonical EdgeKey direction.
+        # Uniform grading is implicit, like straight edge geometry.
+        self.edge_grading: dict[EdgeKey, float] = {}
+        self.boundaries: dict[str, Boundary] = {}
+        self.edge_boundaries: dict[EdgeKey, str] = {}
         self.z_cells = 1
         self.z_min = 0.0
         self.z_max = 1.0
@@ -91,6 +245,9 @@ class MeshModel:
             edge: self.DEFAULT_EDGE_CELLS for edge in self.edges()
         }
         self.edge_geometry = {}
+        self.edge_grading = {}
+        self.boundaries = {}
+        self.edge_boundaries = {}
 
     def edges(self) -> list[EdgeKey]:
         """Return unique edges in stable block/local-edge order."""
@@ -118,30 +275,178 @@ class MeshModel:
         occurrences = self.edge_occurrences().get(edge, [])
         return len(occurrences) == 1
 
+    def add_boundary(self, name: str) -> Boundary:
+        """Add an unassigned named patch with a unique display color."""
+        self._validate_boundary_name(name)
+        if name in self.boundaries:
+            raise TopologyError(f"Boundary {name!r} already exists")
+        boundary = Boundary(name, "patch", self._next_boundary_color())
+        self.boundaries[name] = boundary
+        self.validate()
+        return boundary
+
+    def remove_boundary(self, name: str) -> None:
+        """Remove a patch, its assignments, and any cyclic pairing."""
+        if name not in self.boundaries:
+            raise TopologyError(f"Unknown boundary {name!r}")
+        self._detach_cyclic_boundary(name)
+        del self.boundaries[name]
+        self.edge_boundaries = {
+            current: boundary_name
+            for current, boundary_name in self.edge_boundaries.items()
+            if boundary_name != name
+        }
+        self.validate()
+
+    def set_boundary_type(
+        self,
+        name: str,
+        kind: str,
+        *,
+        neighbour_patch: str | None = None,
+    ) -> set[str]:
+        """Set a patch type, pairing cyclic patches atomically and reciprocally."""
+        if name not in self.boundaries:
+            raise TopologyError(f"Unknown boundary {name!r}")
+        if kind not in self.SUPPORTED_BOUNDARY_TYPES:
+            raise TopologyError(f"Unsupported boundary type {kind!r}")
+        if kind == "cyclic":
+            if neighbour_patch is None:
+                raise TopologyError("A cyclic boundary needs a neighbouring patch")
+            if neighbour_patch == name:
+                raise TopologyError("A cyclic boundary cannot neighbour itself")
+            if neighbour_patch not in self.boundaries:
+                raise TopologyError(
+                    f"Unknown neighbouring patch {neighbour_patch!r}"
+                )
+
+        previous = dict(self.boundaries)
+        try:
+            affected = {name}
+            affected.update(self._detach_cyclic_boundary(name))
+            if kind == "cyclic":
+                assert neighbour_patch is not None
+                affected.add(neighbour_patch)
+                affected.update(self._detach_cyclic_boundary(neighbour_patch))
+                first = self.boundaries[name]
+                second = self.boundaries[neighbour_patch]
+                self.boundaries[name] = Boundary(
+                    name, "cyclic", first.color, neighbour_patch
+                )
+                self.boundaries[neighbour_patch] = Boundary(
+                    neighbour_patch, "cyclic", second.color, name
+                )
+            else:
+                current = self.boundaries[name]
+                self.boundaries[name] = Boundary(name, kind, current.color)
+            self.validate()
+            return affected
+        except Exception:
+            self.boundaries = previous
+            raise
+
+    def set_edge_boundary(self, edge: EdgeKey, name: str | None) -> None:
+        """Assign an exterior topological edge to at most one named patch."""
+        current = edge_key(*edge)
+        if current not in self.edge_cells:
+            raise TopologyError(f"Unknown edge {current!r}")
+        if not self.is_boundary_edge(current):
+            raise TopologyError("Only exterior edges can be assigned to a boundary")
+        if name is None:
+            self.edge_boundaries.pop(current, None)
+        else:
+            if name not in self.boundaries:
+                raise TopologyError(f"Unknown boundary {name!r}")
+            self.edge_boundaries[current] = name
+        self.validate()
+
+    def boundary_edges(self, name: str) -> list[EdgeKey]:
+        """Return a patch's assigned edges in stable topology order."""
+        if name not in self.boundaries:
+            raise TopologyError(f"Unknown boundary {name!r}")
+        return [
+            current for current in self.edges()
+            if self.edge_boundaries.get(current) == name
+        ]
+
+    def _detach_cyclic_boundary(self, name: str) -> set[str]:
+        """Turn an existing cyclic pair back into ordinary patches."""
+        current = self.boundaries[name]
+        affected: set[str] = set()
+        neighbour = current.neighbour_patch
+        if current.kind == "cyclic" and neighbour in self.boundaries:
+            other = self.boundaries[neighbour]
+            if other.kind == "cyclic" and other.neighbour_patch == name:
+                self.boundaries[neighbour] = Boundary(
+                    neighbour, "patch", other.color
+                )
+                affected.add(neighbour)
+        self.boundaries[name] = Boundary(name, "patch", current.color)
+        return affected
+
+    def _next_boundary_color(self) -> str:
+        used = {boundary.color.lower() for boundary in self.boundaries.values()}
+        for color in self.BOUNDARY_COLORS:
+            if color.lower() not in used:
+                return color
+        index = len(self.boundaries)
+        while True:
+            hue = (index * 0.6180339887498949) % 1.0
+            red, green, blue = colorsys.hsv_to_rgb(hue, 0.72, 0.78)
+            color = (
+                f"#{round(red * 255):02x}{round(green * 255):02x}"
+                f"{round(blue * 255):02x}"
+            )
+            if color not in used:
+                return color
+            index += 1
+
     def edge_constraint_component(self, selected: EdgeKey) -> set[EdgeKey]:
         """Find every edge whose count is constrained to equal ``selected``."""
-        if selected not in set(self.edges()):
+        return set(self._edge_constraint_orientations(selected))
+
+    def _edge_constraint_orientations(
+        self, selected: EdgeKey
+    ) -> dict[EdgeKey, bool]:
+        """Return linked edges and whether canonical grading must be reversed."""
+        selected = edge_key(*selected)
+        all_edges = self.edges()
+        if selected not in set(all_edges):
             raise TopologyError(f"Unknown edge {selected!r}")
 
-        adjacency: dict[EdgeKey, set[EdgeKey]] = {
-            edge: set() for edge in self.edges()
+        adjacency: dict[EdgeKey, list[tuple[EdgeKey, bool]]] = {
+            current: [] for current in all_edges
         }
         for block in self.blocks:
-            block_edges = [edge_key(*block.directed_edge(i)) for i in range(4)]
-            for first, second in ((block_edges[0], block_edges[2]),
-                                  (block_edges[1], block_edges[3])):
-                adjacency[first].add(second)
-                adjacency[second].add(first)
+            first, second, third, fourth = block.vertices
+            pairs = (
+                ((first, second), (fourth, third)),
+                ((second, third), (first, fourth)),
+            )
+            for first_direction, second_direction in pairs:
+                first_edge = edge_key(*first_direction)
+                second_edge = edge_key(*second_direction)
+                first_reversed = first_edge != first_direction
+                second_reversed = second_edge != second_direction
+                reverse = first_reversed != second_reversed
+                adjacency[first_edge].append((second_edge, reverse))
+                adjacency[second_edge].append((first_edge, reverse))
 
-        component: set[EdgeKey] = set()
+        orientations = {selected: False}
         pending = deque([selected])
         while pending:
             current = pending.popleft()
-            if current in component:
-                continue
-            component.add(current)
-            pending.extend(adjacency[current] - component)
-        return component
+            for neighbor, reverse in adjacency[current]:
+                expected = orientations[current] != reverse
+                if neighbor in orientations:
+                    if orientations[neighbor] != expected:
+                        raise TopologyError(
+                            "Edge-count constraints have inconsistent directions"
+                        )
+                    continue
+                orientations[neighbor] = expected
+                pending.append(neighbor)
+        return orientations
 
     def set_edge_cells(self, edge: EdgeKey, cells: int) -> set[EdgeKey]:
         """Set an edge count and propagate it through all block constraints."""
@@ -150,7 +455,189 @@ class MeshModel:
         affected = self.edge_constraint_component(edge)
         for current in affected:
             self.edge_cells[current] = cells
+            if cells == 1:
+                self.edge_grading.pop(current, None)
         return affected
+
+    def edge_total_expansion(self, edge: EdgeKey) -> float:
+        """Return the end/start cell-width ratio in canonical edge direction."""
+        current = edge_key(*edge)
+        if current not in self.edge_cells:
+            raise TopologyError(f"Unknown edge {current!r}")
+        return self.edge_grading.get(current, 1.0)
+
+    def edge_expansion_in_direction(self, first: str, second: str) -> float:
+        """Return total expansion when traversing ``first`` to ``second``."""
+        current = edge_key(first, second)
+        ratio = self.edge_total_expansion(current)
+        return ratio if current == (first, second) else 1.0 / ratio
+
+    def _set_edge_expansion_in_direction(
+        self, first: str, second: str, ratio: float
+    ) -> None:
+        """Store ``ratio`` for a directed edge without validating the model."""
+        current = edge_key(first, second)
+        canonical_ratio = ratio if current == (first, second) else 1.0 / ratio
+        if canonical_ratio == 1.0:
+            self.edge_grading.pop(current, None)
+        else:
+            self.edge_grading[current] = canonical_ratio
+
+    def edge_length(self, edge: EdgeKey) -> float:
+        """Return the geometric edge length in unscaled drawing units."""
+        current = edge_key(*edge)
+        if current not in self.edge_cells:
+            raise TopologyError(f"Unknown edge {current!r}")
+        first = self.vertices[current[0]]
+        second = self.vertices[current[1]]
+        geometry = self.edge_geometry.get(current)
+        if geometry is None:
+            return math.hypot(second.x - first.x, second.y - first.y)
+        if geometry.kind == "arc":
+            _, _, radius, _, sweep = self._arc_circle(current, geometry)
+            return radius * abs(sweep)
+        if geometry.kind == "polyLine":
+            path = [
+                (first.x, first.y),
+                *geometry.points,
+                (second.x, second.y),
+            ]
+            return sum(
+                math.hypot(end[0] - start[0], end[1] - start[1])
+                for start, end in zip(path, path[1:])
+            )
+
+        previous = self.edge_point(current, 0.0)
+        length = 0.0
+        for index in range(1, self.SPLINE_LENGTH_SAMPLES + 1):
+            point = self.edge_point(
+                current, index / self.SPLINE_LENGTH_SAMPLES
+            )
+            length += math.hypot(
+                point[0] - previous[0], point[1] - previous[1]
+            )
+            previous = point
+        return length
+
+    def edge_grading_values(self, edge: EdgeKey) -> EdgeGradingValues:
+        """Return all equivalent grading inputs in canonical edge direction."""
+        current = edge_key(*edge)
+        cells = self.edge_cells.get(current)
+        if cells is None:
+            raise TopologyError(f"Unknown edge {current!r}")
+        length = self.edge_length(current)
+        total_ratio = self.edge_total_expansion(current)
+        cell_ratio, start_width, end_width = _grading_from_total_ratio(
+            length, cells, total_ratio
+        )
+        return EdgeGradingValues(
+            length,
+            cell_ratio,
+            total_ratio,
+            start_width,
+            end_width,
+        )
+
+    def set_edge_grading(
+        self,
+        edge: EdgeKey,
+        parameter: str,
+        value: float,
+        *,
+        propagate: bool = False,
+    ) -> EdgeGradingValues:
+        """Set grading from any representation and optionally sweep linked edges."""
+        current = edge_key(*edge)
+        cells = self.edge_cells.get(current)
+        if cells is None:
+            raise TopologyError(f"Unknown edge {current!r}")
+        if parameter not in self.GRADING_PARAMETERS:
+            raise TopologyError(f"Unknown grading parameter {parameter!r}")
+        if not math.isfinite(value) or value <= 0.0:
+            raise TopologyError("Grading values must be positive and finite")
+
+        length = self.edge_length(current)
+        if cells == 1:
+            expected = length if parameter in ("start_width", "end_width") else 1.0
+            if not math.isclose(value, expected, rel_tol=1.0e-10, abs_tol=1.0e-12):
+                raise TopologyError(
+                    "A one-cell edge can only use uniform grading"
+                )
+            affected = (
+                self._edge_constraint_orientations(current)
+                if propagate else {current: False}
+            )
+            for affected_edge in affected:
+                self.edge_grading.pop(affected_edge, None)
+            return self.edge_grading_values(current)
+
+        if parameter == "total_ratio":
+            total_ratio = float(value)
+        elif parameter == "cell_ratio":
+            logarithm = (cells - 1) * math.log(value)
+            total_ratio = _finite_expansion_ratio(logarithm)
+        elif parameter == "start_width":
+            log_cell_ratio = _cell_ratio_log_from_start_width(
+                length, cells, value
+            )
+            total_ratio = _finite_expansion_ratio(
+                (cells - 1) * log_cell_ratio
+            )
+        else:
+            reverse_log_cell_ratio = _cell_ratio_log_from_start_width(
+                length, cells, value
+            )
+            total_ratio = _finite_expansion_ratio(
+                -(cells - 1) * reverse_log_cell_ratio
+            )
+
+        _grading_from_total_ratio(length, cells, total_ratio)
+        orientations = (
+            self._edge_constraint_orientations(current)
+            if propagate else {current: False}
+        )
+        previous = dict(self.edge_grading)
+        try:
+            for affected_edge, reverse in orientations.items():
+                ratio = 1.0 / total_ratio if reverse else total_ratio
+                if ratio == 1.0:
+                    self.edge_grading.pop(affected_edge, None)
+                else:
+                    self.edge_grading[affected_edge] = ratio
+            self.validate()
+        except Exception:
+            self.edge_grading = previous
+            raise
+        return self.edge_grading_values(current)
+
+    def edge_node_fraction(self, edge: EdgeKey, node_index: int) -> float:
+        """Return one interior node's graded fraction in canonical direction."""
+        current = edge_key(*edge)
+        cells = self.edge_cells.get(current)
+        if cells is None:
+            raise TopologyError(f"Unknown edge {current!r}")
+        if isinstance(node_index, bool) or not isinstance(node_index, int) \
+                or not 0 <= node_index <= cells:
+            raise TopologyError("Edge node index is out of range")
+        if node_index == 0:
+            return 0.0
+        if node_index == cells:
+            return 1.0
+        total_ratio = self.edge_total_expansion(current)
+        if total_ratio == 1.0:
+            return node_index / cells
+        log_cell_ratio = math.log(total_ratio) / (cells - 1)
+        if abs(log_cell_ratio) <= 1.0e-14:
+            return node_index / cells
+        if log_cell_ratio < 0.0:
+            return math.expm1(node_index * log_cell_ratio) / math.expm1(
+                cells * log_cell_ratio
+            )
+        return (
+            math.exp((node_index - cells) * log_cell_ratio)
+            * (-math.expm1(-node_index * log_cell_ratio))
+            / (-math.expm1(-cells * log_cell_ratio))
+        )
 
     def edge_type(self, edge: EdgeKey) -> str:
         """Return the OpenFOAM geometry type for ``edge``."""
@@ -376,8 +863,32 @@ class MeshModel:
             vertex.x, vertex.y = previous
             raise
 
+    def add_vertex(self, x: float, y: float) -> Vertex:
+        """Create a standalone vertex that can later be used by a block."""
+        if not (math.isfinite(x) and math.isfinite(y)):
+            raise TopologyError("Vertex coordinates must be finite")
+        for vertex in self.vertices.values():
+            if self._coordinates_match(vertex.x, vertex.y, x, y):
+                raise TopologyError(
+                    f"A vertex already exists at ({x:g}, {y:g})"
+                )
+
+        vertex = Vertex(
+            self._next_id("v", self.vertices),
+            float(x),
+            float(y),
+        )
+        self.vertices[vertex.id] = vertex
+        try:
+            self.validate()
+        except (TopologyError, ValueError):
+            del self.vertices[vertex.id]
+            raise
+        return vertex
+
     def add_block(self, selected: EdgeKey) -> Block:
         """Append a block along a boundary edge's outward normal."""
+        selected = edge_key(*selected)
         occurrences = self.edge_occurrences().get(selected, [])
         if not occurrences:
             raise TopologyError(f"Unknown edge {selected!r}")
@@ -387,6 +898,8 @@ class MeshModel:
         vertices_before = dict(self.vertices)
         blocks_before = list(self.blocks)
         cells_before = dict(self.edge_cells)
+        grading_before = dict(self.edge_grading)
+        edge_boundaries_before = dict(self.edge_boundaries)
 
         try:
             source, index, directed = occurrences[0]
@@ -450,18 +963,33 @@ class MeshModel:
             new_edges = [
                 edge_key(*new_block.directed_edge(i)) for i in range(4)
             ]
+            source_boundary = edge_boundaries_before.get(selected)
             self.edge_cells[new_edges[0]] = shared_cells
             self.edge_cells[new_edges[2]] = shared_cells
             self.edge_cells[new_edges[1]] = side_cells
             self.edge_cells[new_edges[3]] = side_cells
+            if new_edges[2] not in cells_before:
+                source_ratio = self.edge_expansion_in_direction(
+                    first_id, second_id
+                )
+                self._set_edge_expansion_in_direction(
+                    new_first.id, new_second.id, source_ratio
+                )
             self.set_edge_cells(selected, shared_cells)
             self.set_edge_cells(new_edges[1], side_cells)
+            self._prune_boundary_assignments()
+            if source_boundary is not None \
+                    and self.is_boundary_edge(new_edges[2]) \
+                    and new_edges[2] not in self.edge_boundaries:
+                self.edge_boundaries[new_edges[2]] = source_boundary
             self.validate()
             return new_block
         except Exception:
             self.vertices = vertices_before
             self.blocks = blocks_before
             self.edge_cells = cells_before
+            self.edge_grading = grading_before
+            self.edge_boundaries = edge_boundaries_before
             raise
 
     def add_block_from_vertices(self, vertex_ids: Iterable[str]) -> Block:
@@ -488,6 +1016,8 @@ class MeshModel:
 
         blocks_before = list(self.blocks)
         cells_before = dict(self.edge_cells)
+        grading_before = dict(self.edge_grading)
+        edge_boundaries_before = dict(self.edge_boundaries)
         try:
             self.blocks.append(new_block)
             new_edges = [
@@ -510,19 +1040,22 @@ class MeshModel:
                     cells = self.DEFAULT_EDGE_CELLS
                 self.set_edge_cells(first, cells)
 
+            self._prune_boundary_assignments()
             self.validate()
             return new_block
         except Exception:
             self.blocks = blocks_before
             self.edge_cells = cells_before
+            self.edge_grading = grading_before
+            self.edge_boundaries = edge_boundaries_before
             raise
 
     def remove_edge(self, selected: EdgeKey) -> list[Block]:
         """Remove an edge and every block incident to it.
 
-        Edges and vertices are derived topology, so data no longer referenced by
-        a surviving block is pruned in the same atomic operation. At least one
-        block must remain.
+        Edges are derived topology. Corners belonging to removed blocks are
+        pruned when no surviving block uses them, while unrelated standalone
+        vertices are preserved. At least one block must remain.
         """
         selected = edge_key(*selected)
         occurrences = self.edge_occurrences().get(selected, [])
@@ -533,6 +1066,8 @@ class MeshModel:
         blocks_before = list(self.blocks)
         cells_before = dict(self.edge_cells)
         geometry_before = dict(self.edge_geometry)
+        grading_before = dict(self.edge_grading)
+        edge_boundaries_before = dict(self.edge_boundaries)
         removed_ids = {occurrence[0].id for occurrence in occurrences}
         if len(removed_ids) >= len(self.blocks):
             raise TopologyError("At least one block must remain in the topology")
@@ -549,10 +1084,18 @@ class MeshModel:
                 for block in self.blocks
                 for vertex_id in block.vertices
             }
+            removed_vertices = {
+                vertex_id
+                for block in removed
+                for vertex_id in block.vertices
+            }
+            # Preserve standalone vertices unrelated to the deleted blocks.
+            # Only newly orphaned corners from those blocks are pruned.
+            pruned_vertices = removed_vertices - used_vertices
             self.vertices = {
                 vertex_id: vertex
                 for vertex_id, vertex in self.vertices.items()
-                if vertex_id in used_vertices
+                if vertex_id not in pruned_vertices
             }
             surviving_edges = set(self.edges())
             self.edge_cells = {
@@ -565,6 +1108,12 @@ class MeshModel:
                 for current, geometry in self.edge_geometry.items()
                 if current in surviving_edges
             }
+            self.edge_grading = {
+                current: ratio
+                for current, ratio in self.edge_grading.items()
+                if current in surviving_edges
+            }
+            self._prune_boundary_assignments()
             self.validate()
             return removed
         except Exception:
@@ -572,7 +1121,18 @@ class MeshModel:
             self.blocks = blocks_before
             self.edge_cells = cells_before
             self.edge_geometry = geometry_before
+            self.edge_grading = grading_before
+            self.edge_boundaries = edge_boundaries_before
             raise
+
+    def _prune_boundary_assignments(self) -> None:
+        """Discard assignments whose edges disappeared or became internal."""
+        occurrences = self.edge_occurrences()
+        self.edge_boundaries = {
+            current: name
+            for current, name in self.edge_boundaries.items()
+            if len(occurrences.get(current, ())) == 1
+        }
 
     def can_remove_edge(self, selected: EdgeKey) -> bool:
         """Return whether removing an edge would leave at least one block."""
@@ -590,6 +1150,15 @@ class MeshModel:
         first = edge_key(*block.directed_edge(0))
         second = edge_key(*block.directed_edge(1))
         return self.edge_cells[first], self.edge_cells[second], self.z_cells
+
+    @classmethod
+    def _validate_boundary_name(cls, name: str) -> None:
+        if not isinstance(name, str) \
+                or cls.BOUNDARY_NAME_PATTERN.fullmatch(name) is None:
+            raise TopologyError(
+                "A boundary name must start with a letter or underscore and "
+                "contain only letters, numbers, and underscores"
+            )
 
     def validate(self) -> None:
         if isinstance(self.z_cells, bool) or not isinstance(self.z_cells, int) \
@@ -634,14 +1203,6 @@ class MeshModel:
             block_vertex_sets.add(signature)
             self._validate_convex_ccw(block)
 
-        used_vertices = {
-            vertex_id
-            for block in self.blocks
-            for vertex_id in block.vertices
-        }
-        if used_vertices != set(self.vertices):
-            raise TopologyError("Topology contains vertices unused by any block")
-
         actual_edges = set(self.edges())
         if set(self.edge_cells) != actual_edges:
             missing = actual_edges - set(self.edge_cells)
@@ -661,6 +1222,69 @@ class MeshModel:
             )
         for current, geometry in self.edge_geometry.items():
             self._validate_edge_geometry(current, geometry)
+
+        grading_edges = set(self.edge_grading)
+        if not grading_edges.issubset(actual_edges):
+            extra = grading_edges - actual_edges
+            raise TopologyError(
+                f"Edge grading references unknown topology edges {extra}"
+            )
+        for current, total_ratio in self.edge_grading.items():
+            if total_ratio == 1.0:
+                raise TopologyError(
+                    f"Uniform grading on edge {current!r} must be implicit"
+                )
+            _grading_from_total_ratio(
+                self.edge_length(current),
+                self.edge_cells[current],
+                total_ratio,
+            )
+
+        used_colors: set[str] = set()
+        for name, boundary in self.boundaries.items():
+            self._validate_boundary_name(name)
+            if not isinstance(boundary, Boundary) or boundary.name != name:
+                raise TopologyError(f"Boundary {name!r} has invalid definition data")
+            if boundary.kind not in self.SUPPORTED_BOUNDARY_TYPES:
+                raise TopologyError(
+                    f"Boundary {name!r} has unsupported type {boundary.kind!r}"
+                )
+            if re.fullmatch(r"#[0-9A-Fa-f]{6}", boundary.color) is None:
+                raise TopologyError(f"Boundary {name!r} has an invalid display color")
+            color = boundary.color.lower()
+            if color in used_colors:
+                raise TopologyError("Boundary display colors must be unique")
+            used_colors.add(color)
+            if boundary.kind == "cyclic":
+                neighbour = boundary.neighbour_patch
+                if neighbour is None or neighbour == name \
+                        or neighbour not in self.boundaries:
+                    raise TopologyError(
+                        f"Cyclic boundary {name!r} needs a valid neighbouring patch"
+                    )
+                partner = self.boundaries[neighbour]
+                if partner.kind != "cyclic" or partner.neighbour_patch != name:
+                    raise TopologyError(
+                        f"Cyclic boundary {name!r} is not paired reciprocally"
+                    )
+            elif boundary.neighbour_patch is not None:
+                raise TopologyError(
+                    f"Boundary {name!r} has neighbourPatch but is not cyclic"
+                )
+
+        for current, name in self.edge_boundaries.items():
+            if current not in actual_edges:
+                raise TopologyError(
+                    f"Boundary assignment references unknown edge {current!r}"
+                )
+            if name not in self.boundaries:
+                raise TopologyError(
+                    f"Boundary assignment references unknown patch {name!r}"
+                )
+            if not self.is_boundary_edge(current):
+                raise TopologyError(
+                    f"Internal edge {current!r} cannot be assigned to a boundary"
+                )
 
         for current, occurrences in self.edge_occurrences().items():
             if len(occurrences) > 2:

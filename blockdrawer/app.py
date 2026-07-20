@@ -33,6 +33,9 @@ class BlockDrawerApp:
         self.selected_edge: EdgeKey | None = None
         self.selected_control_point_index: int | None = None
         self.block_vertex_selection: list[str] | None = None
+        self.vertex_placement_active = False
+        self.boundary_mode_active = False
+        self.active_boundary_name: str | None = None
         self.item_targets: dict[int, tuple[str, object]] = {}
         self.drag_vertex: str | None = None
         self.drag_control_point: tuple[EdgeKey, int] | None = None
@@ -47,6 +50,7 @@ class BlockDrawerApp:
         self.ui_scale_multiplier = 1.0
         self.display_scale = self.system_display_scale
         self.ui_scale_var = tk.StringVar(value="auto")
+        self.edge_grading_propagate_var = tk.BooleanVar(value=False)
         self.default_font_family = tkfont.nametofont(
             "TkDefaultFont", root=self.root
         ).cget("family")
@@ -85,9 +89,19 @@ class BlockDrawerApp:
         self.vertex_y_var: tk.StringVar | None = None
         self.edge_cells_var: tk.StringVar | None = None
         self.edge_type_var: tk.StringVar | None = None
+        self.edge_length_var: tk.StringVar | None = None
+        self.edge_cell_ratio_var: tk.StringVar | None = None
+        self.edge_total_ratio_var: tk.StringVar | None = None
+        self.edge_start_width_var: tk.StringVar | None = None
+        self.edge_end_width_var: tk.StringVar | None = None
         self.point_x_var: tk.StringVar | None = None
         self.point_y_var: tk.StringVar | None = None
         self.point_list_index_var: tk.StringVar | None = None
+        self.boundary_name_var = tk.StringVar()
+        self.boundary_type_var: tk.StringVar | None = None
+        self.boundary_neighbour_var: tk.StringVar | None = None
+        self.boundary_listbox: tk.Listbox | None = None
+        self.boundary_neighbour_selector: ttk.Combobox | None = None
 
         self._build_window()
         self._sync_global_values()
@@ -135,6 +149,17 @@ class BlockDrawerApp:
             self.toolbar, text="Add block", command=self.add_selected_block
         )
         self.add_button.pack(side="left")
+        ttk.Button(
+            self.toolbar,
+            text="Add vertex",
+            command=self.start_vertex_placement,
+        ).pack(side="left", padx=(self._px(5), 0))
+        self.boundary_button = ttk.Button(
+            self.toolbar,
+            text="Set boundaries",
+            command=self.toggle_boundary_mode,
+        )
+        self.boundary_button.pack(side="left", padx=(self._px(5), 0))
         ttk.Button(self.toolbar, text="Fit view", command=self.fit_view).pack(
             side="left", padx=(self._px(5), 0)
         )
@@ -228,6 +253,10 @@ class BlockDrawerApp:
         self.root.bind("<KeyPress-X>", self._delete_shortcut)
         self.root.bind("<KeyPress-n>", self._new_block_shortcut)
         self.root.bind("<KeyPress-N>", self._new_block_shortcut)
+        self.root.bind("<KeyPress-v>", self._new_vertex_shortcut)
+        self.root.bind("<KeyPress-V>", self._new_vertex_shortcut)
+        self.root.bind("<KeyPress-b>", self._boundary_shortcut)
+        self.root.bind("<KeyPress-B>", self._boundary_shortcut)
         self.root.bind("<Escape>", self._escape_shortcut)
 
     def _build_menu(self) -> None:
@@ -259,9 +288,19 @@ class BlockDrawerApp:
         self.redo_menu_index = self.edit_menu.index("end")
         self.edit_menu.add_separator()
         self.edit_menu.add_command(
+            label="Add standalone vertex",
+            accelerator="V",
+            command=self.start_vertex_placement,
+        )
+        self.edit_menu.add_command(
             label="New block from 4 vertices",
             accelerator="N",
             command=self.start_block_from_vertices,
+        )
+        self.edit_menu.add_command(
+            label="Set boundaries",
+            accelerator="B",
+            command=self.toggle_boundary_mode,
         )
         self.edit_menu.add_command(
             label="Delete selected edge",
@@ -312,23 +351,23 @@ class BlockDrawerApp:
         return "break"
 
     def _build_sidebar(self) -> None:
-        title = ttk.Label(
+        self.sidebar_title = ttk.Label(
             self.sidebar, text="Properties", font=self._font(15, "bold")
         )
-        title.grid(row=0, column=0, sticky="w", pady=(0, 10))
+        self.sidebar_title.grid(row=0, column=0, sticky="w", pady=(0, 10))
 
-        global_frame = ttk.LabelFrame(
+        self.global_frame = ttk.LabelFrame(
             self.sidebar, text="Extrusion", padding=self._px(10)
         )
-        global_frame.grid(row=1, column=0, sticky="ew")
-        global_frame.columnconfigure(1, weight=1)
+        self.global_frame.grid(row=1, column=0, sticky="ew")
+        self.global_frame.columnconfigure(1, weight=1)
 
-        self._field(global_frame, 0, "Z cells", self.z_cells_var)
-        self._field(global_frame, 1, "zMin", self.z_min_var)
-        self._field(global_frame, 2, "zMax", self.z_max_var)
-        self._field(global_frame, 3, "Scale", self.scale_var)
+        self._field(self.global_frame, 0, "Z cells", self.z_cells_var)
+        self._field(self.global_frame, 1, "zMin", self.z_min_var)
+        self._field(self.global_frame, 2, "zMax", self.z_max_var)
+        self._field(self.global_frame, 3, "Scale", self.scale_var)
         ttk.Label(
-            global_frame,
+            self.global_frame,
             text="Z cells defaults to 1 for a pseudo-2D mesh.",
             foreground="#52606d",
             wraplength=self._px(245),
@@ -336,7 +375,7 @@ class BlockDrawerApp:
             row=4, column=0, columnspan=2, sticky="w",
             pady=(self._px(6), self._px(8)),
         )
-        ttk.Button(global_frame, text="Apply extrusion", command=self.apply_global).grid(
+        ttk.Button(self.global_frame, text="Apply extrusion", command=self.apply_global).grid(
             row=5, column=0, columnspan=2, sticky="ew"
         )
 
@@ -348,16 +387,19 @@ class BlockDrawerApp:
         )
         self.selection_frame.columnconfigure(1, weight=1)
 
-        ttk.Label(
+        self.sidebar_help = ttk.Label(
             self.sidebar,
             text=(
                 "Mouse wheel: zoom\nMiddle/right drag: pan\n"
                 "Double-click an exterior edge: add block\n"
-                "N: connect 4 vertices · Esc: cancel"
+                "V: place vertex · N: connect 4 vertices\nEsc: cancel"
             ),
             foreground="#52606d",
             justify="left",
-        ).grid(row=3, column=0, sticky="sw", pady=(self._px(18), 0))
+        )
+        self.sidebar_help.grid(
+            row=3, column=0, sticky="sw", pady=(self._px(18), 0)
+        )
         self.sidebar.rowconfigure(3, weight=1)
 
     def _field(self, parent: ttk.Frame, row: int, label: str,
@@ -370,6 +412,33 @@ class BlockDrawerApp:
         entry.grid(row=row, column=1, sticky="ew", pady=self._px(3))
         return entry
 
+    def _grading_field(
+        self,
+        row: int,
+        label: str,
+        variable: tk.StringVar,
+        parameter: str,
+    ) -> None:
+        ttk.Label(self.selection_frame, text=label).grid(
+            row=row, column=0, sticky="w",
+            padx=(0, self._px(8)), pady=self._px(3),
+        )
+        controls = ttk.Frame(self.selection_frame)
+        controls.grid(row=row, column=1, sticky="ew", pady=self._px(3))
+        controls.columnconfigure(0, weight=1)
+        entry = ttk.Entry(controls, textvariable=variable, width=11)
+        entry.grid(row=0, column=0, sticky="ew")
+        entry.bind(
+            "<Return>",
+            lambda _event, source=parameter: self.apply_edge_grading(source),
+        )
+        ttk.Button(
+            controls,
+            text="Set",
+            width=4,
+            command=lambda source=parameter: self.apply_edge_grading(source),
+        ).grid(row=0, column=1, padx=(self._px(4), 0))
+
     def _update_property_panel(self) -> None:
         for child in self.selection_frame.winfo_children():
             child.destroy()
@@ -377,11 +446,72 @@ class BlockDrawerApp:
         self.vertex_y_var = None
         self.edge_cells_var = None
         self.edge_type_var = None
+        self.edge_length_var = None
+        self.edge_cell_ratio_var = None
+        self.edge_total_ratio_var = None
+        self.edge_start_width_var = None
+        self.edge_end_width_var = None
         self.point_x_var = None
         self.point_y_var = None
         self.point_list_index_var = None
 
-        if self.block_vertex_selection is not None:
+        if self.boundary_mode_active:
+            self.sidebar_title.configure(text="Boundaries")
+            self.global_frame.grid_remove()
+            self.selection_frame.configure(text="Boundary patches")
+            self.selection_frame.grid_configure(row=1, pady=0)
+            self.sidebar_help.configure(
+                text=(
+                    "Click an exterior edge to assign it to the selected patch.\n"
+                    "Click it again to unassign it.\nB or Esc: finish boundaries"
+                )
+            )
+            self._build_boundary_panel()
+            self.add_button.configure(state="disabled")
+            self.edit_menu.entryconfigure(
+                self.delete_edge_menu_index, state="disabled"
+            )
+            return
+
+        self.sidebar_title.configure(text="Properties")
+        self.global_frame.grid()
+        self.selection_frame.configure(text="Selection")
+        self.selection_frame.grid_configure(
+            row=2, pady=(self._px(12), 0)
+        )
+        self.sidebar_help.configure(
+            text=(
+                "Mouse wheel: zoom\nMiddle/right drag: pan\n"
+                "Double-click an exterior edge: add block\n"
+                "V: place vertex · N: connect 4 vertices · B: boundaries\n"
+                "Esc: cancel"
+            )
+        )
+
+        if self.vertex_placement_active:
+            ttk.Label(
+                self.selection_frame,
+                text="Add standalone vertex",
+                font=self._font(11, "bold"),
+            ).grid(row=0, column=0, columnspan=2, sticky="w")
+            ttk.Label(
+                self.selection_frame,
+                text=(
+                    "Click an empty canvas location. The new vertex can be "
+                    "moved normally and selected with N for a new block."
+                ),
+                foreground="#7048a8",
+                wraplength=self._px(245),
+            ).grid(
+                row=1, column=0, columnspan=2, sticky="w",
+                pady=(self._px(6), self._px(8)),
+            )
+            ttk.Button(
+                self.selection_frame,
+                text="Cancel vertex placement (Esc)",
+                command=self.cancel_vertex_placement,
+            ).grid(row=2, column=0, columnspan=2, sticky="ew")
+        elif self.block_vertex_selection is not None:
             count = len(self.block_vertex_selection)
             ttk.Label(
                 self.selection_frame,
@@ -492,7 +622,7 @@ class BlockDrawerApp:
                 text=(
                     f"Changing this value updates {len(affected)} linked edge"
                     f"{'s' if len(affected) != 1 else ''}. The canvas shows "
-                    "uniform mesh-node positions."
+                    "the current graded mesh-node positions."
                 ),
                 foreground="#52606d",
                 wraplength=self._px(245),
@@ -507,6 +637,77 @@ class BlockDrawerApp:
             ).grid(row=4, column=0, columnspan=2, sticky="ew")
 
             next_row = 5
+            grading = self.model.edge_grading_values(self.selected_edge)
+            ttk.Label(
+                self.selection_frame,
+                text=f"Grading {first} → {second}",
+                font=self._font(10, "bold"),
+            ).grid(
+                row=next_row, column=0, columnspan=2, sticky="w",
+                pady=(self._px(10), self._px(3)),
+            )
+            next_row += 1
+            ttk.Checkbutton(
+                self.selection_frame,
+                text=(
+                    f"Propagate to {len(affected)} cell-count-linked edge"
+                    f"{'s' if len(affected) != 1 else ''}"
+                ),
+                variable=self.edge_grading_propagate_var,
+            ).grid(
+                row=next_row, column=0, columnspan=2, sticky="w",
+                pady=(0, self._px(4)),
+            )
+            next_row += 1
+            ttk.Label(self.selection_frame, text="Edge length").grid(
+                row=next_row, column=0, sticky="w",
+                padx=(0, self._px(8)), pady=self._px(3),
+            )
+            self.edge_length_var = tk.StringVar(
+                value=_display_grading_number(grading.length)
+            )
+            ttk.Label(
+                self.selection_frame,
+                textvariable=self.edge_length_var,
+                anchor="e",
+            ).grid(row=next_row, column=1, sticky="ew", pady=self._px(3))
+            next_row += 1
+            self.edge_cell_ratio_var = tk.StringVar(
+                value=_display_grading_number(grading.cell_ratio)
+            )
+            self.edge_total_ratio_var = tk.StringVar(
+                value=_display_grading_number(grading.total_ratio)
+            )
+            self.edge_start_width_var = tk.StringVar(
+                value=_display_grading_number(grading.start_width)
+            )
+            self.edge_end_width_var = tk.StringVar(
+                value=_display_grading_number(grading.end_width)
+            )
+            for label, variable, parameter in (
+                ("Cell/cell ratio", self.edge_cell_ratio_var, "cell_ratio"),
+                ("Total ratio", self.edge_total_ratio_var, "total_ratio"),
+                ("Start width", self.edge_start_width_var, "start_width"),
+                ("End width", self.edge_end_width_var, "end_width"),
+            ):
+                self._grading_field(next_row, label, variable, parameter)
+                next_row += 1
+            ttk.Label(
+                self.selection_frame,
+                text=(
+                    "Set any one value; the other three are recomputed. "
+                    "Total ratio is end width / start width in the arrow "
+                    "direction. Propagation preserves physical direction "
+                    "when linked edge arrows are reversed."
+                ),
+                foreground="#52606d",
+                wraplength=self._px(245),
+            ).grid(
+                row=next_row, column=0, columnspan=2, sticky="w",
+                pady=(self._px(5), self._px(2)),
+            )
+            next_row += 1
+
             if control_points and self.selected_control_point_index is not None:
                 point_index = self.selected_control_point_index
                 point_x, point_y = control_points[point_index]
@@ -680,6 +881,276 @@ class BlockDrawerApp:
             self.delete_edge_menu_index, state=delete_state
         )
 
+    def _build_boundary_panel(self) -> None:
+        names = list(self.model.boundaries)
+        if self.active_boundary_name not in self.model.boundaries:
+            self.active_boundary_name = names[0] if names else None
+
+        ttk.Label(
+            self.selection_frame,
+            text="Named patches",
+            font=self._font(11, "bold"),
+        ).grid(row=0, column=0, columnspan=2, sticky="w")
+        self.boundary_listbox = tk.Listbox(
+            self.selection_frame,
+            height=max(4, min(8, len(names) or 4)),
+            exportselection=False,
+            activestyle="dotbox",
+        )
+        self.boundary_listbox.grid(
+            row=1, column=0, columnspan=2, sticky="ew",
+            pady=(self._px(5), self._px(7)),
+        )
+        for name in names:
+            boundary = self.model.boundaries[name]
+            self.boundary_listbox.insert("end", name)
+            self.boundary_listbox.itemconfigure(
+                "end", foreground=boundary.color
+            )
+        if self.active_boundary_name is not None:
+            selected_index = names.index(self.active_boundary_name)
+            self.boundary_listbox.selection_set(selected_index)
+            self.boundary_listbox.activate(selected_index)
+            self.boundary_listbox.see(selected_index)
+        self.boundary_listbox.bind(
+            "<<ListboxSelect>>", self._boundary_list_selected
+        )
+
+        add_row = ttk.Frame(self.selection_frame)
+        add_row.grid(row=2, column=0, columnspan=2, sticky="ew")
+        add_row.columnconfigure(0, weight=1)
+        name_entry = ttk.Entry(
+            add_row,
+            textvariable=self.boundary_name_var,
+        )
+        name_entry.grid(row=0, column=0, sticky="ew")
+        name_entry.bind("<Return>", lambda _event: self.add_boundary())
+        ttk.Button(
+            add_row, text="Add", width=6, command=self.add_boundary
+        ).grid(row=0, column=1, padx=(self._px(5), 0))
+
+        if self.active_boundary_name is None:
+            ttk.Label(
+                self.selection_frame,
+                text=(
+                    "The list is empty. Enter a name such as inlet, walls, "
+                    "or frontAndBack, then press Add."
+                ),
+                foreground="#52606d",
+                wraplength=self._px(245),
+            ).grid(
+                row=3, column=0, columnspan=2, sticky="w",
+                pady=(self._px(8), 0),
+            )
+            return
+
+        boundary = self.model.boundaries[self.active_boundary_name]
+        detail_row = 3
+        swatch = tk.Label(
+            self.selection_frame,
+            text="   ",
+            background=boundary.color,
+            relief="solid",
+            borderwidth=1,
+        )
+        swatch.grid(
+            row=detail_row, column=0, sticky="w",
+            pady=(self._px(10), self._px(4)),
+        )
+        ttk.Label(
+            self.selection_frame,
+            text=(
+                f"{len(self.model.boundary_edges(boundary.name))} assigned "
+                "edge(s)"
+            ),
+        ).grid(
+            row=detail_row, column=1, sticky="w",
+            pady=(self._px(10), self._px(4)),
+        )
+        detail_row += 1
+
+        ttk.Label(self.selection_frame, text="Type").grid(
+            row=detail_row, column=0, sticky="w",
+            padx=(0, self._px(8)), pady=self._px(3),
+        )
+        self.boundary_type_var = tk.StringVar(value=boundary.kind)
+        type_selector = ttk.Combobox(
+            self.selection_frame,
+            textvariable=self.boundary_type_var,
+            values=MeshModel.SUPPORTED_BOUNDARY_TYPES,
+            state="readonly",
+            width=14,
+        )
+        type_selector.grid(
+            row=detail_row, column=1, sticky="ew", pady=self._px(3)
+        )
+        type_selector.bind(
+            "<<ComboboxSelected>>", self._boundary_type_selected
+        )
+        detail_row += 1
+
+        ttk.Label(self.selection_frame, text="Neighbour").grid(
+            row=detail_row, column=0, sticky="w",
+            padx=(0, self._px(8)), pady=self._px(3),
+        )
+        neighbours = tuple(name for name in names if name != boundary.name)
+        self.boundary_neighbour_var = tk.StringVar(
+            value=boundary.neighbour_patch or (neighbours[0] if neighbours else "")
+        )
+        self.boundary_neighbour_selector = ttk.Combobox(
+            self.selection_frame,
+            textvariable=self.boundary_neighbour_var,
+            values=neighbours,
+            state="readonly" if boundary.kind == "cyclic" else "disabled",
+            width=14,
+        )
+        self.boundary_neighbour_selector.grid(
+            row=detail_row, column=1, sticky="ew", pady=self._px(3)
+        )
+        detail_row += 1
+
+        ttk.Label(
+            self.selection_frame,
+            text=(
+                "Cyclic patches are paired reciprocally. OpenFOAM infers the "
+                "ordinary cyclic transform from the two matching patches."
+            ),
+            foreground="#52606d",
+            wraplength=self._px(245),
+        ).grid(
+            row=detail_row, column=0, columnspan=2, sticky="w",
+            pady=(self._px(4), self._px(7)),
+        )
+        detail_row += 1
+
+        ttk.Button(
+            self.selection_frame,
+            text="Apply boundary type",
+            command=self.apply_boundary_definition,
+        ).grid(row=detail_row, column=0, columnspan=2, sticky="ew")
+        detail_row += 1
+        ttk.Button(
+            self.selection_frame,
+            text="Remove boundary",
+            command=self.remove_active_boundary,
+        ).grid(
+            row=detail_row, column=0, columnspan=2, sticky="ew",
+            pady=(self._px(6), 0),
+        )
+
+    def toggle_boundary_mode(self) -> None:
+        self.boundary_mode_active = not self.boundary_mode_active
+        self.vertex_placement_active = False
+        self.block_vertex_selection = None
+        self.selected_vertex = None
+        self.selected_edge = None
+        self.selected_control_point_index = None
+        self.drag_vertex = None
+        self.drag_control_point = None
+        self.drag_changed = False
+        if self.boundary_mode_active \
+                and self.active_boundary_name not in self.model.boundaries:
+            self.active_boundary_name = next(iter(self.model.boundaries), None)
+        self.boundary_button.configure(
+            text="Done boundaries" if self.boundary_mode_active else "Set boundaries"
+        )
+        self.canvas.focus_set()
+        self._update_property_panel()
+        self.redraw()
+        if self.boundary_mode_active:
+            self.status.set(
+                "Boundary mode: select or add a patch, then click exterior edges."
+            )
+        else:
+            self.status.set("Finished setting boundaries.")
+
+    def add_boundary(self) -> None:
+        name = self.boundary_name_var.get().strip()
+        try:
+            boundary = self.model.add_boundary(name)
+        except TopologyError as exc:
+            self._show_error("Cannot add boundary", exc)
+            return
+        self.active_boundary_name = boundary.name
+        self.boundary_name_var.set("")
+        self._commit_edit()
+        self._update_property_panel()
+        self.redraw()
+        self.status.set(
+            f"Added boundary {boundary.name!r}; click exterior edges to assign it."
+        )
+
+    def remove_active_boundary(self) -> None:
+        name = self.active_boundary_name
+        if name is None:
+            return
+        assigned = len(self.model.boundary_edges(name))
+        try:
+            self.model.remove_boundary(name)
+        except TopologyError as exc:
+            self._show_error("Cannot remove boundary", exc)
+            return
+        self.active_boundary_name = next(iter(self.model.boundaries), None)
+        self._commit_edit()
+        self._update_property_panel()
+        self.redraw()
+        self.status.set(
+            f"Removed boundary {name!r} and unassigned {assigned} edge(s). "
+            "Use Undo to restore it."
+        )
+
+    def apply_boundary_definition(self) -> None:
+        name = self.active_boundary_name
+        if name is None or self.boundary_type_var is None:
+            return
+        kind = self.boundary_type_var.get()
+        neighbour = None
+        if kind == "cyclic" and self.boundary_neighbour_var is not None:
+            neighbour = self.boundary_neighbour_var.get() or None
+        try:
+            affected = self.model.set_boundary_type(
+                name, kind, neighbour_patch=neighbour
+            )
+        except TopologyError as exc:
+            self._show_error("Cannot set boundary type", exc)
+            self._update_property_panel()
+            return
+        self._commit_edit()
+        self._update_property_panel()
+        self.redraw()
+        if kind == "cyclic":
+            self.status.set(
+                f"Paired cyclic boundaries {name!r} and {neighbour!r}."
+            )
+        else:
+            changed = ", ".join(sorted(affected))
+            self.status.set(f"Set {name!r} to {kind}; updated {changed}.")
+
+    def _boundary_list_selected(self, _event: tk.Event) -> None:
+        if self.boundary_listbox is None:
+            return
+        selection = self.boundary_listbox.curselection()
+        if not selection:
+            return
+        self.active_boundary_name = str(
+            self.boundary_listbox.get(selection[0])
+        )
+        self._update_property_panel()
+        self.redraw()
+        self.status.set(
+            f"Active boundary: {self.active_boundary_name!r}."
+        )
+
+    def _boundary_type_selected(self, _event: tk.Event) -> None:
+        if self.boundary_neighbour_selector is None \
+                or self.boundary_type_var is None:
+            return
+        state = (
+            "readonly" if self.boundary_type_var.get() == "cyclic"
+            else "disabled"
+        )
+        self.boundary_neighbour_selector.configure(state=state)
+
     def apply_global(self) -> None:
         previous = (
             self.model.z_cells,
@@ -742,6 +1213,51 @@ class BlockDrawerApp:
         self.status.set(
             f"Set {cells} cells on {len(affected)} topology-linked edge"
             f"{'s' if len(affected) != 1 else ''}."
+        )
+
+    def apply_edge_grading(self, parameter: str) -> None:
+        if self.selected_edge is None:
+            return
+        variables = {
+            "cell_ratio": self.edge_cell_ratio_var,
+            "total_ratio": self.edge_total_ratio_var,
+            "start_width": self.edge_start_width_var,
+            "end_width": self.edge_end_width_var,
+        }
+        variable = variables.get(parameter)
+        if variable is None:
+            return
+        try:
+            value = float(variable.get())
+            propagate = bool(self.edge_grading_propagate_var.get())
+            self.model.set_edge_grading(
+                self.selected_edge,
+                parameter,
+                value,
+                propagate=propagate,
+            )
+        except (ValueError, TopologyError) as exc:
+            self._show_error("Invalid edge grading", exc)
+            self._sync_property_values()
+            return
+        self._commit_edit()
+        self._sync_property_values()
+        self.redraw()
+        labels = {
+            "cell_ratio": "cell-to-cell ratio",
+            "total_ratio": "total expansion ratio",
+            "start_width": "start-cell width",
+            "end_width": "end-cell width",
+        }
+        first, second = self.selected_edge
+        affected_count = (
+            len(self.model.edge_constraint_component(self.selected_edge))
+            if propagate else 1
+        )
+        self.status.set(
+            f"Set {labels[parameter]} for edge {first} → {second}; "
+            f"updated {affected_count} linked edge"
+            f"{'s' if affected_count != 1 else ''}."
         )
 
     def _edge_type_selected(self, _event: tk.Event) -> None:
@@ -874,6 +1390,9 @@ class BlockDrawerApp:
         )
 
     def start_block_from_vertices(self) -> None:
+        self.boundary_mode_active = False
+        self.boundary_button.configure(text="Set boundaries")
+        self.vertex_placement_active = False
         self.block_vertex_selection = []
         self.selected_vertex = None
         self.selected_edge = None
@@ -887,6 +1406,32 @@ class BlockDrawerApp:
         self.status.set(
             "New block mode: select four existing vertices; press Esc to cancel."
         )
+
+    def start_vertex_placement(self) -> None:
+        self.boundary_mode_active = False
+        self.boundary_button.configure(text="Set boundaries")
+        self.vertex_placement_active = True
+        self.block_vertex_selection = None
+        self.selected_vertex = None
+        self.selected_edge = None
+        self.selected_control_point_index = None
+        self.drag_vertex = None
+        self.drag_control_point = None
+        self.drag_changed = False
+        self.canvas.focus_set()
+        self._update_property_panel()
+        self.redraw()
+        self.status.set(
+            "Vertex placement: click an empty canvas location; press Esc to cancel."
+        )
+
+    def cancel_vertex_placement(self) -> None:
+        if not self.vertex_placement_active:
+            return
+        self.vertex_placement_active = False
+        self._update_property_panel()
+        self.redraw()
+        self.status.set("Cancelled standalone vertex placement.")
 
     def cancel_block_from_vertices(self) -> None:
         if self.block_vertex_selection is None:
@@ -982,7 +1527,21 @@ class BlockDrawerApp:
 
         for current in self.model.edges():
             selected = current == self.selected_edge
-            color = "#e8590c" if selected else "#334e68"
+            boundary_name = self.model.edge_boundaries.get(current)
+            boundary_color = (
+                self.model.boundaries[boundary_name].color
+                if boundary_name is not None else None
+            )
+            if boundary_color is not None:
+                color = boundary_color
+            elif self.boundary_mode_active and not self.model.is_boundary_edge(current):
+                color = "#9aa5b1"
+            else:
+                color = "#e8590c" if selected else "#334e68"
+            active_boundary_edge = (
+                self.boundary_mode_active
+                and boundary_name == self.active_boundary_name
+            )
             edge_type = self.model.edge_type(current)
             screen_points: list[float] = []
             if edge_type == "polyLine":
@@ -1008,7 +1567,12 @@ class BlockDrawerApp:
             line = self.canvas.create_line(
                 *screen_points,
                 fill=color,
-                width=self._px(4 if selected else 2),
+                width=self._px(
+                    5 if active_boundary_edge
+                    else 4 if selected
+                    else 3 if boundary_color
+                    else 2
+                ),
             )
             self.item_targets[line] = ("edge", current)
             self._draw_edge_nodes(current, color)
@@ -1019,7 +1583,7 @@ class BlockDrawerApp:
                 midpoint_x,
                 midpoint_y - self._px(11),
                 text=f"{self.model.edge_cells[current]}",
-                fill="#9c3d10" if selected else "#52606d",
+                fill=boundary_color or ("#9c3d10" if selected else "#52606d"),
                 font=self._font(9, "bold" if selected else "normal"),
             )
             self.item_targets[label] = ("edge", current)
@@ -1104,7 +1668,7 @@ class BlockDrawerApp:
             return
         stride = max(1, math.ceil((cells - 1) / MAX_VISIBLE_EDGE_MARKERS))
         for index in range(stride, cells, stride):
-            ratio = index / cells
+            ratio = self.model.edge_node_fraction(current, index)
             world_x, world_y = self.model.edge_point(current, ratio)
             x, y = self.world_to_screen(world_x, world_y)
             item = self.canvas.create_oval(
@@ -1288,6 +1852,74 @@ class BlockDrawerApp:
         self.drag_vertex = None
         self.drag_control_point = None
         self.drag_changed = False
+        if self.boundary_mode_active:
+            if target is None or target[0] != "edge":
+                self.status.set(
+                    "Boundary mode: click an exterior edge, or press Esc to finish."
+                )
+                return
+            current = target[1]
+            if not isinstance(current, tuple) or len(current) != 2:
+                return
+            if self.active_boundary_name is None:
+                self.status.set("Add and select a boundary before assigning edges.")
+                return
+            if not self.model.is_boundary_edge(current):
+                self.status.set("Internal edges cannot belong to a boundary patch.")
+                return
+            existing = self.model.edge_boundaries.get(current)
+            replacement = (
+                None if existing == self.active_boundary_name
+                else self.active_boundary_name
+            )
+            try:
+                self.model.set_edge_boundary(current, replacement)
+            except TopologyError as exc:
+                self.status.set(str(exc))
+                return
+            self._commit_edit()
+            self._update_property_panel()
+            self.redraw()
+            if replacement is None:
+                self.status.set(
+                    f"Unassigned edge {current[0]} — {current[1]}."
+                )
+            elif existing is None:
+                self.status.set(
+                    f"Assigned edge {current[0]} — {current[1]} to "
+                    f"{replacement!r}."
+                )
+            else:
+                self.status.set(
+                    f"Reassigned edge {current[0]} — {current[1]} from "
+                    f"{existing!r} to {replacement!r}."
+                )
+            return
+        if self.vertex_placement_active:
+            if target is not None:
+                self.status.set(
+                    "Vertex placement: click an empty canvas location."
+                )
+                return
+            x, y = self.screen_to_world(event.x, event.y)
+            try:
+                vertex = self.model.add_vertex(x, y)
+            except TopologyError as exc:
+                self.status.set(str(exc))
+                return
+            self.vertex_placement_active = False
+            self.last_pressed_target = None
+            self.selected_vertex = vertex.id
+            self.selected_edge = None
+            self.selected_control_point_index = None
+            self._commit_edit()
+            self._update_property_panel()
+            self.redraw()
+            self.status.set(
+                f"Added standalone vertex {vertex.id} at "
+                f"({_display_number(x)}, {_display_number(y)})."
+            )
+            return
         if self.block_vertex_selection is not None:
             if target is not None and target[0] == "vertex":
                 self._toggle_block_vertex(str(target[1]))
@@ -1356,6 +1988,8 @@ class BlockDrawerApp:
         self.drag_changed = False
 
     def _on_double_click(self, _event: tk.Event) -> None:
+        if self.boundary_mode_active:
+            return
         target = self._target_at_cursor()
         authoritative = (
             target
@@ -1416,6 +2050,10 @@ class BlockDrawerApp:
         self.selected_edge = None
         self.selected_control_point_index = None
         self.block_vertex_selection = None
+        self.vertex_placement_active = False
+        self.boundary_mode_active = False
+        self.active_boundary_name = None
+        self.boundary_button.configure(text="Set boundaries")
         self.drag_vertex = None
         self.drag_control_point = None
         self.drag_changed = False
@@ -1449,6 +2087,10 @@ class BlockDrawerApp:
         self.selected_edge = None
         self.selected_control_point_index = None
         self.block_vertex_selection = None
+        self.vertex_placement_active = False
+        self.boundary_mode_active = False
+        self.active_boundary_name = next(iter(self.model.boundaries), None)
+        self.boundary_button.configure(text="Set boundaries")
         self.drag_vertex = None
         self.drag_control_point = None
         self.drag_changed = False
@@ -1540,6 +2182,9 @@ class BlockDrawerApp:
     def _restore_model(self, restored: MeshModel) -> None:
         self.model = restored
         self.block_vertex_selection = None
+        self.vertex_placement_active = False
+        if self.active_boundary_name not in self.model.boundaries:
+            self.active_boundary_name = next(iter(self.model.boundaries), None)
         if self.selected_vertex not in self.model.vertices:
             self.selected_vertex = None
         if self.selected_edge not in self.model.edge_cells:
@@ -1595,7 +2240,31 @@ class BlockDrawerApp:
         self.start_block_from_vertices()
         return "break"
 
+    def _new_vertex_shortcut(self, event: tk.Event) -> str | None:
+        if _is_text_input_class(event.widget.winfo_class()):
+            return None
+        # Shift/CapsLock are fine for uppercase V; preserve modified shortcuts.
+        if event.state & ~0x0003:
+            return None
+        self.start_vertex_placement()
+        return "break"
+
+    def _boundary_shortcut(self, event: tk.Event) -> str | None:
+        if _is_text_input_class(event.widget.winfo_class()):
+            return None
+        # Shift/CapsLock are fine for uppercase B; preserve modified shortcuts.
+        if event.state & ~0x0003:
+            return None
+        self.toggle_boundary_mode()
+        return "break"
+
     def _escape_shortcut(self, _event: tk.Event) -> str | None:
+        if self.boundary_mode_active:
+            self.toggle_boundary_mode()
+            return "break"
+        if self.vertex_placement_active:
+            self.cancel_vertex_placement()
+            return "break"
         if self.block_vertex_selection is None:
             return None
         self.cancel_block_from_vertices()
@@ -1620,6 +2289,26 @@ class BlockDrawerApp:
             self.vertex_y_var.set(_display_number(vertex.y))
         if self.selected_edge is not None and self.edge_cells_var is not None:
             self.edge_cells_var.set(str(self.model.edge_cells[self.selected_edge]))
+        if self.selected_edge is not None \
+                and self.edge_length_var is not None \
+                and self.edge_cell_ratio_var is not None \
+                and self.edge_total_ratio_var is not None \
+                and self.edge_start_width_var is not None \
+                and self.edge_end_width_var is not None:
+            grading = self.model.edge_grading_values(self.selected_edge)
+            self.edge_length_var.set(_display_grading_number(grading.length))
+            self.edge_cell_ratio_var.set(
+                _display_grading_number(grading.cell_ratio)
+            )
+            self.edge_total_ratio_var.set(
+                _display_grading_number(grading.total_ratio)
+            )
+            self.edge_start_width_var.set(
+                _display_grading_number(grading.start_width)
+            )
+            self.edge_end_width_var.set(
+                _display_grading_number(grading.end_width)
+            )
         if self.selected_edge is not None \
                 and self.selected_control_point_index is not None \
                 and self.point_x_var is not None and self.point_y_var is not None:
@@ -1647,6 +2336,12 @@ def _display_number(value: float) -> str:
     if value == 0.0:
         return "0"
     return format(value, ".8g")
+
+
+def _display_grading_number(value: float) -> str:
+    if value == 0.0:
+        return "0"
+    return format(value, ".12g")
 
 
 def _nice_grid_step(raw_step: float) -> float:
