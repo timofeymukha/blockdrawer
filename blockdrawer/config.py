@@ -13,7 +13,7 @@ from typing import Any, Mapping
 
 
 FORMAT_NAME = "blockDrawerConfig"
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 MIN_UI_SCALE = 0.5
 MAX_UI_SCALE = 4.0
 
@@ -116,7 +116,7 @@ def default_shortcuts(platform: str | None = None) -> dict[str, tuple[str, ...]]
         "open_session": (f"{primary}+O",),
         "save_session": (f"{primary}+S",),
         "save_session_as": (f"{primary}+Shift+S",),
-        "export_block_mesh_dict": (f"{primary}+E",),
+        "export_block_mesh_dict": ("E",),
         "undo": (f"{primary}+Z",),
         "redo": ("Cmd+Shift+Z",) if current_platform == "darwin" else (
             "Ctrl+Y", "Ctrl+Shift+Z"
@@ -202,7 +202,7 @@ def from_data(data: Any, *, platform: str | None = None) -> AppConfig:
     if data.get("format") != FORMAT_NAME:
         raise ConfigError("This is not a BlockDrawer config file")
     version = data.get("version")
-    if isinstance(version, bool) or version != FORMAT_VERSION:
+    if isinstance(version, bool) or version not in (1, FORMAT_VERSION):
         raise ConfigError(
             f"Unsupported BlockDrawer config version {version!r}"
         )
@@ -234,6 +234,7 @@ def from_data(data: Any, *, platform: str | None = None) -> AppConfig:
             f"Unknown shortcut action(s): {', '.join(sorted(unknown))}"
         )
     shortcuts = default_shortcuts(platform)
+    migrate_export_binding = False
     for action, values in shortcuts_data.items():
         if not isinstance(values, list) or not all(
             isinstance(value, str) for value in values
@@ -242,6 +243,20 @@ def from_data(data: Any, *, platform: str | None = None) -> AppConfig:
                 f"Shortcut action {action!r} must contain an array of strings"
             )
         shortcuts[action] = tuple(values)
+        if version == 1 and action == "export_block_mesh_dict" \
+                and shortcuts[action] == (_legacy_export_shortcut(platform),):
+            migrate_export_binding = True
+    if migrate_export_binding:
+        e_sequences = set(shortcut_to_tk_sequences("E"))
+        occupied = {
+            sequence
+            for action, values in shortcuts.items()
+            if action != "export_block_mesh_dict"
+            for shortcut in values
+            for sequence in shortcut_to_tk_sequences(shortcut)
+        }
+        if e_sequences.isdisjoint(occupied):
+            shortcuts["export_block_mesh_dict"] = ("E",)
     _validate_shortcuts(shortcuts)
     return AppConfig(
         scale,
@@ -276,6 +291,12 @@ def to_data(config: AppConfig) -> dict[str, Any]:
             for action in SHORTCUT_ACTIONS
         },
     }
+
+
+def _legacy_export_shortcut(platform: str | None) -> str:
+    current_platform = sys.platform if platform is None else platform
+    primary = "Cmd" if current_platform == "darwin" else "Ctrl"
+    return f"{primary}+E"
 
 
 def load_config(

@@ -133,6 +133,35 @@ def block_mesh_dict(model: MeshModel) -> str:
             "    }",
         ])
 
+    z_min_faces: list[tuple[int, int, int, int]] = []
+    z_max_faces: list[tuple[int, int, int, int]] = []
+    for block in model.blocks:
+        lower = [bottom_index[identifier] for identifier in block.vertices]
+        upper = [index + top_offset for index in lower]
+        # Reverse the lower face so both patch normals point out of the mesh.
+        z_min_faces.append((lower[0], lower[3], lower[2], lower[1]))
+        z_max_faces.append((upper[0], upper[1], upper[2], upper[3]))
+    _append_extrusion_patch(
+        lines,
+        model.z_min_patch_name,
+        model.z_min_patch_type,
+        z_min_faces,
+        neighbour=(
+            model.z_max_patch_name
+            if model.z_min_patch_type == "cyclic" else None
+        ),
+    )
+    _append_extrusion_patch(
+        lines,
+        model.z_max_patch_name,
+        model.z_max_patch_type,
+        z_max_faces,
+        neighbour=(
+            model.z_min_patch_name
+            if model.z_max_patch_type == "cyclic" else None
+        ),
+    )
+
     lines.extend([
         ")",
         ";",
@@ -156,6 +185,34 @@ def _scalar(value: float) -> str:
     if value == 0.0:
         return "0"
     return format(value, ".15g")
+
+
+def _append_extrusion_patch(
+    lines: list[str],
+    name: str,
+    kind: str,
+    faces: list[tuple[int, int, int, int]],
+    *,
+    neighbour: str | None,
+) -> None:
+    """Append one automatically generated lower/upper extrusion patch."""
+    lines.extend([
+        f"    {name}",
+        "    {",
+        f"        type {kind};",
+    ])
+    if neighbour is not None:
+        lines.append(f"        neighbourPatch {neighbour};")
+    lines.extend([
+        "        faces",
+        "        (",
+    ])
+    for face in faces:
+        lines.append(f"            ({' '.join(str(index) for index in face)})")
+    lines.extend([
+        "        );",
+        "    }",
+    ])
 
 
 def _block_edge_grading(

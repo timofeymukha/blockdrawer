@@ -214,6 +214,89 @@ class DpiScalingTests(unittest.TestCase):
         ), "break")
         self.assertEqual(calls, [True, True])
 
+    def test_e_shortcut_toggles_export_only_outside_text_input(self) -> None:
+        app = BlockDrawerApp.__new__(BlockDrawerApp)
+        calls: list[bool] = []
+        app.toggle_export_mode = lambda: calls.append(True)
+        canvas = SimpleNamespace(winfo_class=lambda: "Canvas")
+        entry = SimpleNamespace(winfo_class=lambda: "TEntry")
+
+        self.assertEqual(
+            app._export_shortcut(SimpleNamespace(widget=canvas)), "break"
+        )
+        self.assertEqual(calls, [True])
+        self.assertIsNone(
+            app._export_shortcut(SimpleNamespace(widget=entry))
+        )
+        self.assertEqual(calls, [True])
+
+    def test_export_applies_panel_settings_only_after_destination_is_chosen(
+        self,
+    ) -> None:
+        app = BlockDrawerApp.__new__(BlockDrawerApp)
+        app.model = MeshModel()
+        app.session_path = None
+        app.z_cells_var = FakeStringVar("3")
+        app.z_min_var = FakeStringVar("-0.2")
+        app.z_max_var = FakeStringVar("0.4")
+        app.scale_var = FakeStringVar("0.001")
+        app.z_min_patch_name_var = FakeStringVar("front")
+        app.z_min_patch_type_var = FakeStringVar("cyclic")
+        app.z_max_patch_name_var = FakeStringVar("back")
+        app.z_max_patch_type_var = FakeStringVar("wall")
+        app.status = FakeStringVar()
+        app._sync_global_values = lambda: None
+        commits: list[bool] = []
+        app._commit_edit = lambda: commits.append(True)
+
+        with patch(
+            "blockdrawer.app.filedialog.asksaveasfilename",
+            return_value="/tmp/blockMeshDict",
+        ), patch("blockdrawer.app.write_block_mesh_dict") as writer:
+            app.export()
+
+        writer.assert_called_once_with(app.model, "/tmp/blockMeshDict")
+        self.assertEqual(app.model.z_cells, 3)
+        self.assertEqual(app.model.z_min_patch_type, "cyclic")
+        self.assertEqual(app.model.z_max_patch_type, "cyclic")
+        self.assertEqual(commits, [True])
+
+        app.z_cells_var.set("9")
+        with patch(
+            "blockdrawer.app.filedialog.asksaveasfilename", return_value=""
+        ), patch("blockdrawer.app.write_block_mesh_dict") as writer:
+            app.export()
+
+        writer.assert_not_called()
+        self.assertEqual(app.model.z_cells, 3)
+        self.assertEqual(commits, [True])
+
+    def test_z_patch_type_selector_enters_and_leaves_cyclic_as_a_pair(self) -> None:
+        app = BlockDrawerApp.__new__(BlockDrawerApp)
+        app.z_min_patch_type_var = FakeStringVar("wall")
+        app.z_max_patch_type_var = FakeStringVar("patch")
+
+        app.z_min_patch_type_var.set("cyclic")
+        app._z_patch_type_selected(
+            SimpleNamespace(widget=SimpleNamespace(get=lambda: "cyclic"))
+        )
+        self.assertEqual(app.z_min_patch_type_var.get(), "cyclic")
+        self.assertEqual(app.z_max_patch_type_var.get(), "cyclic")
+
+        app.z_max_patch_type_var.set("empty")
+        app._z_patch_type_selected(
+            SimpleNamespace(widget=SimpleNamespace(get=lambda: "empty"))
+        )
+        self.assertEqual(app.z_min_patch_type_var.get(), "empty")
+        self.assertEqual(app.z_max_patch_type_var.get(), "empty")
+
+        app.z_min_patch_type_var.set("wall")
+        app._z_patch_type_selected(
+            SimpleNamespace(widget=SimpleNamespace(get=lambda: "wall"))
+        )
+        self.assertEqual(app.z_min_patch_type_var.get(), "wall")
+        self.assertEqual(app.z_max_patch_type_var.get(), "empty")
+
     def test_p_shortcut_starts_projection_only_outside_text_input(self) -> None:
         app = BlockDrawerApp.__new__(BlockDrawerApp)
         calls: list[bool] = []

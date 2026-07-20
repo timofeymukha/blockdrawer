@@ -34,7 +34,10 @@ class FoamExportTests(unittest.TestCase):
             result,
         )
         self.assertIn("edges\n(\n)\n;", result)
-        self.assertIn("boundary\n(\n)\n;", result)
+        self.assertIn("    zMin\n    {\n        type patch;", result)
+        self.assertIn("            (0 3 2 1)", result)
+        self.assertIn("    zMax\n    {\n        type patch;", result)
+        self.assertIn("            (4 5 6 7)", result)
 
     def test_multiple_blocks_share_exported_vertex_indices(self) -> None:
         model = MeshModel()
@@ -121,15 +124,52 @@ class FoamExportTests(unittest.TestCase):
             hex_lines[1],
         )
 
-    def test_export_contains_no_curved_edges_or_named_boundaries(self) -> None:
+    def test_export_contains_no_curved_edges_and_only_automatic_z_patches(self) -> None:
         result = block_mesh_dict(MeshModel())
 
         edges_section = re.search(r"edges\s*\((.*?)\)\s*;", result, re.DOTALL)
-        boundary_section = re.search(r"boundary\s*\((.*?)\)\s*;", result, re.DOTALL)
         self.assertIsNotNone(edges_section)
-        self.assertIsNotNone(boundary_section)
         self.assertEqual(edges_section.group(1).strip(), "")
-        self.assertEqual(boundary_section.group(1).strip(), "")
+        self.assertEqual(result.count("        type patch;"), 2)
+        self.assertIn("    zMin\n", result)
+        self.assertIn("    zMax\n", result)
+
+    def test_custom_z_patch_names_and_types_are_exported(self) -> None:
+        model = MeshModel()
+        model.set_export_settings(
+            3, -0.5, 0.5, 0.001,
+            "frontPlane", "symmetry", "backPlane", "wall",
+        )
+
+        result = block_mesh_dict(model)
+
+        self.assertIn("    frontPlane\n    {\n        type symmetry;", result)
+        self.assertIn("    backPlane\n    {\n        type wall;", result)
+        self.assertNotIn("neighbourPatch", result)
+
+    def test_cyclic_z_patch_selection_exports_reciprocal_pair(self) -> None:
+        model = MeshModel()
+        model.set_export_settings(
+            2, 0.0, 1.0, 1.0,
+            "periodicLow", "patch", "periodicHigh", "cyclic",
+        )
+
+        result = block_mesh_dict(model)
+
+        self.assertEqual(result.count("type cyclic;"), 2)
+        self.assertIn("neighbourPatch periodicHigh;", result)
+        self.assertIn("neighbourPatch periodicLow;", result)
+
+    def test_automatic_z_patches_contain_one_face_per_block(self) -> None:
+        model = MeshModel()
+        model.add_block(edge_key("v1", "v2"))
+
+        result = block_mesh_dict(model)
+
+        self.assertIn("            (0 3 2 1)", result)
+        self.assertIn("            (2 5 4 1)", result)
+        self.assertIn("            (6 7 8 9)", result)
+        self.assertIn("            (8 7 10 11)", result)
 
     def test_named_boundaries_export_extruded_side_faces_and_types(self) -> None:
         model = MeshModel()

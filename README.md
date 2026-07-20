@@ -86,6 +86,14 @@ blockdrawer
   translation or rotation is inferred by OpenFOAM from the matching patches.
   Export checks that cyclic partners both have edges with matching lengths and
   subdivisions.
+- Press `E`, choose **File → Export blockMeshDict…**, or click **Export** to open
+  the Export panel. It contains the z cell count, z extents, scale, and the names
+  and types of the automatic zMin/zMax patches. These values are applied when a
+  destination is chosen and the dictionary exports successfully; there is no
+  separate Apply step. The two patch names must be distinct from each other and
+  from side-boundary names. Selecting `cyclic` for either z face sets both faces
+  to `cyclic` and writes their reciprocal neighbour patches automatically. Press
+  `E` or `Esc` to close the panel.
 - Click **Add curve** to create a named reference-geometry curve with two initial
   points, or **Import curve…** to create one from a text point list. Reference
   curves are smooth Catmull-Rom interpolants through every ordered input point.
@@ -154,9 +162,8 @@ blockdrawer
 - Use the mouse wheel to zoom—including deep inspection of tightly spaced
   imported points—middle/right-drag to pan, and **Fit view** to frame the complete
   topology.
-- Set z cells and extrusion extents in the global properties on the right.
 - Press `Enter` or keypad `Enter` in an editable property field to apply the
-  corresponding values, just like its **Set** or **Apply** button.
+  corresponding value. In Export mode this opens the export destination dialog.
 - Press `Ctrl+A` in a text field to select its complete contents (`Cmd+A` also
   works on macOS).
 - Use **Edit → Undo/Redo**, the toolbar buttons, or the configured shortcuts. The
@@ -185,9 +192,9 @@ the available window height.
 
 BlockDrawer rejects vertex moves that would invert or collapse a block, make an
 arc point collinear with its endpoints, or collapse adjacent point-list entries.
-Poly-spline edges, multi-section grading, front/back boundary selection, advanced
-coupled-patch transforms, and 3D editing are deliberately outside the current
-scope. The unselected front/back faces continue to use OpenFOAM's default patch.
+Poly-spline edges, multi-section grading, advanced coupled-patch transforms, and
+3D editing are deliberately outside the current scope. The zMin/zMax faces are
+global export patches rather than selectable 2D canvas edges.
 
 ## Preferences and shortcuts
 
@@ -209,7 +216,7 @@ Every keyboard action is configurable. A Linux/Windows default file looks like:
 ```json
 {
   "format": "blockDrawerConfig",
-  "version": 1,
+  "version": 2,
   "ui": {
     "scale": "auto",
     "showBlockMesh": true,
@@ -222,7 +229,7 @@ Every keyboard action is configurable. A Linux/Windows default file looks like:
     "open_session": ["Ctrl+O"],
     "save_session": ["Ctrl+S"],
     "save_session_as": ["Ctrl+Shift+S"],
-    "export_block_mesh_dict": ["Ctrl+E"],
+    "export_block_mesh_dict": ["E"],
     "undo": ["Ctrl+Z"],
     "redo": ["Ctrl+Y", "Ctrl+Shift+Z"],
     "delete_edge": ["Delete", "Backspace", "NumpadDelete", "X"],
@@ -250,11 +257,12 @@ defaults for that launch and report the problem without overwriting the file.
 **File → Save** writes a versioned BlockDrawer JSON session containing all
 vertices (including standalone ones), quadrilateral blocks, edge cell counts,
 optional edge geometry, per-edge grading, boundary definitions and assignments,
-reference-geometry curves, and extrusion settings. Format version 5 adds named
-reference curves, their ordered point lists, and their point-marker visibility;
-version 4 stores named boundaries and their colors, version 3 added non-uniform
-total expansion ratios, and version 2 introduced interpolation points. Versions
-1–4 remain loadable through explicit migrations.
+reference-geometry curves, and export settings. Format version 6 adds the names
+and types of the automatic zMin/zMax patches; version 5 added named reference
+curves, their ordered point lists, and their point-marker visibility; version 4
+stores named boundaries and their colors, version 3 added non-uniform total
+expansion ratios, and version 2 introduced interpolation points. Versions 1–5
+remain loadable through explicit migrations.
 
 **Export blockMeshDict** writes an OpenFOAM dictionary with:
 
@@ -266,8 +274,11 @@ total expansion ratios, and version 2 introduced interpolation points. Versions
   non-straight 2D edge;
 - implicit straight edges and a 12-value `edgeGrading` entry on every block;
 - one four-vertex extruded side face for every assigned 2D boundary edge, grouped
-  into the configured OpenFOAM patches; and
-- OpenFOAM's default patch for unassigned side faces and the front/back faces.
+  into the configured OpenFOAM patches;
+- one lower face per block in the configured zMin patch and one upper face per
+  block in the configured zMax patch, including automatic reciprocal
+  `neighbourPatch` entries when they are cyclic; and
+- OpenFOAM's default patch for unassigned side faces.
 
 Reference-geometry curves are intentionally omitted from `blockMeshDict`; they
 are editing guides and projection targets rather than exported mesh entities.

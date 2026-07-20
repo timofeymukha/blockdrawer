@@ -57,6 +57,7 @@ class BlockDrawerApp:
         self.block_vertex_selection: list[str] | None = None
         self.vertex_placement_active = False
         self.boundary_mode_active = False
+        self.export_mode_active = False
         self.projection_stage: str | None = None
         self.projection_entity_kind: str | None = None
         self.projection_vertex_ids: list[str] = []
@@ -135,6 +136,10 @@ class BlockDrawerApp:
         self.z_min_var = tk.StringVar()
         self.z_max_var = tk.StringVar()
         self.scale_var = tk.StringVar()
+        self.z_min_patch_name_var = tk.StringVar()
+        self.z_min_patch_type_var = tk.StringVar()
+        self.z_max_patch_name_var = tk.StringVar()
+        self.z_max_patch_type_var = tk.StringVar()
         self.vertex_x_var: tk.StringVar | None = None
         self.vertex_y_var: tk.StringVar | None = None
         self.edge_cells_var: tk.StringVar | None = None
@@ -208,16 +213,6 @@ class BlockDrawerApp:
 
         self.toolbar = ttk.Frame(self.root, padding=(self._px(8), self._px(6)))
         self.toolbar.grid(row=0, column=0, columnspan=2, sticky="ew")
-        ttk.Button(self.toolbar, text="New", command=self.new_session).pack(side="left")
-        ttk.Button(self.toolbar, text="Open", command=self.open_session).pack(
-            side="left", padx=(self._px(5), 0)
-        )
-        ttk.Button(self.toolbar, text="Save", command=self.save).pack(
-            side="left", padx=(self._px(5), 0)
-        )
-        ttk.Separator(self.toolbar, orient="vertical").pack(
-            side="left", fill="y", padx=self._px(8)
-        )
         self.undo_button = ttk.Button(
             self.toolbar, text="Undo", command=self.undo
         )
@@ -257,9 +252,10 @@ class BlockDrawerApp:
         ttk.Button(self.toolbar, text="Fit view", command=self.fit_view).pack(
             side="left", padx=(self._px(5), 0)
         )
-        ttk.Button(self.toolbar, text="Export blockMeshDict", command=self.export).pack(
-            side="right"
+        self.export_button = ttk.Button(
+            self.toolbar, text="Export", command=self.toggle_export_mode
         )
+        self.export_button.pack(side="right")
 
         main = ttk.Frame(self.root)
         main.grid(row=1, column=0, columnspan=2, sticky="nsew")
@@ -361,7 +357,7 @@ class BlockDrawerApp:
         file_menu.add_command(
             label="Export blockMeshDict…",
             accelerator=self._shortcut_label("export_block_mesh_dict"),
-            command=self.export,
+            command=self.toggle_export_mode,
         )
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.close)
@@ -473,7 +469,7 @@ class BlockDrawerApp:
             "open_session": lambda _event: self._shortcut(self.open_session),
             "save_session": lambda _event: self._shortcut(self.save),
             "save_session_as": lambda _event: self._shortcut(self.save_as),
-            "export_block_mesh_dict": lambda _event: self._shortcut(self.export),
+            "export_block_mesh_dict": self._export_shortcut,
             "undo": lambda _event: self._shortcut(self.undo),
             "redo": lambda _event: self._shortcut(self.redo),
             "delete_edge": self._delete_shortcut,
@@ -547,46 +543,11 @@ class BlockDrawerApp:
         )
         self.sidebar_title.grid(row=0, column=0, sticky="w", pady=(0, 10))
 
-        self.global_frame = ttk.LabelFrame(
-            self.sidebar, text="Extrusion", padding=self._px(10)
-        )
-        self.global_frame.grid(row=1, column=0, sticky="ew")
-        self.global_frame.columnconfigure(1, weight=1)
-
-        self._field(
-            self.global_frame, 0, "Z cells", self.z_cells_var,
-            on_confirm=self.apply_global,
-        )
-        self._field(
-            self.global_frame, 1, "zMin", self.z_min_var,
-            on_confirm=self.apply_global,
-        )
-        self._field(
-            self.global_frame, 2, "zMax", self.z_max_var,
-            on_confirm=self.apply_global,
-        )
-        self._field(
-            self.global_frame, 3, "Scale", self.scale_var,
-            on_confirm=self.apply_global,
-        )
-        ttk.Label(
-            self.global_frame,
-            text="Z cells defaults to 1 for a pseudo-2D mesh.",
-            foreground="#52606d",
-            wraplength=self._px(245),
-        ).grid(
-            row=4, column=0, columnspan=2, sticky="w",
-            pady=(self._px(6), self._px(8)),
-        )
-        ttk.Button(self.global_frame, text="Apply extrusion", command=self.apply_global).grid(
-            row=5, column=0, columnspan=2, sticky="ew"
-        )
-
         self.selection_frame = ttk.LabelFrame(
             self.sidebar, text="Selection", padding=self._px(10)
         )
         self.selection_frame.grid(
-            row=2, column=0, sticky="new", pady=(self._px(12), 0)
+            row=1, column=0, sticky="new"
         )
         self.selection_frame.columnconfigure(1, weight=1)
 
@@ -596,15 +557,15 @@ class BlockDrawerApp:
                 "Mouse wheel: zoom\nMiddle/right drag: pan\n"
                 "Double-click an exterior edge: add block\n"
                 "V: place vertex · N: connect 4 vertices\n"
-                "B: boundaries · P: project · Esc: cancel"
+                "B: boundaries · P: project · E: export · Esc: cancel"
             ),
             foreground="#52606d",
             justify="left",
         )
         self.sidebar_help.grid(
-            row=3, column=0, sticky="sw", pady=(self._px(18), 0)
+            row=2, column=0, sticky="sw", pady=(self._px(18), 0)
         )
-        self.sidebar.rowconfigure(3, weight=1)
+        self.sidebar.rowconfigure(2, weight=1)
 
     def _field(
         self,
@@ -686,9 +647,26 @@ class BlockDrawerApp:
         self.geometry_point_index_var = None
         self.geometry_show_points_var = None
 
+        if getattr(self, "export_mode_active", False):
+            self.sidebar_title.configure(text="Export")
+            self.selection_frame.configure(text="blockMeshDict export")
+            self.selection_frame.grid_configure(row=1, pady=0)
+            self.sidebar_help.configure(
+                text=(
+                    "Configure extrusion and the automatic z-face patches.\n"
+                    "Settings take effect when the dictionary is exported.\n"
+                    "E or Esc: close export"
+                )
+            )
+            self._build_export_panel()
+            self.add_button.configure(state="disabled")
+            self.edit_menu.entryconfigure(
+                self.delete_edge_menu_index, state="disabled"
+            )
+            return
+
         if getattr(self, "projection_stage", None) is not None:
             self.sidebar_title.configure(text="Projection")
-            self.global_frame.grid_remove()
             self.selection_frame.configure(text="Project onto geometry")
             self.selection_frame.grid_configure(row=1, pady=0)
             self.sidebar_help.configure(
@@ -707,7 +685,6 @@ class BlockDrawerApp:
 
         if self.boundary_mode_active:
             self.sidebar_title.configure(text="Boundaries")
-            self.global_frame.grid_remove()
             self.selection_frame.configure(text="Boundary patches")
             self.selection_frame.grid_configure(row=1, pady=0)
             self.sidebar_help.configure(
@@ -724,17 +701,14 @@ class BlockDrawerApp:
             return
 
         self.sidebar_title.configure(text="Properties")
-        self.global_frame.grid()
         self.selection_frame.configure(text="Selection")
-        self.selection_frame.grid_configure(
-            row=2, pady=(self._px(12), 0)
-        )
+        self.selection_frame.grid_configure(row=1, pady=0)
         self.sidebar_help.configure(
             text=(
                 "Mouse wheel: zoom\nMiddle/right drag: pan\n"
                 "Double-click an exterior edge: add block\n"
                 "V: place vertex · N: connect 4 vertices\n"
-                "B: boundaries · P: project · Esc: cancel"
+                "B: boundaries · P: project · E: export · Esc: cancel"
             )
         )
 
@@ -1177,6 +1151,116 @@ class BlockDrawerApp:
         self.edit_menu.entryconfigure(
             self.delete_edge_menu_index, state=delete_state
         )
+
+    def _build_export_panel(self) -> None:
+        ttk.Label(
+            self.selection_frame,
+            text="Extrusion",
+            font=self._font(11, "bold"),
+        ).grid(row=0, column=0, columnspan=2, sticky="w")
+        self._field(
+            self.selection_frame, 1, "Z cells", self.z_cells_var,
+            on_confirm=self.export,
+        )
+        self._field(
+            self.selection_frame, 2, "zMin", self.z_min_var,
+            on_confirm=self.export,
+        )
+        self._field(
+            self.selection_frame, 3, "zMax", self.z_max_var,
+            on_confirm=self.export,
+        )
+        self._field(
+            self.selection_frame, 4, "Scale", self.scale_var,
+            on_confirm=self.export,
+        )
+        ttk.Label(
+            self.selection_frame,
+            text="Z cells defaults to 1 for a pseudo-2D mesh.",
+            foreground="#52606d",
+            wraplength=self._px(245),
+        ).grid(
+            row=5, column=0, columnspan=2, sticky="w",
+            pady=(self._px(5), self._px(10)),
+        )
+
+        ttk.Separator(self.selection_frame).grid(
+            row=6, column=0, columnspan=2, sticky="ew",
+            pady=(0, self._px(9)),
+        )
+        ttk.Label(
+            self.selection_frame,
+            text="Automatic z-face patches",
+            font=self._font(11, "bold"),
+        ).grid(row=7, column=0, columnspan=2, sticky="w")
+        self._field(
+            self.selection_frame, 8, "zMin name", self.z_min_patch_name_var,
+            on_confirm=self.export,
+        )
+        ttk.Label(self.selection_frame, text="zMin type").grid(
+            row=9, column=0, sticky="w",
+            padx=(0, self._px(8)), pady=self._px(3),
+        )
+        z_min_type = ttk.Combobox(
+            self.selection_frame,
+            textvariable=self.z_min_patch_type_var,
+            values=MeshModel.SUPPORTED_BOUNDARY_TYPES,
+            state="readonly",
+            width=14,
+        )
+        z_min_type.grid(row=9, column=1, sticky="ew", pady=self._px(3))
+        z_min_type.bind("<<ComboboxSelected>>", self._z_patch_type_selected)
+
+        self._field(
+            self.selection_frame, 10, "zMax name", self.z_max_patch_name_var,
+            on_confirm=self.export,
+        )
+        ttk.Label(self.selection_frame, text="zMax type").grid(
+            row=11, column=0, sticky="w",
+            padx=(0, self._px(8)), pady=self._px(3),
+        )
+        z_max_type = ttk.Combobox(
+            self.selection_frame,
+            textvariable=self.z_max_patch_type_var,
+            values=MeshModel.SUPPORTED_BOUNDARY_TYPES,
+            state="readonly",
+            width=14,
+        )
+        z_max_type.grid(row=11, column=1, sticky="ew", pady=self._px(3))
+        z_max_type.bind("<<ComboboxSelected>>", self._z_patch_type_selected)
+
+        ttk.Label(
+            self.selection_frame,
+            text=(
+                "The two patches are always written. Selecting cyclic for "
+                "either face pairs both faces and writes reciprocal "
+                "neighbourPatch entries automatically."
+            ),
+            foreground="#52606d",
+            wraplength=self._px(245),
+        ).grid(
+            row=12, column=0, columnspan=2, sticky="w",
+            pady=(self._px(6), self._px(9)),
+        )
+        ttk.Button(
+            self.selection_frame,
+            text="Export blockMeshDict…",
+            command=self.export,
+        ).grid(row=13, column=0, columnspan=2, sticky="ew")
+
+    def _z_patch_type_selected(self, event: tk.Event) -> None:
+        selected = str(event.widget.get())
+        if selected == "cyclic":
+            self.z_min_patch_type_var.set("cyclic")
+            self.z_max_patch_type_var.set("cyclic")
+        elif "cyclic" in (
+            self.z_min_patch_type_var.get(), self.z_max_patch_type_var.get()
+        ):
+            # A paired cyclic selection must also be easy to leave. The first
+            # non-cyclic choice resets the pair; either face can then be changed
+            # independently to another non-cyclic type.
+            self.z_min_patch_type_var.set(selected)
+            self.z_max_patch_type_var.set(selected)
 
     def _build_projection_panel(self) -> None:
         if self.projection_stage == "entities":
@@ -1706,6 +1790,7 @@ class BlockDrawerApp:
 
     def toggle_boundary_mode(self) -> None:
         self.boundary_mode_active = not self.boundary_mode_active
+        self._clear_export_mode()
         self._clear_projection_state()
         self.vertex_placement_active = False
         self.block_vertex_selection = None
@@ -1733,6 +1818,41 @@ class BlockDrawerApp:
             )
         else:
             self.status.set("Finished setting boundaries.")
+
+    def toggle_export_mode(self) -> None:
+        activating = not self.export_mode_active
+        self.export_mode_active = activating
+        self._clear_projection_state()
+        self.boundary_mode_active = False
+        self.boundary_button.configure(text="Set boundaries")
+        self.vertex_placement_active = False
+        self.block_vertex_selection = None
+        self.selected_vertex = None
+        self.selected_edge = None
+        self.selected_control_point_index = None
+        self.selected_geometry_curve = None
+        self.selected_geometry_point_index = None
+        self.drag_vertex = None
+        self.drag_control_point = None
+        self.drag_geometry_point = None
+        self.drag_changed = False
+        self.export_button.configure(
+            text="Close export" if activating else "Export"
+        )
+        if activating:
+            self._sync_global_values()
+        self.canvas.focus_set()
+        self._update_property_panel()
+        self.redraw()
+        self.status.set(
+            "Configure extrusion and z-face patches, then export."
+            if activating else "Closed export settings."
+        )
+
+    def _clear_export_mode(self) -> None:
+        self.export_mode_active = False
+        if hasattr(self, "export_button"):
+            self.export_button.configure(text="Export")
 
     def add_boundary(self) -> None:
         name = self.boundary_name_var.get().strip()
@@ -1820,33 +1940,6 @@ class BlockDrawerApp:
             else "disabled"
         )
         self.boundary_neighbour_selector.configure(state=state)
-
-    def apply_global(self) -> None:
-        previous = (
-            self.model.z_cells,
-            self.model.z_min,
-            self.model.z_max,
-            self.model.scale,
-        )
-        try:
-            self.model.set_z_cells(_positive_integer(self.z_cells_var.get(), "Z cells"))
-            self.model.set_z_extents(
-                float(self.z_min_var.get()), float(self.z_max_var.get())
-            )
-            self.model.scale = float(self.scale_var.get())
-            self.model.validate()
-        except (ValueError, TopologyError) as exc:
-            (
-                self.model.z_cells,
-                self.model.z_min,
-                self.model.z_max,
-                self.model.scale,
-            ) = previous
-            self._show_error("Invalid extrusion settings", exc)
-            return
-        self._commit_edit()
-        self._sync_global_values()
-        self.status.set("Extrusion settings updated.")
 
     def apply_vertex(self) -> None:
         if self.selected_vertex is None or self.vertex_x_var is None \
@@ -2302,6 +2395,7 @@ class BlockDrawerApp:
             self.show_block_mesh_var.set(True)
             self.show_geometry_var.set(True)
             self.apply_visibility()
+        self._clear_export_mode()
         self.boundary_mode_active = False
         self.boundary_button.configure(text="Set boundaries")
         self.vertex_placement_active = False
@@ -2530,6 +2624,7 @@ class BlockDrawerApp:
         )
 
     def start_block_from_vertices(self) -> None:
+        self._clear_export_mode()
         self._clear_projection_state()
         self.boundary_mode_active = False
         self.boundary_button.configure(text="Set boundaries")
@@ -2552,6 +2647,7 @@ class BlockDrawerApp:
         )
 
     def start_vertex_placement(self) -> None:
+        self._clear_export_mode()
         self._clear_projection_state()
         self.boundary_mode_active = False
         self.boundary_button.configure(text="Set boundaries")
@@ -3166,6 +3262,11 @@ class BlockDrawerApp:
         self.drag_control_point = None
         self.drag_geometry_point = None
         self.drag_changed = False
+        if self.export_mode_active:
+            self.status.set(
+                "Export settings are open; press E or Esc to return to editing."
+            )
+            return
         if getattr(self, "projection_stage", None) is not None:
             self._toggle_projection_target(target)
             return
@@ -3338,7 +3439,8 @@ class BlockDrawerApp:
         self.drag_changed = False
 
     def _on_double_click(self, _event: tk.Event) -> None:
-        if self.boundary_mode_active or self.projection_stage is not None:
+        if self.export_mode_active or self.boundary_mode_active \
+                or self.projection_stage is not None:
             return
         target = self._target_at_cursor()
         authoritative = (
@@ -3436,6 +3538,7 @@ class BlockDrawerApp:
         self.block_vertex_selection = None
         self.vertex_placement_active = False
         self.boundary_mode_active = False
+        self._clear_export_mode()
         self._clear_projection_state()
         self.active_boundary_name = None
         self.boundary_button.configure(text="Set boundaries")
@@ -3477,6 +3580,7 @@ class BlockDrawerApp:
         self.block_vertex_selection = None
         self.vertex_placement_active = False
         self.boundary_mode_active = False
+        self._clear_export_mode()
         self._clear_projection_state()
         self.active_boundary_name = next(iter(self.model.boundaries), None)
         self.boundary_button.configure(text="Set boundaries")
@@ -3519,6 +3623,31 @@ class BlockDrawerApp:
         return self.save()
 
     def export(self) -> None:
+        previous = (
+            self.model.z_cells,
+            self.model.z_min,
+            self.model.z_max,
+            self.model.scale,
+            self.model.z_min_patch_name,
+            self.model.z_min_patch_type,
+            self.model.z_max_patch_name,
+            self.model.z_max_patch_type,
+        )
+        try:
+            self.model.set_export_settings(
+                _positive_integer(self.z_cells_var.get(), "Z cells"),
+                float(self.z_min_var.get()),
+                float(self.z_max_var.get()),
+                float(self.scale_var.get()),
+                self.z_min_patch_name_var.get().strip(),
+                self.z_min_patch_type_var.get(),
+                self.z_max_patch_name_var.get().strip(),
+                self.z_max_patch_type_var.get(),
+            )
+        except (ValueError, TopologyError) as exc:
+            self._show_error("Invalid export settings", exc)
+            return
+
         initial_directory = str(self.session_path.parent) if self.session_path else None
         filename = filedialog.asksaveasfilename(
             title="Export OpenFOAM dictionary",
@@ -3527,12 +3656,16 @@ class BlockDrawerApp:
             filetypes=[("OpenFOAM dictionary", "blockMeshDict"), ("All files", "*")],
         )
         if not filename:
+            self.model.set_export_settings(*previous)
             return
         try:
             write_block_mesh_dict(self.model, filename)
         except (OSError, TopologyError) as exc:
+            self.model.set_export_settings(*previous)
             self._show_error("Could not export blockMeshDict", exc)
             return
+        self._sync_global_values()
+        self._commit_edit()
         self.status.set(f"Exported {filename}. Run OpenFOAM blockMesh to generate the mesh.")
 
     def close(self) -> None:
@@ -3632,7 +3765,8 @@ class BlockDrawerApp:
         # Preserve normal editing inside coordinate/cell input widgets.
         if _is_text_input_class(event.widget.winfo_class()):
             return None
-        if getattr(self, "projection_stage", None) is not None:
+        if getattr(self, "export_mode_active", False) \
+                or getattr(self, "projection_stage", None) is not None:
             return "break"
         self.delete_selected_entity()
         return "break"
@@ -3661,6 +3795,12 @@ class BlockDrawerApp:
         self.start_projection()
         return "break"
 
+    def _export_shortcut(self, event: tk.Event) -> str | None:
+        if _is_text_input_class(event.widget.winfo_class()):
+            return None
+        self.toggle_export_mode()
+        return "break"
+
     def _geometry_visibility_shortcut(self, event: tk.Event) -> str | None:
         if _is_text_input_class(event.widget.winfo_class()):
             return None
@@ -3669,6 +3809,9 @@ class BlockDrawerApp:
         return "break"
 
     def _escape_shortcut(self, _event: tk.Event) -> str | None:
+        if getattr(self, "export_mode_active", False):
+            self.toggle_export_mode()
+            return "break"
         if getattr(self, "projection_stage", None) is not None:
             self.cancel_projection()
             return "break"
@@ -3693,6 +3836,10 @@ class BlockDrawerApp:
         self.z_min_var.set(_display_number(self.model.z_min))
         self.z_max_var.set(_display_number(self.model.z_max))
         self.scale_var.set(_display_number(self.model.scale))
+        self.z_min_patch_name_var.set(self.model.z_min_patch_name)
+        self.z_min_patch_type_var.set(self.model.z_min_patch_type)
+        self.z_max_patch_name_var.set(self.model.z_max_patch_name)
+        self.z_max_patch_type_var.set(self.model.z_max_patch_type)
 
     def _sync_property_values(self) -> None:
         if self.selected_vertex is not None and self.vertex_x_var is not None \

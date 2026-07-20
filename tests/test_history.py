@@ -7,6 +7,27 @@ from tests.helpers import build_ring_model, center_vertex_ids
 
 
 class ModelHistoryTests(unittest.TestCase):
+    def test_export_settings_are_undoable_session_state(self) -> None:
+        model = MeshModel()
+        history = ModelHistory(model)
+        model.set_export_settings(
+            5, -1.0, 1.0, 0.01,
+            "front", "wall", "back", "symmetry",
+        )
+        history.record(model)
+
+        restored = history.undo()
+        self.assertIsNotNone(restored)
+        assert restored is not None
+        self.assertEqual(restored.z_cells, 1)
+        self.assertEqual(restored.z_min_patch_name, "zMin")
+
+        redone = history.redo()
+        self.assertIsNotNone(redone)
+        assert redone is not None
+        self.assertEqual(redone.z_cells, 5)
+        self.assertEqual(redone.z_max_patch_type, "symmetry")
+
     def test_compound_topology_edits_undo_and_redo_as_snapshots(self) -> None:
         model = MeshModel()
         initial = to_data(model)

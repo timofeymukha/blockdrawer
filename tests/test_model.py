@@ -11,6 +11,39 @@ from tests.helpers import (
 
 
 class MeshModelTests(unittest.TestCase):
+    def test_export_settings_validate_names_and_pair_cyclic_z_patches(self) -> None:
+        model = MeshModel()
+
+        model.set_export_settings(
+            4, -1.0, 2.0, 0.001,
+            "periodicMin", "cyclic", "periodicMax", "wall",
+        )
+
+        self.assertEqual(model.z_cells, 4)
+        self.assertEqual(model.z_min_patch_type, "cyclic")
+        self.assertEqual(model.z_max_patch_type, "cyclic")
+        model.validate()
+
+        with self.assertRaisesRegex(TopologyError, "distinct names"):
+            model.set_export_settings(
+                1, 0.0, 1.0, 1.0,
+                "same", "patch", "same", "wall",
+            )
+        self.assertEqual(model.z_min_patch_name, "periodicMin")
+
+    def test_side_and_extrusion_patch_names_cannot_collide(self) -> None:
+        model = MeshModel()
+
+        with self.assertRaisesRegex(TopologyError, "extrusion patch"):
+            model.add_boundary("zMin")
+
+        model.add_boundary("inlet")
+        with self.assertRaisesRegex(TopologyError, "side boundary"):
+            model.set_export_settings(
+                1, 0.0, 1.0, 1.0,
+                "inlet", "patch", "zMax", "patch",
+            )
+
     def test_named_boundaries_assign_only_exterior_edges_with_unique_colors(self) -> None:
         model = MeshModel()
         inlet = model.add_boundary("inlet")

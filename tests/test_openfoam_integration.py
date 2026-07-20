@@ -51,6 +51,24 @@ class OpenFoamIntegrationTests(unittest.TestCase):
 
         self._assert_block_mesh_accepts(model)
 
+    def test_block_mesh_accepts_automatic_cyclic_z_patch_pair(self) -> None:
+        model = MeshModel()
+        model.set_export_settings(
+            2, -0.5, 0.5, 1.0,
+            "periodicFront", "cyclic", "periodicBack", "patch",
+        )
+
+        self._assert_block_mesh_accepts(model)
+
+    def test_block_mesh_accepts_separate_empty_z_patches(self) -> None:
+        model = MeshModel()
+        model.set_export_settings(
+            1, 0.0, 0.1, 1.0,
+            "front", "empty", "back", "empty",
+        )
+
+        self._assert_block_mesh_accepts(model)
+
     def test_shared_graded_edge_matches_in_both_neighboring_blocks(self) -> None:
         model = MeshModel()
         selected = edge_key("v1", "v2")

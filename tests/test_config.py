@@ -52,6 +52,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(linux.shortcuts["save_session"], ("Ctrl+S",))
         self.assertEqual(macos.shortcuts["save_session"], ("Cmd+S",))
         self.assertEqual(macos.shortcuts["redo"], ("Cmd+Shift+Z",))
+        self.assertEqual(linux.shortcuts["export_block_mesh_dict"], ("E",))
+        self.assertEqual(macos.shortcuts["export_block_mesh_dict"], ("E",))
         self.assertEqual(linux.shortcuts["project"], ("P",))
         self.assertEqual(linux.shortcuts["toggle_geometry"], ("G",))
         self.assertEqual(linux.shortcuts["fit_view"], ())
@@ -150,7 +152,7 @@ class ConfigTests(unittest.TestCase):
             loaded = load_config(path, platform="linux")
 
         self.assertEqual(parsed["format"], "blockDrawerConfig")
-        self.assertEqual(parsed["version"], 1)
+        self.assertEqual(parsed["version"], 2)
         self.assertEqual(parsed["ui"]["scale"], 1.5)
         self.assertTrue(parsed["ui"]["showBlockMesh"])
         self.assertTrue(parsed["ui"]["showGeometry"])
@@ -158,6 +160,26 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(parsed["ui"]["showEdgeInterpolationPoints"])
         self.assertEqual(set(parsed["shortcuts"]), set(SHORTCUT_ACTIONS))
         self.assertEqual(to_data(loaded), to_data(config))
+
+    def test_version_one_default_export_binding_is_migrated_to_e(self) -> None:
+        data = to_data(default_config("linux"))
+        data["version"] = 1
+        data["shortcuts"]["export_block_mesh_dict"] = ["Ctrl+E"]
+
+        migrated = from_data(data, platform="linux")
+
+        self.assertEqual(migrated.shortcuts["export_block_mesh_dict"], ("E",))
+
+        data["shortcuts"]["export_block_mesh_dict"] = ["F8"]
+        custom = from_data(data, platform="linux")
+        self.assertEqual(custom.shortcuts["export_block_mesh_dict"], ("F8",))
+
+        data["shortcuts"]["export_block_mesh_dict"] = ["Ctrl+E"]
+        data["shortcuts"]["fit_view"] = ["E"]
+        conflict_avoided = from_data(data, platform="linux")
+        self.assertEqual(
+            conflict_avoided.shortcuts["export_block_mesh_dict"], ("Ctrl+E",)
+        )
 
     def test_app_loader_creates_defaults_on_first_run(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

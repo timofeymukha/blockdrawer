@@ -50,6 +50,31 @@ class SessionTests(unittest.TestCase):
             standalone.id not in block.vertices for block in loaded.blocks
         ))
 
+    def test_export_patch_settings_round_trip_with_session(self) -> None:
+        model = MeshModel()
+        model.set_export_settings(
+            4, -0.2, 0.3, 0.001,
+            "periodicFront", "cyclic", "periodicBack", "wall",
+        )
+
+        data = to_data(model)
+        loaded = from_data(data)
+
+        self.assertEqual(data["settings"]["zMinPatch"], {
+            "name": "periodicFront", "type": "cyclic",
+        })
+        self.assertEqual(data["settings"]["zMaxPatch"], {
+            "name": "periodicBack", "type": "cyclic",
+        })
+        self.assertEqual(to_data(loaded), data)
+
+    def test_current_session_rejects_unpaired_cyclic_z_patches(self) -> None:
+        data = to_data(MeshModel())
+        data["settings"]["zMinPatch"]["type"] = "cyclic"
+
+        with self.assertRaisesRegex(SessionError, "both be cyclic"):
+            from_data(data)
+
     def test_file_round_trip_is_readable_json(self) -> None:
         model = MeshModel()
         with tempfile.TemporaryDirectory() as directory:
@@ -60,7 +85,13 @@ class SessionTests(unittest.TestCase):
             loaded = load_session(path)
 
         self.assertEqual(parsed["format"], "blockDrawer")
-        self.assertEqual(parsed["version"], 5)
+        self.assertEqual(parsed["version"], 6)
+        self.assertEqual(parsed["settings"]["zMinPatch"], {
+            "name": "zMin", "type": "patch",
+        })
+        self.assertEqual(parsed["settings"]["zMaxPatch"], {
+            "name": "zMax", "type": "patch",
+        })
         self.assertEqual(to_data(loaded), to_data(model))
 
     def test_version_one_straight_edge_session_is_migrated(self) -> None:
@@ -74,7 +105,7 @@ class SessionTests(unittest.TestCase):
         self.assertTrue(all(
             loaded.edge_type(current) == "line" for current in loaded.edges()
         ))
-        self.assertEqual(to_data(loaded)["version"], 5)
+        self.assertEqual(to_data(loaded)["version"], 6)
 
     def test_version_two_session_is_migrated_with_uniform_grading(self) -> None:
         data = to_data(MeshModel())
@@ -87,7 +118,7 @@ class SessionTests(unittest.TestCase):
             loaded.edge_total_expansion(current) == 1.0
             for current in loaded.edges()
         ))
-        self.assertEqual(to_data(loaded)["version"], 5)
+        self.assertEqual(to_data(loaded)["version"], 6)
 
     def test_version_three_session_is_migrated_without_boundaries(self) -> None:
         data = to_data(MeshModel())
@@ -99,7 +130,7 @@ class SessionTests(unittest.TestCase):
 
         self.assertEqual(loaded.boundaries, {})
         self.assertEqual(loaded.edge_boundaries, {})
-        self.assertEqual(to_data(loaded)["version"], 5)
+        self.assertEqual(to_data(loaded)["version"], 6)
 
     def test_version_four_session_is_migrated_without_geometry_curves(self) -> None:
         data = to_data(MeshModel())
@@ -109,7 +140,25 @@ class SessionTests(unittest.TestCase):
         loaded = from_data(data)
 
         self.assertEqual(loaded.geometry_curves, {})
-        self.assertEqual(to_data(loaded)["version"], 5)
+        self.assertEqual(to_data(loaded)["version"], 6)
+
+    def test_version_five_session_gets_nonconflicting_z_patch_defaults(self) -> None:
+        model = MeshModel()
+        model.set_export_settings(
+            1, 0.0, 1.0, 1.0, "front", "patch", "back", "patch"
+        )
+        model.add_boundary("zMin")
+        data = to_data(model)
+        data["version"] = 5
+        del data["settings"]["zMinPatch"]
+        del data["settings"]["zMaxPatch"]
+
+        loaded = from_data(data)
+
+        self.assertEqual(loaded.z_min_patch_name, "zMin2")
+        self.assertEqual(loaded.z_max_patch_name, "zMax")
+        self.assertEqual(loaded.z_min_patch_type, "patch")
+        self.assertEqual(loaded.z_max_patch_type, "patch")
 
     def test_geometry_curves_round_trip_in_version_five_schema(self) -> None:
         model = MeshModel()

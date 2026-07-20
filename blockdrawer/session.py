@@ -19,7 +19,7 @@ from .model import (
 
 
 FORMAT_NAME = "blockDrawer"
-FORMAT_VERSION = 5
+FORMAT_VERSION = 6
 
 
 class SessionError(ValueError):
@@ -36,6 +36,14 @@ def to_data(model: MeshModel) -> dict[str, Any]:
             "zMin": model.z_min,
             "zMax": model.z_max,
             "scale": model.scale,
+            "zMinPatch": {
+                "name": model.z_min_patch_name,
+                "type": model.z_min_patch_type,
+            },
+            "zMaxPatch": {
+                "name": model.z_max_patch_name,
+                "type": model.z_max_patch_type,
+            },
         },
         "vertices": [
             {"id": vertex.id, "x": vertex.x, "y": vertex.y}
@@ -111,7 +119,8 @@ def from_data(data: Any) -> MeshModel:
         if data.get("format") != FORMAT_NAME:
             raise SessionError("This is not a BlockDrawer session")
         version = data.get("version")
-        if version not in (1, 2, 3, 4, FORMAT_VERSION):
+        if isinstance(version, bool) \
+                or version not in (1, 2, 3, 4, 5, FORMAT_VERSION):
             raise SessionError(
                 f"Unsupported BlockDrawer session version {version!r}"
             )
@@ -255,11 +264,37 @@ def from_data(data: Any) -> MeshModel:
                 )
             model.edge_boundaries[current] = _string(item, "boundary")
 
-        model.z_cells = _integer(settings, "zCells")
-        model.z_min = _number(settings, "zMin")
-        model.z_max = _number(settings, "zMax")
-        model.scale = _number(settings, "scale")
-        model.validate()
+        if version >= 6:
+            z_min_patch = _mapping(settings, "zMinPatch")
+            z_max_patch = _mapping(settings, "zMaxPatch")
+            z_min_patch_name = _string(z_min_patch, "name")
+            z_min_patch_type = _string(z_min_patch, "type")
+            z_max_patch_name = _string(z_max_patch, "name")
+            z_max_patch_type = _string(z_max_patch, "type")
+            if (z_min_patch_type == "cyclic") \
+                    != (z_max_patch_type == "cyclic"):
+                raise SessionError(
+                    "Stored zMin and zMax patches must both be cyclic when "
+                    "either is cyclic"
+                )
+        else:
+            used_names = set(model.boundaries)
+            z_min_patch_name = _unused_patch_name("zMin", used_names)
+            used_names.add(z_min_patch_name)
+            z_max_patch_name = _unused_patch_name("zMax", used_names)
+            z_min_patch_type = "patch"
+            z_max_patch_type = "patch"
+
+        model.set_export_settings(
+            _integer(settings, "zCells"),
+            _number(settings, "zMin"),
+            _number(settings, "zMax"),
+            _number(settings, "scale"),
+            z_min_patch_name,
+            z_min_patch_type,
+            z_max_patch_name,
+            z_max_patch_type,
+        )
         return model
     except SessionError:
         raise
@@ -326,3 +361,13 @@ def _optional_boolean(
     if not isinstance(value, bool):
         raise SessionError(f"{key!r} must be true or false")
     return value
+
+
+def _unused_patch_name(preferred: str, used_names: set[str]) -> str:
+    """Choose a deterministic extrusion-patch name for legacy sessions."""
+    if preferred not in used_names:
+        return preferred
+    suffix = 2
+    while f"{preferred}{suffix}" in used_names:
+        suffix += 1
+    return f"{preferred}{suffix}"

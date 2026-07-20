@@ -9,9 +9,10 @@ does **not** generate a mesh. Its primary artifact is a valid
 `system/blockMeshDict`; OpenFOAM's `blockMesh` remains the mesher.
 
 The current scope intentionally excludes polySpline edges, multi-section grading,
-cyclicAMI/ACMI transforms, front/back patch editing, and 3D editing. Preserve
-extension points for those features instead of encoding them in the canvas
-widgets.
+cyclicAMI/ACMI transforms, and 3D editing. The two extrusion-face patches are
+configured as global export settings rather than selectable canvas geometry.
+Preserve extension points for additional patch properties instead of encoding
+them in the canvas widgets.
 
 ## Stack and commands
 
@@ -48,7 +49,8 @@ widgets.
   converts readable shortcut notation to Tk event sequences.
 - `blockdrawer/foam.py`: deterministic `blockMeshDict` serialization. Each 2D
   vertex is emitted at `zMin` and `zMax`; a block becomes one `hex`, with the
-  editable edge counts and the global z cell count.
+  editable edge counts and the global z cell count. It also generates one
+  correctly oriented zMin/zMax boundary face per block.
 - `blockdrawer/history.py`: bounded, complete-model snapshots for atomic undo/redo.
   Snapshotting is appropriate because one topology operation can update multiple
   constrained edges. A mouse drag is recorded once, on release.
@@ -197,7 +199,13 @@ widgets.
   moves that invalidate attached curved-edge geometry are rejected and rolled
   back.
 - The z direction is not drawn. `zCells` defaults to 1 and `zMin`/`zMax` default
-  to 0/1.
+  to 0/1. Extrusion and scale controls appear only in Export mode, entered with
+  the configurable `E` shortcut; editing those fields does not mutate the model
+  until a destination is chosen and export succeeds. The zMin/zMax patch names
+  default to `zMin`/`zMax`, their types default to `patch`, and their names must
+  be distinct from each other and from every selectable side-boundary name. If
+  either extrusion patch is selected as `cyclic`, both are normalized to
+  `cyclic`; export writes reciprocal `neighbourPatch` entries automatically.
 
 ## Data and compatibility
 
@@ -207,7 +215,10 @@ Session files contain a format marker and integer version. Version 2 adds an
 pairs and non-uniform `expansionRatio` values. Version 4 adds ordered `boundaries`
 and `edgeBoundaries` arrays. Version 5 adds `geometryCurves`, containing stable
 IDs, names, ordered 2D point lists, and per-curve `showPoints` flags. A missing
-`showPoints` field in an early version 5 file defaults to true. Version 1
+`showPoints` field in an early version 5 file defaults to true. Version 6 adds
+the names and types of the automatic `zMinPatch` and `zMaxPatch` under settings.
+Older sessions receive non-conflicting `zMin`/`zMax` patch names and `patch`
+types. Version 1
 straight-edge sessions migrate with empty geometry; versions 1 and 2 migrate with
 uniform grading; versions 1–3 migrate with no named boundaries; versions 1–4
 migrate with no reference geometry. Add
@@ -216,14 +227,17 @@ silently reinterpret old data. JSON is a project/session format, not an OpenFOAM
 format.
 
 Application preferences are separate from mesh sessions. They use JSON format
-`blockDrawerConfig`, version 1, at `~/.blockdrawer` on Linux and macOS, and
+`blockDrawerConfig`, version 2, at `~/.blockdrawer` on Linux and macOS, and
 `%APPDATA%/BlockDrawer/config.json` on Windows. The file is created with complete
 defaults on first launch. `ui.scale` is `auto` or a multiplier from 0.5 to 4;
 `ui.showBlockMesh` and `ui.showGeometry` persist the independent canvas layers;
 `ui.showEdgeNodes` and `ui.showEdgeInterpolationPoints` independently persist
 the mesh-subdivision and curved-edge control markers. All are saved when changed
 through the View menu. Geometry-layer visibility is the configurable
-`toggle_geometry` action and defaults to `G`. `shortcuts` maps every application
+`toggle_geometry` action and defaults to `G`. Export mode is the configurable
+`export_block_mesh_dict` action and defaults to `E`; version 1's untouched
+`Ctrl+E`/`Cmd+E` default migrates to `E`, while custom bindings are preserved.
+`shortcuts` maps every application
 action to a list of readable combinations such as `Ctrl+S`, `Cmd+Z`, `Delete`,
 `B`, `G`, or `P`; an empty list disables that action. Missing actions inherit
 current platform defaults so newer releases can add actions compatibly. Unknown
@@ -238,8 +252,9 @@ non-straight 2D edge is emitted twice: `arc` uses its single point and
 implicit. Every block uses the 12-value `edgeGrading` form: the four 2D edge
 ratios are duplicated on the lower/upper z planes and all four z edges remain
 uniform. Each assigned 2D exterior edge exports as its extruded four-vertex side
-face under the named patch. Unassigned side faces and all front/back faces remain
-in OpenFOAM's default patch.
+face under the named patch. Unassigned side faces remain in OpenFOAM's default
+patch. Every block's lower and upper face is emitted into the configured automatic
+zMin and zMax patches; cyclic z patches are reciprocal partners.
 
 ## Working conventions
 
