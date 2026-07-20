@@ -126,6 +126,45 @@ class ModelHistoryTests(unittest.TestCase):
         self.assertEqual(len(restored.edge_control_points(selected)), 2)
         self.assertEqual(new_index, 1)
 
+    def test_interpolation_point_count_change_is_undoable(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v0", "v1")
+        model.set_edge_type(selected, "polyLine")
+        history = ModelHistory(model)
+
+        model.set_edge_control_point_count(selected, 4)
+        history.record(model)
+
+        self.assertEqual(len(model.edge_control_points(selected)), 4)
+        restored = history.undo()
+        self.assertEqual(len(restored.edge_control_points(selected)), 1)
+        restored = history.redo()
+        self.assertEqual(
+            restored.edge_control_points(selected),
+            ((0.2, 0.0), (0.4, 0.0), (0.6, 0.0), (0.8, 0.0)),
+        )
+
+    def test_fitted_projection_is_undoable_and_redoable(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v0", "v1")
+        curve = model.add_geometry_curve(
+            ((0.0, -0.2), (0.5, -0.4), (1.0, -0.2))
+        )
+        history = ModelHistory(model)
+
+        model.project_to_geometry(
+            (curve.id,), "y", edges=(selected,), fit=True
+        )
+        history.record(model)
+
+        self.assertEqual(model.edge_type(selected), "spline")
+        restored = history.undo()
+        self.assertEqual(restored.edge_type(selected), "line")
+        self.assertEqual(restored.vertices["v0"].y, 0.0)
+        restored = history.redo()
+        self.assertEqual(restored.edge_type(selected), "spline")
+        self.assertEqual(restored.edge_control_points(selected), ((0.5, -0.4),))
+
     def test_edge_deletion_and_all_incident_blocks_undo_atomically(self) -> None:
         model = MeshModel()
         internal = edge_key("v1", "v2")
@@ -216,6 +255,72 @@ class ModelHistoryTests(unittest.TestCase):
         restored = history.redo()
         self.assertEqual(restored.boundaries, {})
         self.assertEqual(restored.edge_boundaries, {})
+
+    def test_geometry_curve_point_edit_is_undoable(self) -> None:
+        model = MeshModel()
+        curve = model.add_geometry_curve(((0.0, 0.0), (1.0, 0.0)))
+        history = ModelHistory(model)
+
+        model.set_geometry_curve_point(curve.id, 1, 1.0, 2.0)
+        history.record(model)
+
+        restored = history.undo()
+        self.assertEqual(
+            restored.geometry_curves[curve.id].points,
+            ((0.0, 0.0), (1.0, 0.0)),
+        )
+        restored = history.redo()
+        self.assertEqual(
+            restored.geometry_curves[curve.id].points,
+            ((0.0, 0.0), (1.0, 2.0)),
+        )
+
+    def test_geometry_point_visibility_is_undoable(self) -> None:
+        model = MeshModel()
+        curve = model.add_geometry_curve(((0.0, 0.0), (1.0, 0.0)))
+        history = ModelHistory(model)
+
+        model.set_geometry_curve_point_visibility(curve.id, False)
+        history.record(model)
+
+        self.assertFalse(model.geometry_curves[curve.id].show_points)
+        restored = history.undo()
+        self.assertTrue(restored.geometry_curves[curve.id].show_points)
+        restored = history.redo()
+        self.assertFalse(restored.geometry_curves[curve.id].show_points)
+
+    def test_geometry_curve_deletion_is_undoable(self) -> None:
+        model = MeshModel()
+        curve = model.add_geometry_curve(((0.0, 0.0), (1.0, 0.0)))
+        history = ModelHistory(model)
+
+        model.remove_geometry_curve(curve.id)
+        history.record(model)
+
+        self.assertNotIn(curve.id, model.geometry_curves)
+        restored = history.undo()
+        self.assertEqual(
+            restored.geometry_curves[curve.id].points,
+            ((0.0, 0.0), (1.0, 0.0)),
+        )
+        restored = history.redo()
+        self.assertNotIn(curve.id, restored.geometry_curves)
+
+    def test_mesh_projection_is_one_undoable_action(self) -> None:
+        model = MeshModel()
+        curve = model.add_geometry_curve(((-1.0, -0.5), (2.0, -0.5)))
+        history = ModelHistory(model)
+
+        model.project_to_geometry(
+            (curve.id,), "y", edges=(edge_key("v0", "v1"),)
+        )
+        history.record(model)
+
+        self.assertEqual(model.vertices["v0"].y, -0.5)
+        restored = history.undo()
+        self.assertEqual(restored.vertices["v0"].y, 0.0)
+        restored = history.redo()
+        self.assertEqual(restored.vertices["v0"].y, -0.5)
 
 
 if __name__ == "__main__":

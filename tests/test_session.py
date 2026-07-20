@@ -60,7 +60,7 @@ class SessionTests(unittest.TestCase):
             loaded = load_session(path)
 
         self.assertEqual(parsed["format"], "blockDrawer")
-        self.assertEqual(parsed["version"], 4)
+        self.assertEqual(parsed["version"], 5)
         self.assertEqual(to_data(loaded), to_data(model))
 
     def test_version_one_straight_edge_session_is_migrated(self) -> None:
@@ -74,7 +74,7 @@ class SessionTests(unittest.TestCase):
         self.assertTrue(all(
             loaded.edge_type(current) == "line" for current in loaded.edges()
         ))
-        self.assertEqual(to_data(loaded)["version"], 4)
+        self.assertEqual(to_data(loaded)["version"], 5)
 
     def test_version_two_session_is_migrated_with_uniform_grading(self) -> None:
         data = to_data(MeshModel())
@@ -87,7 +87,7 @@ class SessionTests(unittest.TestCase):
             loaded.edge_total_expansion(current) == 1.0
             for current in loaded.edges()
         ))
-        self.assertEqual(to_data(loaded)["version"], 4)
+        self.assertEqual(to_data(loaded)["version"], 5)
 
     def test_version_three_session_is_migrated_without_boundaries(self) -> None:
         data = to_data(MeshModel())
@@ -99,7 +99,50 @@ class SessionTests(unittest.TestCase):
 
         self.assertEqual(loaded.boundaries, {})
         self.assertEqual(loaded.edge_boundaries, {})
-        self.assertEqual(to_data(loaded)["version"], 4)
+        self.assertEqual(to_data(loaded)["version"], 5)
+
+    def test_version_four_session_is_migrated_without_geometry_curves(self) -> None:
+        data = to_data(MeshModel())
+        data["version"] = 4
+        del data["geometryCurves"]
+
+        loaded = from_data(data)
+
+        self.assertEqual(loaded.geometry_curves, {})
+        self.assertEqual(to_data(loaded)["version"], 5)
+
+    def test_geometry_curves_round_trip_in_version_five_schema(self) -> None:
+        model = MeshModel()
+        curve = model.add_geometry_curve(
+            ((0.0, 0.0), (0.5, 1.0), (1.0, 0.0)),
+            name="airfoil",
+            show_points=False,
+        )
+
+        data = to_data(model)
+        restored = from_data(data)
+
+        self.assertEqual(data["geometryCurves"], [{
+            "id": curve.id,
+            "name": "airfoil",
+            "showPoints": False,
+            "points": [
+                {"x": 0.0, "y": 0.0},
+                {"x": 0.5, "y": 1.0},
+                {"x": 1.0, "y": 0.0},
+            ],
+        }])
+        self.assertEqual(to_data(restored), data)
+
+    def test_version_five_curve_without_show_points_defaults_visible(self) -> None:
+        model = MeshModel()
+        model.add_geometry_curve(((0.0, 0.0), (1.0, 0.0)))
+        data = to_data(model)
+        del data["geometryCurves"][0]["showPoints"]
+
+        restored = from_data(data)
+
+        self.assertTrue(next(iter(restored.geometry_curves.values())).show_points)
 
     def test_boundary_definitions_and_assignments_use_version_four_schema(self) -> None:
         model = MeshModel()

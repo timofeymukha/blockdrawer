@@ -4,12 +4,14 @@
 
 BlockDrawer is a graphical editor for 2D block topologies with straight,
 circular-arc, piecewise-linear, or spline edges that are extruded into OpenFOAM
-hexahedra. It does **not** generate a mesh. Its primary artifact is a valid
+hexahedra. Independent point-list reference curves can guide topology design. It
+does **not** generate a mesh. Its primary artifact is a valid
 `system/blockMeshDict`; OpenFOAM's `blockMesh` remains the mesher.
 
 The current scope intentionally excludes polySpline edges, multi-section grading,
 cyclicAMI/ACMI transforms, front/back patch editing, and 3D editing. Preserve
-extension points for those features instead of encoding them in the canvas widgets.
+extension points for those features instead of encoding them in the canvas
+widgets.
 
 ## Stack and commands
 
@@ -31,8 +33,19 @@ extension points for those features instead of encoding them in the canvas widge
   Non-uniform total expansion ratios are stored in `edge_grading`, also keyed by
   shared edge; uniform ratio 1 is implicit. Ordered `Boundary` definitions are
   separate from the zero-or-one `edge_boundaries` assignment per shared edge.
+- `blockdrawer/geometry.py`: UI-independent parsing of reference-geometry point
+  files. Reference curves themselves are named model entities, independent of
+  block vertices and OpenFOAM edge geometry.
+- `blockdrawer/projection.py`: UI-independent smooth-curve projection math. It
+  represents each reference-curve Catmull-Rom span as a cubic polynomial, solves
+  x/y intersections, and finds orthogonal closest points without GUI or OpenFOAM
+  dependencies.
 - `blockdrawer/session.py`: versioned JSON persistence. Keep this independent of
   Tk so sessions can be tested and converted headlessly.
+- `blockdrawer/config.py`: versioned, human-editable application preferences,
+  independent of Tk. It resolves the native per-platform location, validates UI
+  scale and shortcut names, merges missing keys from platform defaults, and
+  converts readable shortcut notation to Tk event sequences.
 - `blockdrawer/foam.py`: deterministic `blockMeshDict` serialization. Each 2D
   vertex is emitted at `zMin` and `zMax`; a block becomes one `hex`, with the
   editable edge counts and the global z cell count.
@@ -44,6 +57,58 @@ extension points for those features instead of encoding them in the canvas widge
 - `tests/`: model, persistence, and export tests. Tests must not require a display.
 
 ## Topology invariants
+
+- Reference geometry consists of named 2D curves with stable IDs and at least
+  two ordered finite points. Adjacent points must be distinct. Curves use smooth
+  through-point Catmull-Rom interpolation with chord-length segment selection;
+  they are saved in sessions and participate in undo/redo, but are never written
+  to `blockMeshDict`. Each curve persists its own `show_points` state. New manual
+  curves default to visible point markers, while imported or file-replaced point
+  lists default to hidden markers. Rendering samples every curve span so dense
+  imported geometry is not reduced to a fixed sample count. The point-file format
+  is one `x y` or `x, y` pair per line, with blank lines and `#` comments allowed.
+  The configured deletion shortcut (which includes `X` by default) removes the
+  complete selected reference curve instead of a mesh edge when reference
+  geometry has focus. Individual points are removed explicitly from Properties;
+  the two-point minimum remains.
+
+- Projection is a staged GUI mode entered with configurable shortcut `P`: first
+  select one or more vertices or one or more topological edges (never both), then
+  select one or more reference curves, choose a direction, and apply. `Esc`
+  cancels either stage without mutation. x/y projection moves parallel to the
+  named axis and chooses the nearest curve intersection; orthogonal projection
+  chooses the globally nearest point on the smooth Catmull-Rom curves. There is
+  no z projection mode because mesh vertices and reference curves store only x/y.
+- Vertex projection moves only the selected vertices. Edge projection moves both
+  endpoint vertices; it also projects every stored interpolation point for arc,
+  polyLine, and spline edges. A projected arc remains an arc when its endpoints
+  and interpolation point define a circle. If those three points become
+  collinear, it converts to a through-point spline so the projected point is not
+  discarded. Projection computes every new point before mutating the topology,
+  validates once at the end, rolls back all coordinates and edge geometry on any
+  failure, and records a successful operation as one history action.
+- Projection's edge-only `fit` option replaces every selected edge geometry with
+  a spline over the reference-curve section bounded by its two projected
+  endpoints. The endpoints must resolve to the same reference curve. Open curves
+  have one section; for closed curves, compare both sections to samples of the
+  original edge and reject an equal-score ambiguity. The fitter first tries the
+  reference section's native knots, then adds candidate through-points one at a
+  time using a cheap maximum-distance proxy; bounded checkpoints measure the
+  symmetric geometric deviation in both directions by sampling the curves and
+  solving point-to-cubic closest locations. A uniformly spaced candidate guards
+  against Catmull-Rom degradation from badly unbalanced point spacing. The GUI
+  exposes a positive relative tolerance and a per-edge interpolation-point cap,
+  defaulting to `1e-8` and 250. Absolute tolerance is
+  `max(1e-12, relativeTolerance * sectionScale)`. Hitting the cap returns the best
+  measured fit rather than rejecting the operation. Candidate paths whose
+  adjacent points are within the model coordinate tolerance are discarded before
+  ranking, preventing a numerically crowded fit from failing later spline
+  validation. `ProjectionResult` reports the maximum measured distance, absolute
+  target, and whether every fitted edge met its target. Fit calculation, endpoint
+  movement, edge replacement, topology validation, and history recording remain
+  one atomic operation. Canvas rendering decimates only the markers and labels of
+  point lists above 250 entries, always retaining the selected marker; model,
+  session, and export data stay complete.
 
 - A block stores four distinct vertex IDs in counter-clockwise order and must
   remain strictly convex.
@@ -68,6 +133,12 @@ extension points for those features instead of encoding them in the canvas widge
 - `MeshModel.edge_point()` evaluates lines and arcs geometrically. For polyLines,
   its parameter is cumulative path length. Splines use OpenFOAM's
   through-point Catmull-Rom interpolation with chord-length segment parameters.
+  Block interiors are intentionally not filled on the canvas: topology is drawn
+  as edge outlines so curved edges are not contradicted by a straight-sided
+  polygon fill and the background grid remains visible through every block.
+  Canvas spline strokes sample every Catmull-Rom span and retain every stored
+  interpolation point; never replace this with a fixed sample count over the
+  complete edge because fitted splines may contain hundreds of spans.
 - Selecting any curved type creates a deterministic point offset outward from the
   first incident block. GUI points are purple; point-list types are numbered in
   their canonical edge-path order. Points can be selected, moved, inserted, and
@@ -75,6 +146,10 @@ extension points for those features instead of encoding them in the canvas widge
   count and distributes the points at equal fractions of the straight vertex-to-
   vertex chord. Each button/property mutation is one history action; a complete
   point drag is recorded once on mouse release.
+- Point-list edges expose a positive interpolation-point count. Changing it
+  replaces the existing list with that many points at equal fractions of the
+  straight endpoint chord, matching Reset semantics, and records one history
+  action.
 - Opposite edges of every quadrilateral must have the same cell count. Calling
   `MeshModel.set_edge_cells()` updates the complete transitive constraint
   component, including shared edges in neighboring blocks.
@@ -130,12 +205,31 @@ Session files contain a format marker and integer version. Version 2 adds an
 `edgeGeometry` array whose entries contain `vertices`, `type`, and an ordered
 `points` array. Version 3 adds an `edgeGrading` array containing canonical vertex
 pairs and non-uniform `expansionRatio` values. Version 4 adds ordered `boundaries`
-and `edgeBoundaries` arrays. Version 1 straight-edge sessions migrate with empty
-geometry; versions 1 and 2 migrate with uniform grading; versions 1–3 migrate
-with no named boundaries. Add
+and `edgeBoundaries` arrays. Version 5 adds `geometryCurves`, containing stable
+IDs, names, ordered 2D point lists, and per-curve `showPoints` flags. A missing
+`showPoints` field in an early version 5 file defaults to true. Version 1
+straight-edge sessions migrate with empty geometry; versions 1 and 2 migrate with
+uniform grading; versions 1–3 migrate with no named boundaries; versions 1–4
+migrate with no reference geometry. Add
 migrations (or a clear unsupported-version error) when the shape changes; never
 silently reinterpret old data. JSON is a project/session format, not an OpenFOAM
 format.
+
+Application preferences are separate from mesh sessions. They use JSON format
+`blockDrawerConfig`, version 1, at `~/.blockdrawer` on Linux and macOS, and
+`%APPDATA%/BlockDrawer/config.json` on Windows. The file is created with complete
+defaults on first launch. `ui.scale` is `auto` or a multiplier from 0.5 to 4;
+`ui.showBlockMesh` and `ui.showGeometry` persist the independent canvas layers;
+`ui.showEdgeNodes` and `ui.showEdgeInterpolationPoints` independently persist
+the mesh-subdivision and curved-edge control markers. All are saved when changed
+through the View menu. Geometry-layer visibility is the configurable
+`toggle_geometry` action and defaults to `G`. `shortcuts` maps every application
+action to a list of readable combinations such as `Ctrl+S`, `Cmd+Z`, `Delete`,
+`B`, `G`, or `P`; an empty list disables that action. Missing actions inherit
+current platform defaults so newer releases can add actions compatibly. Unknown
+actions, invalid combinations, and duplicate combinations are rejected without
+preventing the GUI from starting; the invalid file is left untouched and
+defaults are used for that run.
 
 Every 2D vertex, including a standalone one, is emitted at both z planes. Each
 non-straight 2D edge is emitted twice: `arc` uses its single point and
@@ -153,6 +247,14 @@ in OpenFOAM's default patch.
 - Route every new mutation through the application history and add a history test.
 - Preserve automatic Tk/OS DPI scaling. Custom canvas dimensions must use the
   application's display scale; manual UI scale is layered on top of system DPI.
+- Keep shortcut dispatch centralized and config-driven. Menu accelerator labels
+  use the first configured combination, and focus guards for editing-oriented
+  actions remain in the action handlers rather than the config parser.
+- Editable property entries confirm through the same mutation callback as their
+  Set/Apply button on both Return and keypad Enter.
+- Text-input class bindings make Ctrl+A select all on every platform (and Cmd+A
+  on macOS), overriding Tk's X11 cursor-to-start default without affecting the
+  canvas.
 - Add or adjust headless tests for every topology or serialization change.
 - Do not call OpenFOAM during normal editing; export is cheap and deterministic.
 - Before changing vertex ordering, verify both block orientation and OpenFOAM hex

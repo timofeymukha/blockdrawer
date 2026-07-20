@@ -10,6 +10,7 @@ from .model import (
     Block,
     Boundary,
     EdgeGeometry,
+    GeometryCurve,
     MeshModel,
     TopologyError,
     Vertex,
@@ -18,7 +19,7 @@ from .model import (
 
 
 FORMAT_NAME = "blockDrawer"
-FORMAT_VERSION = 4
+FORMAT_VERSION = 5
 
 
 class SessionError(ValueError):
@@ -43,6 +44,18 @@ def to_data(model: MeshModel) -> dict[str, Any]:
         "blocks": [
             {"id": block.id, "vertices": list(block.vertices)}
             for block in model.blocks
+        ],
+        "geometryCurves": [
+            {
+                "id": curve.id,
+                "name": curve.name,
+                "showPoints": curve.show_points,
+                "points": [
+                    {"x": point[0], "y": point[1]}
+                    for point in curve.points
+                ],
+            }
+            for curve in model.geometry_curves.values()
         ],
         "edgeCells": [
             {"vertices": list(current), "cells": model.edge_cells[current]}
@@ -98,7 +111,7 @@ def from_data(data: Any) -> MeshModel:
         if data.get("format") != FORMAT_NAME:
             raise SessionError("This is not a BlockDrawer session")
         version = data.get("version")
-        if version not in (1, 2, 3, FORMAT_VERSION):
+        if version not in (1, 2, 3, 4, FORMAT_VERSION):
             raise SessionError(
                 f"Unsupported BlockDrawer session version {version!r}"
             )
@@ -114,6 +127,9 @@ def from_data(data: Any) -> MeshModel:
         boundaries_data = [] if version in (1, 2, 3) else _list(data, "boundaries")
         edge_boundaries_data = (
             [] if version in (1, 2, 3) else _list(data, "edgeBoundaries")
+        )
+        geometry_curves_data = (
+            [] if version in (1, 2, 3, 4) else _list(data, "geometryCurves")
         )
 
         model = MeshModel(initialize=False)
@@ -140,6 +156,27 @@ def from_data(data: Any) -> MeshModel:
                     f"Block {identifier!r} must contain four vertex IDs"
                 )
             model.blocks.append(Block(identifier, tuple(vertex_ids)))  # type: ignore[arg-type]
+
+        for item in geometry_curves_data:
+            if not isinstance(item, dict):
+                raise SessionError("Each geometry curve must be an object")
+            identifier = _string(item, "id")
+            if identifier in model.geometry_curves:
+                raise SessionError(f"Duplicate geometry curve ID {identifier!r}")
+            points_data = _list(item, "points")
+            points: list[tuple[float, float]] = []
+            for point in points_data:
+                if not isinstance(point, dict):
+                    raise SessionError(
+                        "Each geometry curve point must be an object"
+                    )
+                points.append((_number(point, "x"), _number(point, "y")))
+            model.geometry_curves[identifier] = GeometryCurve(
+                identifier,
+                _string(item, "name"),
+                tuple(points),
+                _optional_boolean(item, "showPoints", True),
+            )
 
         for item in cells_data:
             if not isinstance(item, dict):
@@ -279,4 +316,13 @@ def _integer(data: dict[str, Any], key: str) -> int:
     value = data.get(key)
     if isinstance(value, bool) or not isinstance(value, int):
         raise SessionError(f"{key!r} must be an integer")
+    return value
+
+
+def _optional_boolean(
+    data: dict[str, Any], key: str, default: bool
+) -> bool:
+    value = data.get(key, default)
+    if not isinstance(value, bool):
+        raise SessionError(f"{key!r} must be true or false")
     return value

@@ -1,7 +1,7 @@
 import math
 import unittest
 
-from blockdrawer.model import MeshModel, TopologyError, edge_key
+from blockdrawer.model import EdgeGeometry, MeshModel, TopologyError, edge_key
 from tests.helpers import (
     build_ring_model,
     center_vertex_ids,
@@ -350,6 +350,32 @@ class MeshModelTests(unittest.TestCase):
         self.assertNotEqual(model.edge_point(selected, 0.5)[1], 0.0)
         model.validate()
 
+    def test_spline_rendering_samples_every_span_and_retains_all_points(
+        self,
+    ) -> None:
+        model = MeshModel()
+        selected = edge_key("v0", "v1")
+        control_points = tuple(
+            (
+                index / 601.0,
+                -0.2 * math.sin(math.pi * index / 601.0),
+            )
+            for index in range(1, 601)
+        )
+        model.edge_geometry[selected] = EdgeGeometry(
+            "spline", control_points
+        )
+        model.validate()
+
+        rendered = model.edge_render_points(
+            selected, spline_samples_per_span=4
+        )
+        path = ((0.0, 0.0), *control_points, (1.0, 0.0))
+
+        self.assertEqual(len(rendered), (len(path) - 1) * 4 + 1)
+        for index, point in enumerate(path):
+            self.assertEqual(rendered[index * 4], point)
+
     def test_spline_supports_add_remove_and_reset(self) -> None:
         model = MeshModel()
         selected = edge_key("v0", "v1")
@@ -366,6 +392,44 @@ class MeshModelTests(unittest.TestCase):
         model.remove_edge_control_point(selected, 1)
         with self.assertRaisesRegex(TopologyError, "at least one"):
             model.remove_edge_control_point(selected, 0)
+
+    def test_point_list_count_is_resized_on_equidistant_chord_positions(
+        self,
+    ) -> None:
+        for kind in ("polyLine", "spline"):
+            with self.subTest(kind=kind):
+                model = MeshModel()
+                selected = edge_key("v0", "v1")
+                model.set_edge_type(selected, kind)
+                model.set_edge_control_point(selected, 0, 0.4, -0.5)
+
+                model.set_edge_control_point_count(selected, 3)
+
+                self.assertEqual(
+                    model.edge_control_points(selected),
+                    ((0.25, 0.0), (0.5, 0.0), (0.75, 0.0)),
+                )
+                model.set_edge_control_point_count(selected, 1)
+                self.assertEqual(
+                    model.edge_control_points(selected), ((0.5, 0.0),)
+                )
+                model.validate()
+
+    def test_point_list_count_rejects_invalid_values_and_edge_types(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v0", "v1")
+        model.set_edge_type(selected, "spline")
+        before = model.edge_control_points(selected)
+
+        for value in (0, -1, True, 1.5):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(TopologyError, "positive integer"):
+                    model.set_edge_control_point_count(selected, value)
+                self.assertEqual(model.edge_control_points(selected), before)
+
+        model.set_edge_type(selected, "arc")
+        with self.assertRaisesRegex(TopologyError, "point-list"):
+            model.set_edge_control_point_count(selected, 2)
 
     def test_polyline_rejects_coincident_adjacent_point_and_rolls_back(self) -> None:
         model = MeshModel()

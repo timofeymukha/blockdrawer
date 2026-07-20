@@ -6,6 +6,16 @@ from blockdrawer.model import MeshModel, TopologyError, edge_key
 
 
 class FoamExportTests(unittest.TestCase):
+    def test_reference_geometry_is_not_exported(self) -> None:
+        model = MeshModel()
+        baseline = block_mesh_dict(model)
+        model.add_geometry_curve(
+            ((-1.0, 0.0), (0.5, 2.0), (2.0, 0.0)),
+            name="guide",
+        )
+
+        self.assertEqual(block_mesh_dict(model), baseline)
+
     def test_single_block_export_has_extruded_vertices_and_hex(self) -> None:
         model = MeshModel()
         model.set_edge_cells(edge_key("v0", "v1"), 12)

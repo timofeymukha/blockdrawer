@@ -217,6 +217,35 @@ class OpenFoamIntegrationTests(unittest.TestCase):
         ]
         self._assert_block_mesh_accepts(model, expected_points=expected_nodes)
 
+    def test_block_mesh_accepts_arc_converted_by_projection(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v0", "v1")
+        model.set_edge_type(selected, "arc")
+        target = model.add_geometry_curve(((-1.0, -0.25), (2.0, -0.25)))
+
+        result = model.project_to_geometry(
+            (target.id,), "y", edges=(selected,)
+        )
+
+        self.assertEqual(result.converted_arcs, (selected,))
+        self.assertEqual(model.edge_type(selected), "spline")
+        self._assert_block_mesh_accepts(model)
+
+    def test_block_mesh_accepts_spline_created_by_fitted_projection(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v0", "v1")
+        target = model.add_geometry_curve(
+            ((0.0, -0.2), (0.5, -0.4), (1.0, -0.2))
+        )
+
+        result = model.project_to_geometry(
+            (target.id,), "y", edges=(selected,), fit=True
+        )
+
+        self.assertEqual(result.fitted_edges, (selected,))
+        self.assertEqual(model.edge_type(selected), "spline")
+        self._assert_block_mesh_accepts(model)
+
     def _assert_block_mesh_accepts(
         self,
         model: MeshModel,
