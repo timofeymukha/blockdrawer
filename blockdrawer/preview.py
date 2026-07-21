@@ -8,6 +8,7 @@ from typing import Hashable
 
 from .domain import Block, EdgeKey, TopologyError, edge_key
 from .model import MeshModel
+from .render_cache import Bounds, points_bounds
 
 
 Point = tuple[float, float]
@@ -19,6 +20,7 @@ class MeshPreview:
     """A lightweight collection of per-block interior mesh lines."""
 
     polylines: tuple[Polyline, ...]
+    polyline_bounds: tuple[Bounds, ...]
     block_count: int
     sampled_node_count: int
     coarsening: int
@@ -101,8 +103,10 @@ def build_mesh_preview(model: MeshModel, coarsening: int = 1) -> MeshPreview:
         )
         polylines.extend(block_lines)
         sampled_node_count += node_count
+    sampled_polylines = tuple(polylines)
     return MeshPreview(
-        tuple(polylines),
+        sampled_polylines,
+        tuple(points_bounds(polyline) for polyline in sampled_polylines),
         len(model.blocks),
         sampled_node_count,
         coarsening,

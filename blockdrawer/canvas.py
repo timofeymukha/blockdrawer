@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import math
 from time import perf_counter
 import tkinter as tk
@@ -9,6 +10,7 @@ from tkinter import font as tkfont
 
 from .config import ConfigError, save_config
 from .model import EdgeKey, MeshModel, TopologyError
+from .render_cache import bounds_intersect, point_in_bounds
 from .ui_helpers import (
     CURVE_RENDER_SEGMENTS,
     GEOMETRY_SAMPLES_PER_SPAN,
@@ -24,16 +26,47 @@ from .ui_helpers import (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class _CanvasTransform:
+    """One viewport's cached affine world/screen coordinate transform."""
+
+    width: int
+    height: int
+    view_x: float
+    view_y: float
+    pixels_per_unit: float
+
+    def world_to_screen(self, x: float, y: float) -> tuple[float, float]:
+        return (
+            self.width / 2.0 + (x - self.view_x) * self.pixels_per_unit,
+            self.height / 2.0 - (y - self.view_y) * self.pixels_per_unit,
+        )
+
+    def screen_to_world(self, x: float, y: float) -> tuple[float, float]:
+        return (
+            self.view_x + (x - self.width / 2.0) / self.pixels_per_unit,
+            self.view_y - (y - self.height / 2.0) / self.pixels_per_unit,
+        )
+
+
 class CanvasControllerMixin:
     """Draw and interact with topology and reference geometry on the canvas."""
+
+    VIEWPORT_REDRAW_INTERVAL_MS = 16
+    VIEWPORT_CULL_PADDING_PIXELS = 40
 
     def redraw(self) -> None:
         if not hasattr(self, "canvas"):
             return
+        self._cancel_viewport_redraw()
         self.canvas.delete("all")
         self.item_targets.clear()
-        width = max(self.canvas.winfo_width(), 1)
-        height = max(self.canvas.winfo_height(), 1)
+        transform = self._refresh_canvas_transform()
+        width = transform.width
+        height = transform.height
+        self._redraw_world_bounds = self._viewport_world_bounds(transform)
+        edges = self.model.edges()
+        self.render_path_cache.prune(edges, self.model.geometry_curves)
         self._draw_grid(width, height)
         if self.show_mesh_preview_var.get():
             self._draw_mesh_preview()
@@ -42,7 +75,17 @@ class CanvasControllerMixin:
                 self._draw_geometry_curves()
             return
 
-        for current in self.model.edges():
+        for current in edges:
+            render_path = self.render_path_cache.edge_path(
+                self.model,
+                current,
+                arc_segments=CURVE_RENDER_SEGMENTS,
+                spline_samples_per_span=SPLINE_SAMPLES_PER_SPAN,
+            )
+            if not bounds_intersect(
+                render_path.bounds, self._redraw_world_bounds
+            ):
+                continue
             selected = current == self.selected_edge
             projection_selected = current in self.projection_edges
             boundary_name = self.model.edge_boundaries.get(current)
@@ -64,12 +107,7 @@ class CanvasControllerMixin:
             )
             edge_type = self.model.edge_type(current)
             screen_points: list[float] = []
-            render_points = self.model.edge_render_points(
-                current,
-                arc_segments=CURVE_RENDER_SEGMENTS,
-                spline_samples_per_span=SPLINE_SAMPLES_PER_SPAN,
-            )
-            for world_x, world_y in render_points:
+            for world_x, world_y in render_path.points:
                 screen_points.extend(self.world_to_screen(world_x, world_y))
             line = self.canvas.create_line(
                 *screen_points,
@@ -86,15 +124,19 @@ class CanvasControllerMixin:
                 self._draw_edge_nodes(current, color)
 
             midpoint_world = self.model.edge_point(current, 0.5)
-            midpoint_x, midpoint_y = self.world_to_screen(*midpoint_world)
-            label = self.canvas.create_text(
-                midpoint_x,
-                midpoint_y - self._px(11),
-                text=f"{self.model.edge_cells[current]}",
-                fill=boundary_color or ("#9c3d10" if selected else "#52606d"),
-                font=self._font(9, "bold" if selected else "normal"),
-            )
-            self.item_targets[label] = ("edge", current)
+            if point_in_bounds(midpoint_world, self._redraw_world_bounds):
+                midpoint_x, midpoint_y = self.world_to_screen(*midpoint_world)
+                label = self.canvas.create_text(
+                    midpoint_x,
+                    midpoint_y - self._px(11),
+                    text=f"{self.model.edge_cells[current]}",
+                    fill=(
+                        boundary_color
+                        or ("#9c3d10" if selected else "#52606d")
+                    ),
+                    font=self._font(9, "bold" if selected else "normal"),
+                )
+                self.item_targets[label] = ("edge", current)
 
             control_points = (
                 self.model.edge_control_points(current)
@@ -111,6 +153,10 @@ class CanvasControllerMixin:
                 len(control_points), selected_point_index
             ):
                 point_x, point_y = control_points[point_index]
+                if not point_in_bounds(
+                    (point_x, point_y), self._redraw_world_bounds
+                ):
+                    continue
                 control_x, control_y = self.world_to_screen(point_x, point_y)
                 point_selected = selected \
                     and point_index == self.selected_control_point_index
@@ -142,6 +188,10 @@ class CanvasControllerMixin:
                     )
 
         for identifier, vertex in self.model.vertices.items():
+            if not point_in_bounds(
+                (vertex.x, vertex.y), self._redraw_world_bounds
+            ):
+                continue
             x, y = self.world_to_screen(vertex.x, vertex.y)
             selected = identifier == self.selected_vertex
             projection_selected = identifier in self.projection_vertex_ids
@@ -198,7 +248,15 @@ class CanvasControllerMixin:
             self.model, self.preferences.preview_coarsening
         )
         data_ms = (perf_counter() - started) * 1000.0
-        for polyline in preview.polylines:
+        visible_bounds = getattr(self, "_redraw_world_bounds", None)
+        visible_line_count = 0
+        for polyline, polyline_bounds in zip(
+            preview.polylines, preview.polyline_bounds
+        ):
+            if visible_bounds is not None \
+                    and not bounds_intersect(polyline_bounds, visible_bounds):
+                continue
+            visible_line_count += 1
             screen_points: list[float] = []
             for world_x, world_y in polyline:
                 screen_points.extend(self.world_to_screen(world_x, world_y))
@@ -216,7 +274,7 @@ class CanvasControllerMixin:
         self.mesh_preview_info_var.set(
             f"{preview.block_count} block"
             f"{'s' if preview.block_count != 1 else ''} · "
-            f"{preview.line_count} interior lines · "
+            f"{visible_line_count}/{preview.line_count} visible interior lines · "
             f"{preview.sampled_node_count} sampled nodes · {cache_label}."
         )
 
@@ -227,6 +285,11 @@ class CanvasControllerMixin:
         world_x, world_y = self.model.edge_point(
             self.split_edge_active, self.split_fraction
         )
+        visible_bounds = getattr(self, "_redraw_world_bounds", None)
+        if visible_bounds is not None and not point_in_bounds(
+            (world_x, world_y), visible_bounds
+        ):
+            return
         x, y = self.world_to_screen(world_x, world_y)
         radius = self._px(10)
         marker = self.canvas.create_polygon(
@@ -253,13 +316,21 @@ class CanvasControllerMixin:
         )
 
     def _draw_geometry_curves(self) -> None:
+        visible_bounds = getattr(self, "_redraw_world_bounds", None)
         for curve_id, curve in self.model.geometry_curves.items():
+            render_path = self.render_path_cache.geometry_path(
+                self.model,
+                curve_id,
+                samples_per_span=GEOMETRY_SAMPLES_PER_SPAN,
+            )
+            if visible_bounds is not None and not bounds_intersect(
+                render_path.bounds, visible_bounds
+            ):
+                continue
             selected = curve_id == self.selected_geometry_curve
             projection_selected = curve_id in self.projection_curve_ids
             screen_points: list[float] = []
-            for world_point in self.model.geometry_curve_render_points(
-                curve_id, samples_per_span=GEOMETRY_SAMPLES_PER_SPAN
-            ):
+            for world_point in render_path.points:
                 screen_points.extend(self.world_to_screen(*world_point))
             line = self.canvas.create_line(
                 *screen_points,
@@ -273,23 +344,30 @@ class CanvasControllerMixin:
             )
             self.item_targets[line] = ("geometry_curve", curve_id)
 
-            label_x, label_y = self.world_to_screen(
-                *self.model.geometry_curve_point(curve_id, 0.5)
-            )
-            label = self.canvas.create_text(
-                label_x,
-                label_y - self._px(13),
-                text=curve.name,
-                fill="#087f5b" if projection_selected else "#006d77",
-                font=self._font(
-                    9, "bold" if selected or projection_selected else "normal"
-                ),
-            )
-            self.item_targets[label] = ("geometry_curve", curve_id)
+            label_point = self.model.geometry_curve_point(curve_id, 0.5)
+            if visible_bounds is None or point_in_bounds(
+                label_point, visible_bounds
+            ):
+                label_x, label_y = self.world_to_screen(*label_point)
+                label = self.canvas.create_text(
+                    label_x,
+                    label_y - self._px(13),
+                    text=curve.name,
+                    fill="#087f5b" if projection_selected else "#006d77",
+                    font=self._font(
+                        9,
+                        "bold" if selected or projection_selected else "normal",
+                    ),
+                )
+                self.item_targets[label] = ("geometry_curve", curve_id)
 
             if not curve.show_points:
                 continue
             for point_index, (point_x, point_y) in enumerate(curve.points):
+                if visible_bounds is not None and not point_in_bounds(
+                    (point_x, point_y), visible_bounds
+                ):
+                    continue
                 x, y = self.world_to_screen(point_x, point_y)
                 point_selected = selected \
                     and point_index == self.selected_geometry_point_index
@@ -321,9 +399,14 @@ class CanvasControllerMixin:
         if cells <= 1:
             return
         stride = max(1, math.ceil((cells - 1) / MAX_VISIBLE_EDGE_MARKERS))
+        visible_bounds = getattr(self, "_redraw_world_bounds", None)
         for index in range(stride, cells, stride):
             ratio = self.model.edge_node_fraction(current, index)
             world_x, world_y = self.model.edge_point(current, ratio)
+            if visible_bounds is not None and not point_in_bounds(
+                (world_x, world_y), visible_bounds
+            ):
+                continue
             x, y = self.world_to_screen(world_x, world_y)
             item = self.canvas.create_oval(
                 x - self._px(2.4),
@@ -393,20 +476,73 @@ class CanvasControllerMixin:
         )
 
     def world_to_screen(self, x: float, y: float) -> tuple[float, float]:
-        width = max(self.canvas.winfo_width(), 1)
-        height = max(self.canvas.winfo_height(), 1)
-        return (
-            width / 2.0 + (x - self.view_x) * self.pixels_per_unit,
-            height / 2.0 - (y - self.view_y) * self.pixels_per_unit,
-        )
+        return self._current_canvas_transform().world_to_screen(x, y)
 
     def screen_to_world(self, x: float, y: float) -> tuple[float, float]:
-        width = max(self.canvas.winfo_width(), 1)
-        height = max(self.canvas.winfo_height(), 1)
-        return (
-            self.view_x + (x - width / 2.0) / self.pixels_per_unit,
-            self.view_y - (y - height / 2.0) / self.pixels_per_unit,
+        return self._current_canvas_transform().screen_to_world(x, y)
+
+    def _current_canvas_transform(self) -> _CanvasTransform:
+        transform = getattr(self, "_canvas_transform", None)
+        if transform is None \
+                or transform.view_x != self.view_x \
+                or transform.view_y != self.view_y \
+                or transform.pixels_per_unit != self.pixels_per_unit:
+            return self._refresh_canvas_transform()
+        return transform
+
+    def _refresh_canvas_transform(self) -> _CanvasTransform:
+        transform = _CanvasTransform(
+            max(self.canvas.winfo_width(), 1),
+            max(self.canvas.winfo_height(), 1),
+            self.view_x,
+            self.view_y,
+            self.pixels_per_unit,
         )
+        self._canvas_transform = transform
+        return transform
+
+    def _viewport_world_bounds(
+        self, transform: _CanvasTransform
+    ) -> tuple[float, float, float, float]:
+        padding = self._px(self.VIEWPORT_CULL_PADDING_PIXELS)
+        first = transform.screen_to_world(-padding, -padding)
+        second = transform.screen_to_world(
+            transform.width + padding,
+            transform.height + padding,
+        )
+        return (
+            min(first[0], second[0]),
+            min(first[1], second[1]),
+            max(first[0], second[0]),
+            max(first[1], second[1]),
+        )
+
+    def _request_viewport_redraw(self) -> None:
+        """Coalesce viewport events into at most one redraw per frame."""
+        if getattr(self, "_viewport_redraw_after_id", None) is not None:
+            return
+        self._viewport_redraw_after_id = self.root.after(
+            self.VIEWPORT_REDRAW_INTERVAL_MS,
+            self._flush_viewport_redraw,
+        )
+
+    def _flush_viewport_redraw(self) -> None:
+        self._viewport_redraw_after_id = None
+        self.redraw()
+
+    def _cancel_viewport_redraw(self) -> None:
+        after_id = getattr(self, "_viewport_redraw_after_id", None)
+        if after_id is None:
+            return
+        self._viewport_redraw_after_id = None
+        try:
+            self.root.after_cancel(after_id)
+        except tk.TclError:
+            # The timer may already be dispatching during shutdown.
+            pass
+
+    def _on_canvas_configure(self, _event: tk.Event) -> None:
+        self._request_viewport_redraw()
 
     def fit_view(self) -> None:
         self.root.update_idletasks()
@@ -419,11 +555,13 @@ class CanvasControllerMixin:
                 for x, y in self.model.edge_control_points(current):
                     xs.append(x)
                     ys.append(y)
-                for x, y in self.model.edge_render_points(
+                render_path = self.render_path_cache.edge_path(
+                    self.model,
                     current,
                     arc_segments=CURVE_RENDER_SEGMENTS,
                     spline_samples_per_span=SPLINE_SAMPLES_PER_SPAN,
-                ):
+                )
+                for x, y in render_path.points:
                     xs.append(x)
                     ys.append(y)
         if self.show_geometry_var.get():
@@ -431,10 +569,12 @@ class CanvasControllerMixin:
                 for x, y in curve.points:
                     xs.append(x)
                     ys.append(y)
-                for x, y in self.model.geometry_curve_render_points(
+                render_path = self.render_path_cache.geometry_path(
+                    self.model,
                     curve_id,
                     samples_per_span=GEOMETRY_SAMPLES_PER_SPAN,
-                ):
+                )
+                for x, y in render_path.points:
                     xs.append(x)
                     ys.append(y)
         if not xs:
@@ -885,13 +1025,22 @@ class CanvasControllerMixin:
     def _on_pan_drag(self, event: tk.Event) -> None:
         if self.pan_anchor is None:
             return
+        transform = self._current_canvas_transform()
         start_x, start_y, center_x, center_y = self.pan_anchor
         self.view_x = center_x - (event.x - start_x) / self.pixels_per_unit
         self.view_y = center_y + (event.y - start_y) / self.pixels_per_unit
-        self.redraw()
+        self._canvas_transform = _CanvasTransform(
+            transform.width,
+            transform.height,
+            self.view_x,
+            self.view_y,
+            self.pixels_per_unit,
+        )
+        self._request_viewport_redraw()
 
     def _on_mousewheel(self, event: tk.Event) -> None:
-        before_x, before_y = self.screen_to_world(event.x, event.y)
+        transform = self._current_canvas_transform()
+        before_x, before_y = transform.screen_to_world(event.x, event.y)
         if getattr(event, "num", None) == 4 or getattr(event, "delta", 0) > 0:
             factor = 1.15
         else:
@@ -903,8 +1052,15 @@ class CanvasControllerMixin:
                 self.pixels_per_unit * factor,
             ),
         )
-        width = max(self.canvas.winfo_width(), 1)
-        height = max(self.canvas.winfo_height(), 1)
+        width = transform.width
+        height = transform.height
         self.view_x = before_x - (event.x - width / 2.0) / self.pixels_per_unit
         self.view_y = before_y + (event.y - height / 2.0) / self.pixels_per_unit
-        self.redraw()
+        self._canvas_transform = _CanvasTransform(
+            width,
+            height,
+            self.view_x,
+            self.view_y,
+            self.pixels_per_unit,
+        )
+        self._request_viewport_redraw()

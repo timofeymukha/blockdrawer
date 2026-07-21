@@ -25,6 +25,7 @@ from .model import EdgeKey, MeshModel, TopologyError
 from .panels import PropertiesPanelMixin
 from .preview import MeshPreviewCache
 from .projection import DEFAULT_FIT_MAX_POINTS, FIT_RELATIVE_TOLERANCE
+from .render_cache import RenderPathCache
 from .session import SessionError, load_session, save_session
 from .ui_helpers import (
     display_grading_number as _display_grading_number,
@@ -76,6 +77,7 @@ class BlockDrawerApp(
         self.drag_changed = False
         self.last_pressed_target: tuple[str, object] | None = None
         self.pan_anchor: tuple[float, float, float, float] | None = None
+        self._viewport_redraw_after_id: str | None = None
 
         self.config_path = default_config_path()
         self.config_warning: str | None = None
@@ -118,6 +120,7 @@ class BlockDrawerApp(
         # One entry guarantees instant re-entry without retaining several
         # potentially large sampled grids after resolution or topology changes.
         self.mesh_preview_cache = MeshPreviewCache(capacity=1)
+        self.render_path_cache = RenderPathCache()
         self.edge_grading_propagate_var = tk.BooleanVar(value=False)
         self.default_font_family = tkfont.nametofont(
             "TkDefaultFont", root=self.root
@@ -343,7 +346,7 @@ class BlockDrawerApp(
         self.root.bind("<MouseWheel>", self._on_sidebar_mousewheel, add="+")
         self.root.bind("<Button-4>", self._on_sidebar_mousewheel, add="+")
         self.root.bind("<Button-5>", self._on_sidebar_mousewheel, add="+")
-        self.canvas.bind("<Configure>", lambda _event: self.redraw())
+        self.canvas.bind("<Configure>", self._on_canvas_configure)
 
         self._bind_text_editing_shortcuts()
         self._bind_configured_shortcuts()

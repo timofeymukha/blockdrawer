@@ -15,6 +15,7 @@ from blockdrawer.ui_helpers import (
 from blockdrawer.config import default_config
 from blockdrawer.model import MeshModel, edge_key
 from blockdrawer.preview import MeshPreviewCache
+from blockdrawer.render_cache import RenderPathCache
 
 
 class FakeStringVar:
@@ -59,7 +60,203 @@ class FakeSelectableEntry:
         self.cursor = index
 
 
+class CountingSizeCanvas:
+    def __init__(self, width: int = 800, height: int = 600) -> None:
+        self.width = width
+        self.height = height
+        self.width_calls = 0
+        self.height_calls = 0
+
+    def winfo_width(self) -> int:
+        self.width_calls += 1
+        return self.width
+
+    def winfo_height(self) -> int:
+        self.height_calls += 1
+        return self.height
+
+
+class RecordingCanvas(CountingSizeCanvas):
+    def __init__(self, width: int = 800, height: int = 600) -> None:
+        super().__init__(width, height)
+        self.created: list[str] = []
+
+    def delete(self, _tag: str) -> None:
+        self.created.clear()
+
+    def _create(self, kind: str) -> int:
+        self.created.append(kind)
+        return len(self.created)
+
+    def create_line(self, *_args, **_options) -> int:
+        return self._create("line")
+
+    def create_text(self, *_args, **_options) -> int:
+        return self._create("text")
+
+    def create_oval(self, *_args, **_options) -> int:
+        return self._create("oval")
+
+    def create_rectangle(self, *_args, **_options) -> int:
+        return self._create("rectangle")
+
+    def create_polygon(self, *_args, **_options) -> int:
+        return self._create("polygon")
+
+
+class FakeAfterRoot:
+    def __init__(self) -> None:
+        self.scheduled: dict[str, tuple[int, object]] = {}
+        self.after_calls = 0
+        self.cancelled: list[str] = []
+
+    def after(self, delay: int, callback) -> str:
+        identifier = f"after#{self.after_calls}"
+        self.after_calls += 1
+        self.scheduled[identifier] = (delay, callback)
+        return identifier
+
+    def after_cancel(self, identifier: str) -> None:
+        self.cancelled.append(identifier)
+        self.scheduled.pop(identifier, None)
+
+    def run(self, identifier: str) -> None:
+        _delay, callback = self.scheduled.pop(identifier)
+        callback()
+
+
 class DpiScalingTests(unittest.TestCase):
+    def test_redraw_culls_topology_completely_outside_viewport(self) -> None:
+        app = BlockDrawerApp.__new__(BlockDrawerApp)
+        app.root = FakeAfterRoot()
+        app._viewport_redraw_after_id = None
+        app.canvas = RecordingCanvas()
+        app.item_targets = {}
+        app.model = MeshModel()
+        app.render_path_cache = RenderPathCache()
+        app.view_x = 100.0
+        app.view_y = 100.0
+        app.pixels_per_unit = 100.0
+        app.display_scale = 1.0
+        app.ui_scale_multiplier = 1.0
+        app.default_font_family = "TkDefaultFont"
+        app.show_mesh_preview_var = FakeStringVar(False)
+        app.show_block_mesh_var = FakeStringVar(True)
+        app.show_geometry_var = FakeStringVar(False)
+        app.show_edge_nodes_var = FakeStringVar(True)
+        app.show_edge_interpolation_points_var = FakeStringVar(True)
+        app.selected_edge = None
+        app.selected_vertex = None
+        app.selected_control_point_index = None
+        app.projection_edges = []
+        app.projection_vertex_ids = []
+        app.block_vertex_selection = None
+        app.boundary_mode_active = False
+        app.active_boundary_name = None
+        app.split_edge_active = None
+        app._draw_grid = lambda _width, _height: None
+
+        app.redraw()
+
+        self.assertEqual(app.canvas.created, [])
+
+        app.view_x = 0.5
+        app.view_y = 0.5
+        app.redraw()
+        self.assertGreater(len(app.canvas.created), 0)
+
+    def test_viewport_redraw_requests_are_coalesced_per_frame(self) -> None:
+        app = BlockDrawerApp.__new__(BlockDrawerApp)
+        app.root = FakeAfterRoot()
+        app._viewport_redraw_after_id = None
+        redraws: list[bool] = []
+        app.redraw = lambda: redraws.append(True)
+
+        for _index in range(20):
+            app._request_viewport_redraw()
+
+        self.assertEqual(app.root.after_calls, 1)
+        self.assertEqual(redraws, [])
+        after_id = app._viewport_redraw_after_id
+        self.assertIsNotNone(after_id)
+        assert after_id is not None
+        self.assertEqual(
+            app.root.scheduled[after_id][0],
+            app.VIEWPORT_REDRAW_INTERVAL_MS,
+        )
+
+        app.root.run(after_id)
+
+        self.assertEqual(redraws, [True])
+        self.assertIsNone(app._viewport_redraw_after_id)
+
+    def test_pending_viewport_redraw_can_be_cancelled(self) -> None:
+        app = BlockDrawerApp.__new__(BlockDrawerApp)
+        app.root = FakeAfterRoot()
+        app._viewport_redraw_after_id = None
+        app._request_viewport_redraw()
+        after_id = app._viewport_redraw_after_id
+        assert after_id is not None
+
+        app._cancel_viewport_redraw()
+
+        self.assertEqual(app.root.cancelled, [after_id])
+        self.assertIsNone(app._viewport_redraw_after_id)
+        self.assertNotIn(after_id, app.root.scheduled)
+
+    def test_wheel_events_accumulate_before_one_scheduled_redraw(self) -> None:
+        app = BlockDrawerApp.__new__(BlockDrawerApp)
+        app.root = FakeAfterRoot()
+        app.canvas = CountingSizeCanvas()
+        app._viewport_redraw_after_id = None
+        app.display_scale = 1.0
+        app.pixels_per_unit = 100.0
+        app.view_x = 0.0
+        app.view_y = 0.0
+        redraws: list[bool] = []
+        app.redraw = lambda: redraws.append(True)
+        event = SimpleNamespace(x=400, y=300, delta=120, num=None)
+
+        for _index in range(5):
+            app._on_mousewheel(event)
+
+        self.assertAlmostEqual(app.pixels_per_unit, 100.0 * 1.15 ** 5)
+        self.assertEqual(app.root.after_calls, 1)
+        self.assertEqual(app.canvas.width_calls, 1)
+        self.assertEqual(app.canvas.height_calls, 1)
+        self.assertEqual(redraws, [])
+
+        after_id = app._viewport_redraw_after_id
+        assert after_id is not None
+        app.root.run(after_id)
+        self.assertEqual(redraws, [True])
+
+    def test_canvas_transform_reuses_dimensions_for_repeated_points(self) -> None:
+        app = BlockDrawerApp.__new__(BlockDrawerApp)
+        app.canvas = CountingSizeCanvas()
+        app.view_x = 0.5
+        app.view_y = -0.25
+        app.pixels_per_unit = 200.0
+
+        screen_points = [
+            app.world_to_screen(index / 10.0, index / 20.0)
+            for index in range(100)
+        ]
+        world_points = [
+            app.screen_to_world(*point) for point in screen_points
+        ]
+
+        self.assertEqual(app.canvas.width_calls, 1)
+        self.assertEqual(app.canvas.height_calls, 1)
+        for index, point in enumerate(world_points):
+            self.assertAlmostEqual(point[0], index / 10.0)
+            self.assertAlmostEqual(point[1], index / 20.0)
+
+        app.view_x = 1.0
+        app.world_to_screen(0.0, 0.0)
+        self.assertEqual(app.canvas.width_calls, 2)
+        self.assertEqual(app.canvas.height_calls, 2)
+
     def test_dense_control_point_markers_are_decimated_but_keep_selection(
         self,
     ) -> None:
@@ -80,11 +277,13 @@ class DpiScalingTests(unittest.TestCase):
             winfo_width=lambda: 800,
             winfo_height=lambda: 600,
         )
-        app.redraw = lambda: None
+        redraw_requests: list[bool] = []
+        app._request_viewport_redraw = lambda: redraw_requests.append(True)
 
         app._on_mousewheel(SimpleNamespace(x=400, y=300, delta=120, num=None))
 
         self.assertEqual(app.pixels_per_unit, MAX_ZOOM_PIXELS_PER_UNIT)
+        self.assertEqual(redraw_requests, [True])
 
     def test_ctrl_a_selects_all_text_in_entry_and_stops_propagation(self) -> None:
         app = BlockDrawerApp.__new__(BlockDrawerApp)
@@ -711,8 +910,39 @@ class DpiScalingTests(unittest.TestCase):
         app._draw_mesh_preview()
 
         self.assertEqual(len(drawn), 36)
-        self.assertIn("18 interior lines", first_info)
+        self.assertIn("18/18 visible interior lines", first_info)
         self.assertIn("cached", app.mesh_preview_info_var.get())
+
+    def test_canvas_preview_culls_polylines_outside_viewport(self) -> None:
+        app = BlockDrawerApp.__new__(BlockDrawerApp)
+        app.model = MeshModel()
+        app.preferences = default_config("linux")
+        app.mesh_preview_cache = MeshPreviewCache(capacity=1)
+        app.mesh_preview_info_var = FakeStringVar()
+        drawn: list[tuple[float, ...]] = []
+        app.canvas = SimpleNamespace(
+            create_line=lambda *points, **_options: drawn.append(points)
+        )
+        app.world_to_screen = lambda x, y: (x, y)
+        app._px = lambda value: round(value)
+        app._redraw_world_bounds = (0.4, -0.1, 0.6, 1.1)
+
+        app._draw_mesh_preview()
+
+        self.assertEqual(len(drawn), 12)
+        self.assertIn(
+            "12/18 visible interior lines",
+            app.mesh_preview_info_var.get(),
+        )
+
+        drawn.clear()
+        app._redraw_world_bounds = (2.0, 2.0, 3.0, 3.0)
+        app._draw_mesh_preview()
+        self.assertEqual(drawn, [])
+        self.assertIn(
+            "0/18 visible interior lines",
+            app.mesh_preview_info_var.get(),
+        )
 
     def test_grading_input_recomputes_other_property_fields(self) -> None:
         app = BlockDrawerApp.__new__(BlockDrawerApp)

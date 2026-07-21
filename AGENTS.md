@@ -70,7 +70,17 @@ them in the canvas widgets.
 - `blockdrawer/editing.py`: boundary, geometry, projection, split/combine, block,
   and vertex editing commands.
 - `blockdrawer/canvas.py`: rendering, hit-testing, coordinate transforms, zoom,
-  pan, selection, and pointer dragging.
+  pan, selection, and pointer dragging. One immutable canvas transform captures
+  dimensions and viewport state for a redraw; sampled points must reuse it rather
+  than crossing into Tcl/Tk for `winfo_width()`/`winfo_height()` per point. Wheel,
+  pan-drag, and resize events update viewport state immediately but share one
+  redraw timer at a 16 ms interval. Synchronous editing redraws cancel any pending
+  viewport timer so a delayed duplicate cannot overwrite newer interaction state.
+- `blockdrawer/render_cache.py`: one world-space sampled path and bounding box per
+  current topological edge and reference curve. Cache signatures contain only
+  defining coordinates/geometry and sampling resolution, so selection, naming,
+  boundary, and marker-visibility changes remain hits. Entries are replaced when
+  defining points move and pruned when their entity disappears.
 - `blockdrawer/ui_helpers.py`: shared UI constants and pure parsing/scaling/picking
   helpers. Keep these display-independent enough for headless unit tests.
 - `tests/`: model tests are separated from conformal split/combine tests;
@@ -169,6 +179,13 @@ them in the canvas widgets.
   Canvas spline strokes sample every Catmull-Rom span and retain every stored
   interpolation point; never replace this with a fixed sample count over the
   complete edge because fitted splines may contain hundreds of spans.
+- Each redraw derives one world-space viewport box with 40 display pixels of
+  padding. Wholly outside edge paths, reference curves, preview polylines, and
+  vertices are not submitted to Tk; individual edge/geometry labels, control
+  points, subdivision nodes, and split markers are likewise skipped off-screen.
+  Culling uses the cached display-path bounds, so it may admit conservative false
+  positives but must never hide a visible sampled segment. This does not alter
+  marker decimation or model/session/export data.
 - Selecting any curved type creates a deterministic point offset outward from the
   first incident block. GUI points are purple; point-list types are numbered in
   their canonical edge-path order. Points can be selected, moved, inserted, and
