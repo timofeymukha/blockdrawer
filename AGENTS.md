@@ -27,20 +27,26 @@ them in the canvas widgets.
 
 ## Architecture
 
-- `blockdrawer/model.py`: authoritative topology and validation. Vertices may be
-  standalone or shared objects referenced by counter-clockwise quadrilateral
-  blocks. Edges are derived only from block vertex pairs. Optional `EdgeGeometry`
-  is keyed by that shared edge and stores a type plus ordered interpolation points.
-  Non-uniform total expansion ratios are stored in `edge_grading`, also keyed by
-  shared edge; uniform ratio 1 is implicit. Ordered `Boundary` definitions are
-  separate from the zero-or-one `edge_boundaries` assignment per shared edge.
+- `blockdrawer/domain.py`: dependency-light dataclasses, result records, edge type
+  aliases, `TopologyError`, and canonical `edge_key()`. Import domain types from
+  here in serializers and algorithms; `model.py` re-exports them only for backward
+  compatibility.
+- `blockdrawer/model.py`: authoritative model state, edge/curve evaluation, and
+  global validation. Vertices may be standalone or shared by counter-clockwise
+  quadrilateral blocks. Edges are derived only from block vertex pairs. Optional
+  geometry, grading, boundaries, and reference curves are keyed or stored here.
+- `blockdrawer/grading.py`: pure, numerically stable conversions among total
+  expansion, cell-to-cell expansion, and start/end widths.
+- `blockdrawer/topology.py`: the `TopologyOperationsMixin` implementation of
+  block add/remove, conformal split, and conformal combine. These compound
+  mutations own their rollback logic; the public methods remain available on
+  `MeshModel` through composition.
+- `blockdrawer/reference_geometry.py`: reference-curve CRUD and model-level
+  projection orchestration. `blockdrawer/projection.py` contains the independent
+  cubic intersection, closest-point, and fitted-spline numerical algorithms.
 - `blockdrawer/geometry.py`: UI-independent parsing of reference-geometry point
   files. Reference curves themselves are named model entities, independent of
   block vertices and OpenFOAM edge geometry.
-- `blockdrawer/projection.py`: UI-independent smooth-curve projection math. It
-  represents each reference-curve Catmull-Rom span as a cubic polynomial, solves
-  x/y intersections, and finds orthogonal closest points without GUI or OpenFOAM
-  dependencies.
 - `blockdrawer/session.py`: versioned JSON persistence. Keep this independent of
   Tk so sessions can be tested and converted headlessly.
 - `blockdrawer/config.py`: versioned, human-editable application preferences,
@@ -54,9 +60,19 @@ them in the canvas widgets.
 - `blockdrawer/history.py`: bounded, complete-model snapshots for atomic undo/redo.
   Snapshotting is appropriate because one topology operation can update multiple
   constrained edges. A mouse drag is recorded once, on release.
-- `blockdrawer/app.py`: Tkinter views and interaction only. It calls model APIs;
-  do not put topology propagation or OpenFOAM serialization rules in the GUI.
-- `tests/`: model, persistence, and export tests. Tests must not require a display.
+- `blockdrawer/app.py`: application startup, window/menu construction, session
+  commands, history, and shortcut dispatch. The public `BlockDrawerApp` composes
+  the following focused Tk mixins while retaining its existing API.
+- `blockdrawer/panels.py`: contextual properties-sidebar construction.
+- `blockdrawer/editing.py`: boundary, geometry, projection, split/combine, block,
+  and vertex editing commands.
+- `blockdrawer/canvas.py`: rendering, hit-testing, coordinate transforms, zoom,
+  pan, selection, and pointer dragging.
+- `blockdrawer/ui_helpers.py`: shared UI constants and pure parsing/scaling/picking
+  helpers. Keep these display-independent enough for headless unit tests.
+- `tests/`: model tests are separated from conformal split/combine tests;
+  persistence, export, projection, and UI helpers have focused modules. Tests must
+  not require a display.
 
 ## Topology invariants
 

@@ -6,16 +6,16 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .model import (
+from .domain import (
     Block,
     Boundary,
     EdgeGeometry,
     GeometryCurve,
-    MeshModel,
     TopologyError,
     Vertex,
     edge_key,
 )
+from .model import MeshModel
 
 
 FORMAT_NAME = "blockDrawer"

@@ -1,6 +1,7 @@
 """BlockDrawer: edit 2D block topologies and export blockMeshDict files."""
 
-from .model import Boundary, Block, EdgeGeometry, MeshModel, TopologyError, Vertex
+from .domain import Boundary, Block, EdgeGeometry, TopologyError, Vertex
+from .model import MeshModel
 
 __all__ = [
     "Block",

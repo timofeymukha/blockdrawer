@@ -5,7 +5,8 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-from .model import MeshModel, TopologyError
+from .domain import TopologyError
+from .model import MeshModel
 
 
 def block_mesh_dict(model: MeshModel) -> str:

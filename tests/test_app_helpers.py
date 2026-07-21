@@ -2,15 +2,15 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from blockdrawer.app import (
-    BlockDrawerApp,
+from blockdrawer.app import BlockDrawerApp
+from blockdrawer.ui_helpers import (
     MAX_ZOOM_PIXELS_PER_UNIT,
-    _is_text_input_class,
-    _nearest_edge_fraction,
-    _scaled_named_font_size,
-    _split_fraction_from_text,
-    _system_display_scale,
-    _visible_control_point_indices,
+    is_text_input_class as _is_text_input_class,
+    nearest_edge_fraction as _nearest_edge_fraction,
+    scaled_named_font_size as _scaled_named_font_size,
+    split_fraction_from_text as _split_fraction_from_text,
+    system_display_scale as _system_display_scale,
+    visible_control_point_indices as _visible_control_point_indices,
 )
 from blockdrawer.config import default_config
 from blockdrawer.model import MeshModel, edge_key
@@ -729,10 +729,10 @@ class DpiScalingTests(unittest.TestCase):
         app._update_property_panel = lambda: None
 
         with patch(
-            "blockdrawer.app.filedialog.askopenfilename",
+            "blockdrawer.editing.filedialog.askopenfilename",
             return_value="/tmp/dense-airfoil.txt",
         ), patch(
-            "blockdrawer.app.load_point_pairs",
+            "blockdrawer.editing.load_point_pairs",
             return_value=((0.0, 0.0), (0.5, 0.1), (1.0, 0.0)),
         ):
             app.import_geometry_curve()
