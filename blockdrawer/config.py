@@ -13,9 +13,10 @@ from typing import Any, Mapping
 
 
 FORMAT_NAME = "blockDrawerConfig"
-FORMAT_VERSION = 2
+FORMAT_VERSION = 3
 MIN_UI_SCALE = 0.5
 MAX_UI_SCALE = 4.0
+DEFAULT_PREVIEW_COARSENING = 1
 
 SHORTCUT_ACTIONS = (
     "new_session",
@@ -34,6 +35,7 @@ SHORTCUT_ACTIONS = (
     "set_boundaries",
     "project",
     "toggle_geometry",
+    "toggle_mesh_preview",
     "cancel",
     "fit_view",
 )
@@ -88,6 +90,8 @@ class AppConfig:
     show_geometry: bool = True
     show_edge_nodes: bool = True
     show_edge_interpolation_points: bool = True
+    show_mesh_preview: bool = False
+    preview_coarsening: int = DEFAULT_PREVIEW_COARSENING
 
     def with_ui_scale(self, value: str | float) -> AppConfig:
         return replace(self, ui_scale=_ui_scale(value))
@@ -99,6 +103,7 @@ class AppConfig:
         show_geometry: bool,
         show_edge_nodes: bool,
         show_edge_interpolation_points: bool,
+        show_mesh_preview: bool,
     ) -> AppConfig:
         return replace(
             self,
@@ -108,6 +113,17 @@ class AppConfig:
             show_edge_interpolation_points=_boolean(
                 show_edge_interpolation_points,
                 "ui.showEdgeInterpolationPoints",
+            ),
+            show_mesh_preview=_boolean(
+                show_mesh_preview, "ui.showMeshPreview"
+            ),
+        )
+
+    def with_preview_coarsening(self, value: int) -> AppConfig:
+        return replace(
+            self,
+            preview_coarsening=_positive_integer(
+                value, "ui.previewCoarsening"
             ),
         )
 
@@ -135,6 +151,7 @@ def default_shortcuts(platform: str | None = None) -> dict[str, tuple[str, ...]]
         "set_boundaries": ("B",),
         "project": ("P",),
         "toggle_geometry": ("G",),
+        "toggle_mesh_preview": ("M",),
         "cancel": ("Esc",),
         "fit_view": (),
     }
@@ -142,7 +159,8 @@ def default_shortcuts(platform: str | None = None) -> dict[str, tuple[str, ...]]
 
 def default_config(platform: str | None = None) -> AppConfig:
     return AppConfig(
-        "auto", default_shortcuts(platform), True, True, True, True
+        "auto", default_shortcuts(platform), True, True, True, True,
+        False, DEFAULT_PREVIEW_COARSENING,
     )
 
 
@@ -210,7 +228,7 @@ def from_data(data: Any, *, platform: str | None = None) -> AppConfig:
     if data.get("format") != FORMAT_NAME:
         raise ConfigError("This is not a BlockDrawer config file")
     version = data.get("version")
-    if isinstance(version, bool) or version not in (1, FORMAT_VERSION):
+    if isinstance(version, bool) or version not in (1, 2, FORMAT_VERSION):
         raise ConfigError(
             f"Unsupported BlockDrawer config version {version!r}"
         )
@@ -231,6 +249,13 @@ def from_data(data: Any, *, platform: str | None = None) -> AppConfig:
     show_edge_interpolation_points = _boolean(
         ui.get("showEdgeInterpolationPoints", True),
         "ui.showEdgeInterpolationPoints",
+    )
+    show_mesh_preview = _boolean(
+        ui.get("showMeshPreview", False), "ui.showMeshPreview"
+    )
+    preview_coarsening = _positive_integer(
+        ui.get("previewCoarsening", DEFAULT_PREVIEW_COARSENING),
+        "ui.previewCoarsening",
     )
 
     shortcuts_data = data.get("shortcuts", {})
@@ -273,6 +298,8 @@ def from_data(data: Any, *, platform: str | None = None) -> AppConfig:
         show_geometry,
         show_edge_nodes,
         show_edge_interpolation_points,
+        show_mesh_preview,
+        preview_coarsening,
     )
 
 
@@ -293,6 +320,8 @@ def to_data(config: AppConfig) -> dict[str, Any]:
             "showEdgeInterpolationPoints": (
                 config.show_edge_interpolation_points
             ),
+            "showMeshPreview": config.show_mesh_preview,
+            "previewCoarsening": config.preview_coarsening,
         },
         "shortcuts": {
             action: list(config.shortcuts[action])
@@ -364,6 +393,12 @@ def _boolean(value: Any, name: str) -> bool:
     return value
 
 
+def _positive_integer(value: Any, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ConfigError(f"{name} must be a positive integer")
+    return value
+
+
 def _validate_shortcuts(shortcuts: Mapping[str, tuple[str, ...]]) -> None:
     if set(shortcuts) != set(SHORTCUT_ACTIONS):
         raise ConfigError("The shortcut map does not cover every action")
@@ -394,4 +429,6 @@ def _validate_config(config: AppConfig) -> None:
         config.show_edge_interpolation_points,
         "ui.showEdgeInterpolationPoints",
     )
+    _boolean(config.show_mesh_preview, "ui.showMeshPreview")
+    _positive_integer(config.preview_coarsening, "ui.previewCoarsening")
     _validate_shortcuts(config.shortcuts)

@@ -61,11 +61,14 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(linux.shortcuts["combine_blocks"], ("Shift+S",))
         self.assertEqual(linux.shortcuts["project"], ("P",))
         self.assertEqual(linux.shortcuts["toggle_geometry"], ("G",))
+        self.assertEqual(linux.shortcuts["toggle_mesh_preview"], ("M",))
         self.assertEqual(linux.shortcuts["fit_view"], ())
         self.assertTrue(linux.show_block_mesh)
         self.assertTrue(linux.show_geometry)
         self.assertTrue(linux.show_edge_nodes)
         self.assertTrue(linux.show_edge_interpolation_points)
+        self.assertFalse(linux.show_mesh_preview)
+        self.assertEqual(linux.preview_coarsening, 1)
 
     def test_shortcut_notation_converts_to_tk_sequences(self) -> None:
         self.assertEqual(
@@ -125,6 +128,8 @@ class ConfigTests(unittest.TestCase):
         data["ui"]["showGeometry"] = True
         data["ui"]["showEdgeNodes"] = False
         data["ui"]["showEdgeInterpolationPoints"] = False
+        data["ui"]["showMeshPreview"] = True
+        data["ui"]["previewCoarsening"] = 10
         data["shortcuts"] = {
             "save_session": ["Ctrl+Shift+W"],
             "fit_view": ["F"],
@@ -138,22 +143,29 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(config.show_geometry)
         self.assertFalse(config.show_edge_nodes)
         self.assertFalse(config.show_edge_interpolation_points)
+        self.assertTrue(config.show_mesh_preview)
+        self.assertEqual(config.preview_coarsening, 10)
         self.assertEqual(config.shortcuts["save_session"], ("Ctrl+Shift+W",))
         self.assertEqual(config.shortcuts["fit_view"], ("F",))
         self.assertEqual(config.shortcuts["delete_edge"], ())
         self.assertEqual(config.shortcuts["open_session"], ("Ctrl+O",))
         self.assertEqual(config.shortcuts["project"], ("P",))
         self.assertEqual(config.shortcuts["toggle_geometry"], ("G",))
+        self.assertEqual(config.shortcuts["toggle_mesh_preview"], ("M",))
 
     def test_missing_marker_visibility_fields_default_to_visible(self) -> None:
         data = to_data(default_config("linux"))
         del data["ui"]["showEdgeNodes"]
         del data["ui"]["showEdgeInterpolationPoints"]
+        del data["ui"]["showMeshPreview"]
+        del data["ui"]["previewCoarsening"]
 
         config = from_data(data, platform="linux")
 
         self.assertTrue(config.show_edge_nodes)
         self.assertTrue(config.show_edge_interpolation_points)
+        self.assertFalse(config.show_mesh_preview)
+        self.assertEqual(config.preview_coarsening, 1)
 
     def test_file_round_trip_writes_readable_complete_json(self) -> None:
         config = default_config("linux").with_ui_scale(1.5)
@@ -165,12 +177,14 @@ class ConfigTests(unittest.TestCase):
             loaded = load_config(path, platform="linux")
 
         self.assertEqual(parsed["format"], "blockDrawerConfig")
-        self.assertEqual(parsed["version"], 2)
+        self.assertEqual(parsed["version"], 3)
         self.assertEqual(parsed["ui"]["scale"], 1.5)
         self.assertTrue(parsed["ui"]["showBlockMesh"])
         self.assertTrue(parsed["ui"]["showGeometry"])
         self.assertTrue(parsed["ui"]["showEdgeNodes"])
         self.assertTrue(parsed["ui"]["showEdgeInterpolationPoints"])
+        self.assertFalse(parsed["ui"]["showMeshPreview"])
+        self.assertEqual(parsed["ui"]["previewCoarsening"], 1)
         self.assertEqual(set(parsed["shortcuts"]), set(SHORTCUT_ACTIONS))
         self.assertEqual(to_data(loaded), to_data(config))
 
@@ -193,6 +207,19 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(
             conflict_avoided.shortcuts["export_block_mesh_dict"], ("Ctrl+E",)
         )
+
+    def test_version_two_config_inherits_mesh_preview_defaults(self) -> None:
+        data = to_data(default_config("linux"))
+        data["version"] = 2
+        del data["ui"]["showMeshPreview"]
+        del data["ui"]["previewCoarsening"]
+        del data["shortcuts"]["toggle_mesh_preview"]
+
+        migrated = from_data(data, platform="linux")
+
+        self.assertFalse(migrated.show_mesh_preview)
+        self.assertEqual(migrated.preview_coarsening, 1)
+        self.assertEqual(migrated.shortcuts["toggle_mesh_preview"], ("M",))
 
     def test_app_loader_creates_defaults_on_first_run(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -232,6 +259,11 @@ class ConfigTests(unittest.TestCase):
         data = to_data(default_config("linux"))
         data["ui"]["showGeometry"] = "yes"
         with self.assertRaisesRegex(ConfigError, "true or false"):
+            from_data(data, platform="linux")
+
+        data = to_data(default_config("linux"))
+        data["ui"]["previewCoarsening"] = 0
+        with self.assertRaisesRegex(ConfigError, "positive integer"):
             from_data(data, platform="linux")
 
         data = to_data(default_config("linux"))

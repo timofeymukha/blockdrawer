@@ -23,6 +23,7 @@ from .foam import write_block_mesh_dict
 from .history import ModelHistory
 from .model import EdgeKey, MeshModel, TopologyError
 from .panels import PropertiesPanelMixin
+from .preview import MeshPreviewCache
 from .projection import DEFAULT_FIT_MAX_POINTS, FIT_RELATIVE_TOLERANCE
 from .session import SessionError, load_session, save_session
 from .ui_helpers import (
@@ -105,6 +106,18 @@ class BlockDrawerApp(
         self.show_edge_interpolation_points_var = tk.BooleanVar(
             value=self.preferences.show_edge_interpolation_points
         )
+        self.show_mesh_preview_var = tk.BooleanVar(
+            value=self.preferences.show_mesh_preview
+        )
+        self.mesh_preview_coarsening_var = tk.StringVar(
+            value=str(self.preferences.preview_coarsening)
+        )
+        self.mesh_preview_info_var = tk.StringVar(
+            value="Preview has not been built yet."
+        )
+        # One entry guarantees instant re-entry without retaining several
+        # potentially large sampled grids after resolution or topology changes.
+        self.mesh_preview_cache = MeshPreviewCache(capacity=1)
         self.edge_grading_propagate_var = tk.BooleanVar(value=False)
         self.default_font_family = tkfont.nametofont(
             "TkDefaultFont", root=self.root
@@ -441,6 +454,12 @@ class BlockDrawerApp(
             variable=self.show_geometry_var,
             command=self.apply_visibility,
         )
+        view_menu.add_checkbutton(
+            label="Mesh preview",
+            accelerator=self._shortcut_label("toggle_mesh_preview"),
+            variable=self.show_mesh_preview_var,
+            command=self.apply_visibility,
+        )
         view_menu.add_separator()
         view_menu.add_checkbutton(
             label="Mesh subdivision nodes",
@@ -499,6 +518,7 @@ class BlockDrawerApp(
             "set_boundaries": self._boundary_shortcut,
             "project": self._projection_shortcut,
             "toggle_geometry": self._geometry_visibility_shortcut,
+            "toggle_mesh_preview": self._mesh_preview_shortcut,
             "cancel": self._escape_shortcut,
             "fit_view": lambda _event: self._shortcut(self.fit_view),
         }
@@ -579,7 +599,7 @@ class BlockDrawerApp(
                 "Double-click an exterior edge: add block\n"
                 "V: place vertex · N: connect 4 vertices\n"
                 "S: split edge · Shift+S: combine\n"
-                "B: boundaries · P: project\n"
+                "B: boundaries · P: project · M: preview\n"
                 "E: export · Esc: cancel"
             ),
             foreground="#52606d",
@@ -893,6 +913,13 @@ class BlockDrawerApp(
         if _is_text_input_class(event.widget.winfo_class()):
             return None
         self.show_geometry_var.set(not self.show_geometry_var.get())
+        self.apply_visibility()
+        return "break"
+
+    def _mesh_preview_shortcut(self, event: tk.Event) -> str | None:
+        if _is_text_input_class(event.widget.winfo_class()):
+            return None
+        self.show_mesh_preview_var.set(not self.show_mesh_preview_var.get())
         self.apply_visibility()
         return "break"
 

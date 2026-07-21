@@ -14,6 +14,7 @@ from blockdrawer.ui_helpers import (
 )
 from blockdrawer.config import default_config
 from blockdrawer.model import MeshModel, edge_key
+from blockdrawer.preview import MeshPreviewCache
 
 
 class FakeStringVar:
@@ -170,6 +171,24 @@ class DpiScalingTests(unittest.TestCase):
         self.assertFalse(app.show_geometry_var.get())
         self.assertEqual(calls, [True])
         self.assertIsNone(app._geometry_visibility_shortcut(
+            SimpleNamespace(widget=entry)
+        ))
+        self.assertEqual(calls, [True])
+
+    def test_m_shortcut_toggles_mesh_preview_outside_text_input(self) -> None:
+        app = BlockDrawerApp.__new__(BlockDrawerApp)
+        app.show_mesh_preview_var = FakeStringVar(False)
+        calls: list[bool] = []
+        app.apply_visibility = lambda: calls.append(True)
+        canvas = SimpleNamespace(winfo_class=lambda: "Canvas")
+        entry = SimpleNamespace(winfo_class=lambda: "TEntry")
+
+        result = app._mesh_preview_shortcut(SimpleNamespace(widget=canvas))
+
+        self.assertEqual(result, "break")
+        self.assertTrue(app.show_mesh_preview_var.get())
+        self.assertEqual(calls, [True])
+        self.assertIsNone(app._mesh_preview_shortcut(
             SimpleNamespace(widget=entry)
         ))
         self.assertEqual(calls, [True])
@@ -645,6 +664,7 @@ class DpiScalingTests(unittest.TestCase):
         app.show_geometry_var = FakeStringVar(True)
         app.show_edge_nodes_var = FakeStringVar(False)
         app.show_edge_interpolation_points_var = FakeStringVar(False)
+        app.show_mesh_preview_var = FakeStringVar(True)
         app.config_write_enabled = False
         app.status = FakeStringVar()
         app._update_property_panel = lambda: None
@@ -654,6 +674,45 @@ class DpiScalingTests(unittest.TestCase):
 
         self.assertFalse(app.preferences.show_edge_nodes)
         self.assertFalse(app.preferences.show_edge_interpolation_points)
+        self.assertTrue(app.preferences.show_mesh_preview)
+
+    def test_preview_coarsening_is_validated_and_stored_in_preferences(
+        self,
+    ) -> None:
+        app = BlockDrawerApp.__new__(BlockDrawerApp)
+        app.preferences = default_config("linux")
+        app.mesh_preview_coarsening_var = FakeStringVar("10")
+        app.config_write_enabled = False
+        app.status = FakeStringVar()
+        app.redraw = lambda: None
+        app._show_error = lambda _title, error: self.fail(str(error))
+
+        app.apply_mesh_preview_coarsening()
+
+        self.assertEqual(app.preferences.preview_coarsening, 10)
+        self.assertEqual(app.mesh_preview_coarsening_var.get(), "10")
+        self.assertIn("not saved", app.status.get())
+
+    def test_canvas_preview_draws_cached_interior_polylines(self) -> None:
+        app = BlockDrawerApp.__new__(BlockDrawerApp)
+        app.model = MeshModel()
+        app.preferences = default_config("linux")
+        app.mesh_preview_cache = MeshPreviewCache(capacity=1)
+        app.mesh_preview_info_var = FakeStringVar()
+        drawn: list[tuple[float, ...]] = []
+        app.canvas = SimpleNamespace(
+            create_line=lambda *points, **_options: drawn.append(points)
+        )
+        app.world_to_screen = lambda x, y: (x, y)
+        app._px = lambda value: round(value)
+
+        app._draw_mesh_preview()
+        first_info = app.mesh_preview_info_var.get()
+        app._draw_mesh_preview()
+
+        self.assertEqual(len(drawn), 36)
+        self.assertIn("18 interior lines", first_info)
+        self.assertIn("cached", app.mesh_preview_info_var.get())
 
     def test_grading_input_recomputes_other_property_fields(self) -> None:
         app = BlockDrawerApp.__new__(BlockDrawerApp)

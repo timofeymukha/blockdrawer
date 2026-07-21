@@ -196,6 +196,21 @@ class PropertiesPanelMixin:
             )
             return
 
+        if self.show_mesh_preview_var.get():
+            self.sidebar_title.configure(text="Mesh preview")
+            self.selection_frame.configure(text="Visualization mesh")
+            self.selection_frame.grid_configure(row=1, pady=0)
+            self.sidebar_help.configure(
+                text=(
+                    "The preview is visual only and is never exported.\n"
+                    "Pan and zoom normally while it is visible.\n"
+                    "M: hide mesh preview"
+                )
+            )
+            self._build_mesh_preview_panel()
+            self._configure_selection_edit_controls()
+            return
+
         self.sidebar_title.configure(text="Properties")
         self.selection_frame.configure(text="Selection")
         self.selection_frame.grid_configure(row=1, pady=0)
@@ -205,7 +220,7 @@ class PropertiesPanelMixin:
                 "Double-click an exterior edge: add block\n"
                 "V: place vertex · N: connect 4 vertices\n"
                 "S: split edge · Shift+S: combine\n"
-                "B: boundaries · P: project\n"
+                "B: boundaries · P: project · M: preview\n"
                 "E: export · Esc: cancel"
             )
         )
@@ -634,6 +649,9 @@ class PropertiesPanelMixin:
                 wraplength=self._px(245),
             ).grid(row=1, column=0, sticky="w", pady=(self._px(5), 0))
 
+        self._configure_selection_edit_controls()
+
+    def _configure_selection_edit_controls(self) -> None:
         can_add = self.selected_edge is not None \
             and self.model.is_boundary_edge(self.selected_edge)
         self.add_button.configure(state="normal" if can_add else "disabled")
@@ -661,6 +679,53 @@ class PropertiesPanelMixin:
                 and self.model.can_combine_edge(self.selected_edge)
                 else "disabled"
             ),
+        )
+
+    def _build_mesh_preview_panel(self) -> None:
+        ttk.Label(
+            self.selection_frame,
+            text="Structured mesh visualization",
+            font=self._font(11, "bold"),
+        ).grid(
+            row=0, column=0, columnspan=2, sticky="w",
+            pady=(0, self._px(7)),
+        )
+        ttk.Label(
+            self.selection_frame,
+            textvariable=self.mesh_preview_info_var,
+            foreground="#42637a",
+            wraplength=self._px(245),
+        ).grid(
+            row=1, column=0, columnspan=2, sticky="w",
+            pady=(0, self._px(8)),
+        )
+        self._field(
+            self.selection_frame,
+            2,
+            "Coarsening factor",
+            self.mesh_preview_coarsening_var,
+            on_confirm=self.apply_mesh_preview_coarsening,
+        )
+        ttk.Button(
+            self.selection_frame,
+            text="Apply coarsening",
+            command=self.apply_mesh_preview_coarsening,
+        ).grid(
+            row=3, column=0, columnspan=2, sticky="ew",
+            pady=(self._px(7), 0),
+        )
+        ttk.Label(
+            self.selection_frame,
+            text=(
+                "A factor of 1 uses every edge subdivision. A factor of 10 "
+                "uses every tenth subdivision and always retains block "
+                "corners. Curved and graded boundary locations are respected."
+            ),
+            foreground="#52606d",
+            wraplength=self._px(245),
+        ).grid(
+            row=4, column=0, columnspan=2, sticky="w",
+            pady=(self._px(8), 0),
         )
 
     def _build_split_panel(self) -> None:

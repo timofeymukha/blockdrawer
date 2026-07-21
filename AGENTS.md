@@ -44,6 +44,9 @@ them in the canvas widgets.
 - `blockdrawer/reference_geometry.py`: reference-curve CRUD and model-level
   projection orchestration. `blockdrawer/projection.py` contains the independent
   cubic intersection, closest-point, and fitted-spline numerical algorithms.
+- `blockdrawer/preview.py`: UI-independent, visualization-only Coons-patch grid
+  construction and a bounded cache keyed by the mesh state that affects sampled
+  points. It must never mutate the model or become an export dependency.
 - `blockdrawer/geometry.py`: UI-independent parsing of reference-geometry point
   files. Reference curves themselves are named model entities, independent of
   block vertices and OpenFOAM edge geometry.
@@ -130,6 +133,15 @@ them in the canvas widgets.
 
 - A block stores four distinct vertex IDs in counter-clockwise order and must
   remain strictly convex.
+- Mesh preview is a transient per-block visualization, not a mesher. Each block
+  samples the graded nodes of its four directed curved edges and blends them with
+  a Coons patch. The configured positive coarsening factor keeps every nth
+  subdivision index and always both endpoints. Only interior logical rows and
+  columns are drawn; inter-block cell connectivity is deliberately irrelevant.
+  The cache signature includes used block vertices, ordered blocks, edge cell
+  counts, grading, and edge geometry, but excludes loose vertices, boundaries,
+  reference geometry, and selection. The GUI retains one cached sampled grid so
+  repeated entry is instant without retaining several potentially large meshes.
 - Standalone vertices are valid when their IDs and finite coordinates are unique.
   In the GUI, `V` starts one-shot placement, clicking creates and selects the
   vertex as one history action, and `Esc` cancels. Standalone vertices remain
@@ -283,14 +295,17 @@ silently reinterpret old data. JSON is a project/session format, not an OpenFOAM
 format.
 
 Application preferences are separate from mesh sessions. They use JSON format
-`blockDrawerConfig`, version 2, at `~/.blockdrawer` on Linux and macOS, and
+`blockDrawerConfig`, version 3, at `~/.blockdrawer` on Linux and macOS, and
 `%APPDATA%/BlockDrawer/config.json` on Windows. The file is created with complete
 defaults on first launch. `ui.scale` is `auto` or a multiplier from 0.5 to 4;
 `ui.showBlockMesh` and `ui.showGeometry` persist the independent canvas layers;
 `ui.showEdgeNodes` and `ui.showEdgeInterpolationPoints` independently persist
-the mesh-subdivision and curved-edge control markers. All are saved when changed
-through the View menu. Geometry-layer visibility is the configurable
-`toggle_geometry` action and defaults to `G`. Export mode is the configurable
+the mesh-subdivision and curved-edge control markers. `ui.showMeshPreview`
+persists the preview overlay and `ui.previewCoarsening` is a positive integer;
+versions 1 and 2 load with preview disabled and factor 1. All are saved when
+changed through the View menu or preview panel. Geometry-layer visibility is the
+configurable `toggle_geometry` action and defaults to `G`; preview visibility is
+`toggle_mesh_preview` and defaults to `M`. Export mode is the configurable
 `export_block_mesh_dict` action and defaults to `E`; version 1's untouched
 `Ctrl+E`/`Cmd+E` default migrates to `E`, while custom bindings are preserved.
 `shortcuts` maps every application

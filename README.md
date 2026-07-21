@@ -203,6 +203,24 @@ blockdrawer
   unrelated blocks are preserved. A deletion that would leave no blocks is
   disabled, so the final block can never be removed.
 
+## Mesh preview
+
+Press `M` or enable **View → Mesh preview** to draw a visualization-only
+structured grid inside every block. Boundary nodes follow the configured cell
+counts, directional grading, and line/arc/polyLine/spline geometry. Interior
+points use a transfinite blend of the four block edges; this preview does not
+create a `polyMesh`, validate cell quality, or replace OpenFOAM's `blockMesh`.
+
+While preview is active, the right panel exposes a positive **Coarsening factor**.
+A value of `1` uses every edge subdivision; `10` uses every tenth subdivision,
+while always retaining block corners. Press `Enter` or **Apply coarsening** to
+update it. The panel reports sampled-node and interior-line counts together with
+construction and canvas-drawing time. Preview data is cached by block geometry,
+edge geometry, grading, cell counts, and coarsening, so hiding and reopening an
+unchanged preview reuses it immediately. The cache deliberately ignores
+boundaries, reference curves, and selection state and retains only one sampled
+grid to bound memory use.
+
 ## High-resolution displays
 
 BlockDrawer opts into per-monitor DPI awareness on Windows and honors Tk's system
@@ -233,22 +251,25 @@ BlockDrawer creates a human-editable JSON preferences file on first launch:
 Mesh geometry and extrusion values remain in the session JSON; this preferences
 file is for application-wide behavior. `ui.scale` accepts `"auto"` or a multiplier
 from `0.5` through `4`. `ui.showBlockMesh`, `ui.showGeometry`,
-`ui.showEdgeNodes`, and `ui.showEdgeInterpolationPoints` are booleans for the
-corresponding visibility toggles. Changes made through **View** update the file
-immediately. Manual edits are loaded on the next launch.
+`ui.showMeshPreview`, `ui.showEdgeNodes`, and `ui.showEdgeInterpolationPoints`
+are booleans for the corresponding visibility toggles. `ui.previewCoarsening`
+is a positive integer. Changes made through **View** or the preview panel update
+the file immediately. Manual edits are loaded on the next launch.
 
 Every keyboard action is configurable. A Linux/Windows default file looks like:
 
 ```json
 {
   "format": "blockDrawerConfig",
-  "version": 2,
+  "version": 3,
   "ui": {
     "scale": "auto",
     "showBlockMesh": true,
     "showGeometry": true,
     "showEdgeNodes": true,
-    "showEdgeInterpolationPoints": true
+    "showEdgeInterpolationPoints": true,
+    "showMeshPreview": false,
+    "previewCoarsening": 1
   },
   "shortcuts": {
     "new_session": ["Ctrl+N"],
@@ -267,6 +288,7 @@ Every keyboard action is configurable. A Linux/Windows default file looks like:
     "set_boundaries": ["B"],
     "project": ["P"],
     "toggle_geometry": ["G"],
+    "toggle_mesh_preview": ["M"],
     "cancel": ["Esc"],
     "fit_view": []
   }
@@ -318,8 +340,8 @@ Copy or save it as `system/blockMeshDict` in an OpenFOAM case, then run:
 blockMesh
 ```
 
-The UI never invokes `blockMesh` and never writes `polyMesh`; it only previews the
-block topology and its edge subdivisions.
+The UI never invokes `blockMesh` and never writes `polyMesh`; its interior mesh
+preview is a transient visualization derived independently within each block.
 
 ## Tests
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from time import perf_counter
 import tkinter as tk
 from tkinter import font as tkfont
 
@@ -17,6 +18,7 @@ from .ui_helpers import (
     SPLINE_SAMPLES_PER_SPAN,
     display_number as _display_number,
     nice_grid_step as _nice_grid_step,
+    positive_integer as _positive_integer,
     scaled_named_font_size as _scaled_named_font_size,
     visible_control_point_indices as _visible_control_point_indices,
 )
@@ -33,6 +35,8 @@ class CanvasControllerMixin:
         width = max(self.canvas.winfo_width(), 1)
         height = max(self.canvas.winfo_height(), 1)
         self._draw_grid(width, height)
+        if self.show_mesh_preview_var.get():
+            self._draw_mesh_preview()
         if not self.show_block_mesh_var.get():
             if self.show_geometry_var.get():
                 self._draw_geometry_curves()
@@ -187,6 +191,34 @@ class CanvasControllerMixin:
             self._draw_geometry_curves()
         if self.split_edge_active is not None:
             self._draw_split_marker()
+
+    def _draw_mesh_preview(self) -> None:
+        started = perf_counter()
+        preview, cache_hit = self.mesh_preview_cache.get(
+            self.model, self.preferences.preview_coarsening
+        )
+        data_ms = (perf_counter() - started) * 1000.0
+        for polyline in preview.polylines:
+            screen_points: list[float] = []
+            for world_x, world_y in polyline:
+                screen_points.extend(self.world_to_screen(world_x, world_y))
+            self.canvas.create_line(
+                *screen_points,
+                fill="#7fa9c2",
+                width=self._px(1),
+            )
+        total_ms = (perf_counter() - started) * 1000.0
+        cache_label = (
+            f"cached; drawn in {total_ms:.1f} ms"
+            if cache_hit
+            else f"built in {data_ms:.1f} ms; drawn in {total_ms:.1f} ms"
+        )
+        self.mesh_preview_info_var.set(
+            f"{preview.block_count} block"
+            f"{'s' if preview.block_count != 1 else ''} · "
+            f"{preview.line_count} interior lines · "
+            f"{preview.sampled_node_count} sampled nodes · {cache_label}."
+        )
 
     def _draw_split_marker(self) -> None:
         if self.split_edge_active is None \
@@ -487,11 +519,13 @@ class CanvasControllerMixin:
         show_edge_interpolation_points = bool(
             self.show_edge_interpolation_points_var.get()
         )
+        show_mesh_preview = bool(self.show_mesh_preview_var.get())
         self.preferences = self.preferences.with_visibility(
             show_block_mesh=show_block_mesh,
             show_geometry=show_geometry,
             show_edge_nodes=show_edge_nodes,
             show_edge_interpolation_points=show_edge_interpolation_points,
+            show_mesh_preview=show_mesh_preview,
         )
         if not show_block_mesh:
             self._clear_split_state()
@@ -516,6 +550,8 @@ class CanvasControllerMixin:
             visible.append("block mesh")
         if show_geometry:
             visible.append("geometry")
+        if show_mesh_preview:
+            visible.append("mesh preview")
         label = " and ".join(visible) if visible else "grid only"
         if not self.config_write_enabled:
             self.status.set(
@@ -532,6 +568,35 @@ class CanvasControllerMixin:
             )
             return
         self.status.set(f"Showing {label}.")
+
+    def apply_mesh_preview_coarsening(self) -> None:
+        try:
+            coarsening = _positive_integer(
+                self.mesh_preview_coarsening_var.get(),
+                "Preview coarsening",
+            )
+        except ValueError as exc:
+            self._show_error("Invalid preview coarsening", exc)
+            return
+        self.preferences = self.preferences.with_preview_coarsening(coarsening)
+        self.mesh_preview_coarsening_var.set(str(coarsening))
+        self.redraw()
+        if not self.config_write_enabled:
+            self.status.set(
+                f"Preview coarsening set to {coarsening}; it was not saved "
+                "because the config could not be loaded at startup."
+            )
+            return
+        try:
+            save_config(self.preferences, self.config_path)
+        except (OSError, ConfigError) as exc:
+            self.config_write_enabled = False
+            self.status.set(
+                f"Preview coarsening set to {coarsening}, but could not save "
+                f"{self.config_path}: {exc}"
+            )
+            return
+        self.status.set(f"Preview coarsening set to {coarsening}.")
 
     def _px(self, value: float) -> int:
         return max(1, int(round(value * self.display_scale)))

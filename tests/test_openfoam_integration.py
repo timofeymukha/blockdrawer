@@ -9,6 +9,7 @@ import unittest
 
 from blockdrawer.foam import write_block_mesh_dict
 from blockdrawer.model import MeshModel, edge_key
+from blockdrawer.preview import build_mesh_preview
 from tests.helpers import build_ring_model, center_vertex_ids
 
 
@@ -229,6 +230,26 @@ class OpenFoamIntegrationTests(unittest.TestCase):
             )
             for index in range(1, 4)
         ]
+
+        self._assert_block_mesh_accepts(
+            model, expected_points=expected_nodes
+        )
+
+    def test_interior_preview_matches_single_block_mesh_points(self) -> None:
+        model = MeshModel()
+        bottom = edge_key("v0", "v1")
+        left = edge_key("v0", "v3")
+        model.set_edge_cells(bottom, 4)
+        model.set_edge_cells(left, 3)
+        model.set_edge_type(bottom, "arc")
+        model.set_arc_point(bottom, 0.5, -0.25)
+        model.set_edge_grading(bottom, "total_ratio", 8.0)
+        preview = build_mesh_preview(model)
+        expected_nodes = list({
+            (point[0], point[1], model.z_min)
+            for polyline in preview.polylines
+            for point in polyline
+        })
 
         self._assert_block_mesh_accepts(
             model, expected_points=expected_nodes
