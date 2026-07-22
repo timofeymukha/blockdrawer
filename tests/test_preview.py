@@ -61,6 +61,28 @@ class MeshPreviewTests(unittest.TestCase):
         self.assertNotAlmostEqual(first_vertical[0][1], 0.0)
         self.assertEqual(first_vertical[-1], (0.25, 1.0))
 
+    def test_preview_uses_block_mesh_weights_for_four_distinct_gradings(
+        self,
+    ) -> None:
+        model = MeshModel()
+        bottom = edge_key("v0", "v1")
+        right = edge_key("v1", "v2")
+        top = edge_key("v2", "v3")
+        left = edge_key("v0", "v3")
+        model.set_edge_cells(bottom, 2)
+        model.set_edge_cells(left, 2)
+        model.set_edge_grading(bottom, "total_ratio", 9.0)
+        model.set_edge_grading(top, "total_ratio", 2.0 / 3.0)
+        model.set_edge_grading(left, "total_ratio", 4.0)
+        model.set_edge_grading(right, "total_ratio", 0.25)
+
+        preview = build_mesh_preview(model)
+        centre = preview.polylines[0][1]
+
+        self.assertAlmostEqual(centre[0], 0.2627118644067797)
+        self.assertAlmostEqual(centre[1], 0.3728813559322034)
+        self.assertNotAlmostEqual(centre[1], 0.5)
+
     def test_cache_reuses_unchanged_mesh_and_ignores_reference_geometry(self) -> None:
         model = self._rectangular_model()
         cache = MeshPreviewCache()

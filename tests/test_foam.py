@@ -6,6 +6,16 @@ from blockdrawer.model import MeshModel, TopologyError, edge_key
 
 
 class FoamExportTests(unittest.TestCase):
+    def test_editor_spacing_link_metadata_is_not_exported(self) -> None:
+        model = MeshModel()
+        baseline = block_mesh_dict(model)
+
+        model.add_spacing_link(
+            edge_key("v0", "v1"), edge_key("v1", "v2")
+        )
+
+        self.assertEqual(block_mesh_dict(model), baseline)
+
     def test_combined_split_block_exports_one_hex_with_joined_counts(self) -> None:
         model = MeshModel()
         selected = edge_key("v0", "v1")

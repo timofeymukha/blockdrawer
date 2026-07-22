@@ -33,6 +33,7 @@ SHORTCUT_ACTIONS = (
     "new_block",
     "add_vertex",
     "set_boundaries",
+    "link_spacing",
     "project",
     "toggle_geometry",
     "toggle_mesh_preview",
@@ -88,6 +89,8 @@ class AppConfig:
     shortcuts: dict[str, tuple[str, ...]]
     show_block_mesh: bool = True
     show_geometry: bool = True
+    show_vertex_ids: bool = True
+    show_edge_cell_counts: bool = True
     show_edge_nodes: bool = True
     show_edge_interpolation_points: bool = True
     show_mesh_preview: bool = False
@@ -101,6 +104,8 @@ class AppConfig:
         *,
         show_block_mesh: bool,
         show_geometry: bool,
+        show_vertex_ids: bool,
+        show_edge_cell_counts: bool,
         show_edge_nodes: bool,
         show_edge_interpolation_points: bool,
         show_mesh_preview: bool,
@@ -109,6 +114,10 @@ class AppConfig:
             self,
             show_block_mesh=_boolean(show_block_mesh, "ui.showBlockMesh"),
             show_geometry=_boolean(show_geometry, "ui.showGeometry"),
+            show_vertex_ids=_boolean(show_vertex_ids, "ui.showVertexIds"),
+            show_edge_cell_counts=_boolean(
+                show_edge_cell_counts, "ui.showEdgeCellCounts"
+            ),
             show_edge_nodes=_boolean(show_edge_nodes, "ui.showEdgeNodes"),
             show_edge_interpolation_points=_boolean(
                 show_edge_interpolation_points,
@@ -149,6 +158,7 @@ def default_shortcuts(platform: str | None = None) -> dict[str, tuple[str, ...]]
         "new_block": ("N",),
         "add_vertex": ("V",),
         "set_boundaries": ("B",),
+        "link_spacing": ("L",),
         "project": ("P",),
         "toggle_geometry": ("G",),
         "toggle_mesh_preview": ("M",),
@@ -159,8 +169,8 @@ def default_shortcuts(platform: str | None = None) -> dict[str, tuple[str, ...]]
 
 def default_config(platform: str | None = None) -> AppConfig:
     return AppConfig(
-        "auto", default_shortcuts(platform), True, True, True, True,
-        False, DEFAULT_PREVIEW_COARSENING,
+        ui_scale="auto",
+        shortcuts=default_shortcuts(platform),
     )
 
 
@@ -243,6 +253,12 @@ def from_data(data: Any, *, platform: str | None = None) -> AppConfig:
     show_geometry = _boolean(
         ui.get("showGeometry", True), "ui.showGeometry"
     )
+    show_vertex_ids = _boolean(
+        ui.get("showVertexIds", True), "ui.showVertexIds"
+    )
+    show_edge_cell_counts = _boolean(
+        ui.get("showEdgeCellCounts", True), "ui.showEdgeCellCounts"
+    )
     show_edge_nodes = _boolean(
         ui.get("showEdgeNodes", True), "ui.showEdgeNodes"
     )
@@ -292,14 +308,16 @@ def from_data(data: Any, *, platform: str | None = None) -> AppConfig:
             shortcuts["export_block_mesh_dict"] = ("E",)
     _validate_shortcuts(shortcuts)
     return AppConfig(
-        scale,
-        shortcuts,
-        show_block_mesh,
-        show_geometry,
-        show_edge_nodes,
-        show_edge_interpolation_points,
-        show_mesh_preview,
-        preview_coarsening,
+        ui_scale=scale,
+        shortcuts=shortcuts,
+        show_block_mesh=show_block_mesh,
+        show_geometry=show_geometry,
+        show_vertex_ids=show_vertex_ids,
+        show_edge_cell_counts=show_edge_cell_counts,
+        show_edge_nodes=show_edge_nodes,
+        show_edge_interpolation_points=show_edge_interpolation_points,
+        show_mesh_preview=show_mesh_preview,
+        preview_coarsening=preview_coarsening,
     )
 
 
@@ -316,6 +334,8 @@ def to_data(config: AppConfig) -> dict[str, Any]:
             "scale": scale,
             "showBlockMesh": config.show_block_mesh,
             "showGeometry": config.show_geometry,
+            "showVertexIds": config.show_vertex_ids,
+            "showEdgeCellCounts": config.show_edge_cell_counts,
             "showEdgeNodes": config.show_edge_nodes,
             "showEdgeInterpolationPoints": (
                 config.show_edge_interpolation_points
@@ -424,6 +444,8 @@ def _validate_config(config: AppConfig) -> None:
     _ui_scale(config.ui_scale)
     _boolean(config.show_block_mesh, "ui.showBlockMesh")
     _boolean(config.show_geometry, "ui.showGeometry")
+    _boolean(config.show_vertex_ids, "ui.showVertexIds")
+    _boolean(config.show_edge_cell_counts, "ui.showEdgeCellCounts")
     _boolean(config.show_edge_nodes, "ui.showEdgeNodes")
     _boolean(
         config.show_edge_interpolation_points,

@@ -23,11 +23,136 @@ from .ui_helpers import (
 class EditingControllerMixin:
     """Coordinate boundaries, projection, topology, and geometry edits."""
 
+    def toggle_spacing_link_mode(self) -> None:
+        """Enter or leave focused endpoint-spacing link selection."""
+        activating = not self.spacing_link_mode_active
+        self._clear_split_state()
+        self._clear_export_mode()
+        self._clear_projection_state()
+        self.boundary_mode_active = False
+        self.boundary_button.configure(text="Set boundaries")
+        self.spacing_link_mode_active = activating
+        self.spacing_link_first_edge = (
+            self.selected_edge
+            if activating and self.selected_edge in self.model.edge_cells
+            else None
+        )
+        self.vertex_placement_active = False
+        self.block_vertex_selection = None
+        self.selected_vertex = None
+        self.selected_control_point_index = None
+        self.selected_geometry_curve = None
+        self.selected_geometry_point_index = None
+        self.drag_vertex = None
+        self.drag_control_point = None
+        self.drag_geometry_point = None
+        self.drag_changed = False
+        self.spacing_link_button.configure(
+            text="Done linking" if activating else "Link spacing"
+        )
+        self.canvas.focus_set()
+        self._update_property_panel()
+        self.redraw()
+        if not activating:
+            self.status.set("Finished linking edge spacing.")
+        elif self.spacing_link_first_edge is None:
+            self.status.set(
+                "Spacing links: select the first edge of an incident pair."
+            )
+        else:
+            self.status.set(
+                "Spacing links: selected the driver edge; now select an "
+                "incident edge."
+            )
+
+    def _clear_spacing_link_mode(self) -> None:
+        self.spacing_link_mode_active = False
+        self.spacing_link_first_edge = None
+        if hasattr(self, "spacing_link_button"):
+            self.spacing_link_button.configure(text="Link spacing")
+
+    def select_spacing_link_edge(self, edge: EdgeKey) -> None:
+        """Stage a driver edge or create one link from the staged pair."""
+        current = edge_key(*edge)
+        self.selected_vertex = None
+        self.selected_edge = current
+        self.selected_control_point_index = None
+        self.selected_geometry_curve = None
+        self.selected_geometry_point_index = None
+        first = self.spacing_link_first_edge
+        if first is None:
+            self.spacing_link_first_edge = current
+            self._update_property_panel()
+            self.redraw()
+            self.status.set(
+                f"Spacing links: {current[0]} — {current[1]} is the driver; "
+                "select an incident edge."
+            )
+            return
+        if current == first:
+            self.spacing_link_first_edge = None
+            self._update_property_panel()
+            self.redraw()
+            self.status.set(
+                "Cleared the staged pair. Select a first edge when ready."
+            )
+            return
+        try:
+            link = self.model.add_spacing_link(first, current)
+        except TopologyError as exc:
+            self._show_error("Cannot link edge spacing", exc)
+            self._update_property_panel()
+            self.redraw()
+            return
+        self.spacing_link_first_edge = None
+        self._commit_edit()
+        self._update_property_panel()
+        self.redraw()
+        self.status.set(
+            f"Linked cell widths at {link.vertex}; {first[0]} — {first[1]} "
+            f"drove {current[0]} — {current[1]}."
+        )
+
+    def synchronize_selected_spacing_links(self) -> None:
+        if self.selected_edge is None:
+            return
+        if not self.model.spacing_links_for_edge(self.selected_edge):
+            self.status.set("The selected edge has no spacing links to synchronize.")
+            return
+        try:
+            affected = self.model.synchronize_spacing_links(self.selected_edge)
+        except TopologyError as exc:
+            self._show_error("Cannot synchronize spacing links", exc)
+            self._sync_property_values()
+            return
+        self._commit_edit()
+        self._update_property_panel()
+        self.redraw()
+        self.status.set(
+            f"Synchronized {len(affected)} spacing-linked edge"
+            f"{'s' if len(affected) != 1 else ''} from the selected edge."
+        )
+
+    def remove_selected_spacing_link(
+        self, first_edge: EdgeKey, second_edge: EdgeKey
+    ) -> None:
+        try:
+            link = self.model.remove_spacing_link(first_edge, second_edge)
+        except TopologyError as exc:
+            self._show_error("Cannot remove spacing link", exc)
+            return
+        self.spacing_link_first_edge = None
+        self._commit_edit()
+        self._update_property_panel()
+        self.redraw()
+        self.status.set(f"Removed the spacing link at vertex {link.vertex}.")
+
     def toggle_boundary_mode(self) -> None:
         self.boundary_mode_active = not self.boundary_mode_active
         self._clear_split_state()
         self._clear_export_mode()
         self._clear_projection_state()
+        self._clear_spacing_link_mode()
         self.vertex_placement_active = False
         self.block_vertex_selection = None
         self.selected_vertex = None
@@ -60,6 +185,7 @@ class EditingControllerMixin:
         self._clear_split_state()
         self.export_mode_active = activating
         self._clear_projection_state()
+        self._clear_spacing_link_mode()
         self.boundary_mode_active = False
         self.boundary_button.configure(text="Set boundaries")
         self.vertex_placement_active = False
@@ -169,14 +295,10 @@ class EditingControllerMixin:
         )
 
     def _boundary_type_selected(self, _event: tk.Event) -> None:
-        if self.boundary_neighbour_selector is None \
-                or self.boundary_type_var is None:
-            return
-        state = (
-            "readonly" if self.boundary_type_var.get() == "cyclic"
-            else "disabled"
-        )
-        self.boundary_neighbour_selector.configure(state=state)
+        self.apply_boundary_definition()
+
+    def _boundary_neighbour_selected(self, _event: tk.Event) -> None:
+        self.apply_boundary_definition()
 
     def apply_vertex(self) -> None:
         if self.selected_vertex is None or self.vertex_x_var is None \
@@ -210,9 +332,17 @@ class EditingControllerMixin:
         self._commit_edit()
         self.redraw()
         self._update_property_panel()
+        spacing_affected = set().union(*(
+            self.model.spacing_linked_component(current)
+            for current in affected
+        ))
+        spacing_text = (
+            f" Synchronized {len(spacing_affected)} spacing-linked edges."
+            if len(spacing_affected) > len(affected) else ""
+        )
         self.status.set(
             f"Set {cells} cells on {len(affected)} topology-linked edge"
-            f"{'s' if len(affected) != 1 else ''}."
+            f"{'s' if len(affected) != 1 else ''}." + spacing_text
         )
 
     def apply_edge_grading(self, parameter: str) -> None:
@@ -241,7 +371,10 @@ class EditingControllerMixin:
             self._sync_property_values()
             return
         self._commit_edit()
-        self._sync_property_values()
+        if getattr(self, "spacing_link_mode_active", False):
+            self._update_property_panel()
+        else:
+            self._sync_property_values()
         self.redraw()
         labels = {
             "cell_ratio": "cell-to-cell ratio",
@@ -254,10 +387,22 @@ class EditingControllerMixin:
             len(self.model.edge_constraint_component(self.selected_edge))
             if propagate else 1
         )
+        anchors = (
+            self.model.edge_constraint_component(self.selected_edge)
+            if propagate else {self.selected_edge}
+        )
+        spacing_affected = set().union(*(
+            self.model.spacing_linked_component(current)
+            for current in anchors
+        ))
+        spacing_text = (
+            f" Synchronized {len(spacing_affected)} spacing-linked edges."
+            if len(spacing_affected) > len(anchors) else ""
+        )
         self.status.set(
             f"Set {labels[parameter]} for edge {first} → {second}; "
             f"updated {affected_count} linked edge"
-            f"{'s' if affected_count != 1 else ''}."
+            f"{'s' if affected_count != 1 else ''}." + spacing_text
         )
 
     def _edge_type_selected(self, _event: tk.Event) -> None:
@@ -639,6 +784,7 @@ class EditingControllerMixin:
         self.vertex_placement_active = False
         self.block_vertex_selection = None
         self._clear_projection_state()
+        self._clear_spacing_link_mode()
         self.projection_fit_var.set(False)
         self.projection_stage = "entities"
         self.selected_vertex = None
@@ -685,6 +831,7 @@ class EditingControllerMixin:
         if self.projection_stage is None:
             return
         self._clear_projection_state()
+        self._clear_spacing_link_mode()
         self._update_property_panel()
         self.redraw()
         self.status.set("Cancelled projection selection.")
@@ -847,6 +994,7 @@ class EditingControllerMixin:
             return
         self._clear_export_mode()
         self._clear_projection_state()
+        self._clear_spacing_link_mode()
         self.boundary_mode_active = False
         self.boundary_button.configure(text="Set boundaries")
         self.vertex_placement_active = False
@@ -949,6 +1097,7 @@ class EditingControllerMixin:
         if self.split_edge_active is not None \
                 or self.export_mode_active \
                 or self.boundary_mode_active \
+                or getattr(self, "spacing_link_mode_active", False) \
                 or self.projection_stage is not None:
             self.status.set("Finish the active editing mode before combining blocks.")
             return
@@ -993,7 +1142,7 @@ class EditingControllerMixin:
         self.selected_geometry_curve = None
         self.selected_geometry_point_index = None
         self._commit_edit()
-        self.fit_view()
+        self.redraw()
         self._update_property_panel()
         self.status.set(
             f"Added {block.id}. Its outer edge is selected for quick extension."
@@ -1003,6 +1152,7 @@ class EditingControllerMixin:
         self._clear_split_state()
         self._clear_export_mode()
         self._clear_projection_state()
+        self._clear_spacing_link_mode()
         self.boundary_mode_active = False
         self.boundary_button.configure(text="Set boundaries")
         self.vertex_placement_active = False
@@ -1027,6 +1177,7 @@ class EditingControllerMixin:
         self._clear_split_state()
         self._clear_export_mode()
         self._clear_projection_state()
+        self._clear_spacing_link_mode()
         self.boundary_mode_active = False
         self.boundary_button.configure(text="Set boundaries")
         self.vertex_placement_active = True

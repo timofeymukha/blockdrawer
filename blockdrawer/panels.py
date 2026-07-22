@@ -76,6 +76,90 @@ class PropertiesPanelMixin:
             command=lambda source=parameter: self.apply_edge_grading(source),
         ).grid(row=0, column=1, padx=(self._px(4), 0))
 
+    def _build_edge_grading_controls(
+        self,
+        current: tuple[str, str],
+        row: int,
+        *,
+        heading_padding: int,
+        include_help: bool,
+    ) -> int:
+        """Build the shared directional-grading editor and return its next row."""
+        first, second = current
+        affected = self.model.edge_constraint_component(current)
+        grading = self.model.edge_grading_values(current)
+        ttk.Label(
+            self.selection_frame,
+            text=f"Grading {first} → {second}",
+            font=self._font(10, "bold"),
+        ).grid(
+            row=row, column=0, columnspan=2, sticky="w",
+            pady=(self._px(heading_padding), self._px(3)),
+        )
+        row += 1
+        ttk.Checkbutton(
+            self.selection_frame,
+            text=(
+                f"Propagate to {len(affected)} cell-count-linked edge"
+                f"{'s' if len(affected) != 1 else ''}"
+            ),
+            variable=self.edge_grading_propagate_var,
+        ).grid(
+            row=row, column=0, columnspan=2, sticky="w",
+            pady=(0, self._px(4)),
+        )
+        row += 1
+        ttk.Label(self.selection_frame, text="Edge length").grid(
+            row=row, column=0, sticky="w",
+            padx=(0, self._px(8)), pady=self._px(3),
+        )
+        self.edge_length_var = tk.StringVar(
+            value=_display_grading_number(grading.length)
+        )
+        ttk.Label(
+            self.selection_frame,
+            textvariable=self.edge_length_var,
+            anchor="e",
+        ).grid(row=row, column=1, sticky="ew", pady=self._px(3))
+        row += 1
+        self.edge_cell_ratio_var = tk.StringVar(
+            value=_display_grading_number(grading.cell_ratio)
+        )
+        self.edge_total_ratio_var = tk.StringVar(
+            value=_display_grading_number(grading.total_ratio)
+        )
+        self.edge_start_width_var = tk.StringVar(
+            value=_display_grading_number(grading.start_width)
+        )
+        self.edge_end_width_var = tk.StringVar(
+            value=_display_grading_number(grading.end_width)
+        )
+        for label, variable, parameter in (
+            ("Cell/cell ratio", self.edge_cell_ratio_var, "cell_ratio"),
+            ("Total ratio", self.edge_total_ratio_var, "total_ratio"),
+            ("Start width", self.edge_start_width_var, "start_width"),
+            ("End width", self.edge_end_width_var, "end_width"),
+        ):
+            self._grading_field(row, label, variable, parameter)
+            row += 1
+        if include_help:
+            ttk.Label(
+                self.selection_frame,
+                text=(
+                    "Set any one value; the other three are recomputed. "
+                    "Total ratio is end width / start width in the arrow "
+                    "direction. Propagation preserves physical direction "
+                    "when linked edge arrows are reversed."
+                ),
+                foreground="#52606d",
+                wraplength=self._px(245),
+            ).grid(
+                row=row, column=0, columnspan=2, sticky="w",
+                pady=(self._px(5), self._px(2)),
+            )
+            row += 1
+        return row
+
     def _update_property_panel(self) -> None:
         for child in self.selection_frame.winfo_children():
             child.destroy()
@@ -171,6 +255,30 @@ class PropertiesPanelMixin:
             )
             return
 
+        if getattr(self, "spacing_link_mode_active", False):
+            self.sidebar_title.configure(text="Spacing links")
+            self.selection_frame.configure(text="Cell spacing")
+            self.selection_frame.grid_configure(row=1, pady=0)
+            self.sidebar_help.configure(
+                text=(
+                    "Select two incident edges to link their cell widths.\n"
+                    "Cell-count and grading edits synchronize link chains.\n"
+                    "L or Esc: finish spacing links"
+                )
+            )
+            self._build_spacing_link_panel()
+            self.add_button.configure(state="disabled")
+            self.edit_menu.entryconfigure(
+                self.delete_edge_menu_index, state="disabled"
+            )
+            self.edit_menu.entryconfigure(
+                self.split_edge_menu_index, state="disabled"
+            )
+            self.edit_menu.entryconfigure(
+                self.combine_blocks_menu_index, state="disabled"
+            )
+            return
+
         if self.split_edge_active is not None:
             self.sidebar_title.configure(text="Split block")
             self.selection_frame.configure(text="Conformal edge split")
@@ -220,8 +328,8 @@ class PropertiesPanelMixin:
                 "Double-click an exterior edge: add block\n"
                 "V: place vertex · N: connect 4 vertices\n"
                 "S: split edge · Shift+S: combine\n"
-                "B: boundaries · P: project · M: preview\n"
-                "E: export · Esc: cancel"
+                "B: boundaries · L: link spacing · P: project\n"
+                "M: preview · E: export · Esc: cancel"
             )
         )
 
@@ -384,77 +492,12 @@ class PropertiesPanelMixin:
                 command=self.apply_edge_cells,
             ).grid(row=4, column=0, columnspan=2, sticky="ew")
 
-            next_row = 5
-            grading = self.model.edge_grading_values(self.selected_edge)
-            ttk.Label(
-                self.selection_frame,
-                text=f"Grading {first} → {second}",
-                font=self._font(10, "bold"),
-            ).grid(
-                row=next_row, column=0, columnspan=2, sticky="w",
-                pady=(self._px(10), self._px(3)),
+            next_row = self._build_edge_grading_controls(
+                self.selected_edge,
+                5,
+                heading_padding=10,
+                include_help=True,
             )
-            next_row += 1
-            ttk.Checkbutton(
-                self.selection_frame,
-                text=(
-                    f"Propagate to {len(affected)} cell-count-linked edge"
-                    f"{'s' if len(affected) != 1 else ''}"
-                ),
-                variable=self.edge_grading_propagate_var,
-            ).grid(
-                row=next_row, column=0, columnspan=2, sticky="w",
-                pady=(0, self._px(4)),
-            )
-            next_row += 1
-            ttk.Label(self.selection_frame, text="Edge length").grid(
-                row=next_row, column=0, sticky="w",
-                padx=(0, self._px(8)), pady=self._px(3),
-            )
-            self.edge_length_var = tk.StringVar(
-                value=_display_grading_number(grading.length)
-            )
-            ttk.Label(
-                self.selection_frame,
-                textvariable=self.edge_length_var,
-                anchor="e",
-            ).grid(row=next_row, column=1, sticky="ew", pady=self._px(3))
-            next_row += 1
-            self.edge_cell_ratio_var = tk.StringVar(
-                value=_display_grading_number(grading.cell_ratio)
-            )
-            self.edge_total_ratio_var = tk.StringVar(
-                value=_display_grading_number(grading.total_ratio)
-            )
-            self.edge_start_width_var = tk.StringVar(
-                value=_display_grading_number(grading.start_width)
-            )
-            self.edge_end_width_var = tk.StringVar(
-                value=_display_grading_number(grading.end_width)
-            )
-            for label, variable, parameter in (
-                ("Cell/cell ratio", self.edge_cell_ratio_var, "cell_ratio"),
-                ("Total ratio", self.edge_total_ratio_var, "total_ratio"),
-                ("Start width", self.edge_start_width_var, "start_width"),
-                ("End width", self.edge_end_width_var, "end_width"),
-            ):
-                self._grading_field(next_row, label, variable, parameter)
-                next_row += 1
-            ttk.Label(
-                self.selection_frame,
-                text=(
-                    "Set any one value; the other three are recomputed. "
-                    "Total ratio is end width / start width in the arrow "
-                    "direction. Propagation preserves physical direction "
-                    "when linked edge arrows are reversed."
-                ),
-                foreground="#52606d",
-                wraplength=self._px(245),
-            ).grid(
-                row=next_row, column=0, columnspan=2, sticky="w",
-                pady=(self._px(5), self._px(2)),
-            )
-            next_row += 1
 
             if control_points and self.selected_control_point_index is not None:
                 point_index = self.selected_control_point_index
@@ -650,6 +693,165 @@ class PropertiesPanelMixin:
             ).grid(row=1, column=0, sticky="w", pady=(self._px(5), 0))
 
         self._configure_selection_edit_controls()
+
+    def _build_spacing_link_panel(self) -> None:
+        """Build the grading-only edge panel used while linking spacing."""
+        staged = self.spacing_link_first_edge
+        if self.selected_edge is None:
+            ttk.Label(
+                self.selection_frame,
+                text="Select a driver edge",
+                font=self._font(11, "bold"),
+            ).grid(row=0, column=0, columnspan=2, sticky="w")
+            ttk.Label(
+                self.selection_frame,
+                text=(
+                    "Then select a second edge sharing one vertex. The second "
+                    "edge is regraded to match the driver's cell width."
+                ),
+                foreground="#52606d",
+                wraplength=self._px(245),
+            ).grid(
+                row=1, column=0, columnspan=2, sticky="w",
+                pady=(self._px(5), 0),
+            )
+            return
+
+        current = self.selected_edge
+        first, second = current
+        cells = self.model.edge_cells[current]
+        affected = self.model.edge_constraint_component(current)
+        ttk.Label(
+            self.selection_frame,
+            text=f"Edge {first} — {second}",
+            font=self._font(11, "bold"),
+        ).grid(
+            row=0, column=0, columnspan=2, sticky="w",
+            pady=(0, self._px(4)),
+        )
+        stage_text = (
+            "Driver selected—click the second incident edge."
+            if staged == current
+            else (
+                f"Driver: {staged[0]} — {staged[1]}"
+                if staged is not None
+                else "Click an edge to begin another pair."
+            )
+        )
+        ttk.Label(
+            self.selection_frame,
+            text=stage_text,
+            foreground="#7048a8" if staged is not None else "#52606d",
+            wraplength=self._px(245),
+        ).grid(
+            row=1, column=0, columnspan=2, sticky="w",
+            pady=(0, self._px(7)),
+        )
+
+        self.edge_cells_var = tk.StringVar(value=str(cells))
+        self._field(
+            self.selection_frame,
+            2,
+            "Cells",
+            self.edge_cells_var,
+            on_confirm=self.apply_edge_cells,
+        )
+        ttk.Button(
+            self.selection_frame,
+            text="Apply cell count",
+            command=self.apply_edge_cells,
+        ).grid(
+            row=3, column=0, columnspan=2, sticky="ew",
+            pady=(self._px(5), 0),
+        )
+        ttk.Label(
+            self.selection_frame,
+            text=(
+                f"Cell count also updates {len(affected)} opposite-edge "
+                "topology constraint"
+                f"{'s' if len(affected) != 1 else ''}."
+            ),
+            foreground="#52606d",
+            wraplength=self._px(245),
+        ).grid(
+            row=4, column=0, columnspan=2, sticky="w",
+            pady=(self._px(5), self._px(7)),
+        )
+
+        next_row = self._build_edge_grading_controls(
+            current,
+            5,
+            heading_padding=4,
+            include_help=False,
+        )
+
+        links = self.model.spacing_links_for_edge(current)
+        ttk.Separator(self.selection_frame).grid(
+            row=next_row, column=0, columnspan=2, sticky="ew",
+            pady=(self._px(9), self._px(7)),
+        )
+        next_row += 1
+        ttk.Label(
+            self.selection_frame,
+            text=f"Endpoint links ({len(links)})",
+            font=self._font(10, "bold"),
+        ).grid(row=next_row, column=0, columnspan=2, sticky="w")
+        next_row += 1
+        if not links:
+            ttk.Label(
+                self.selection_frame,
+                text="This edge is not linked at either endpoint.",
+                foreground="#52606d",
+                wraplength=self._px(245),
+            ).grid(
+                row=next_row, column=0, columnspan=2, sticky="w",
+                pady=(self._px(4), 0),
+            )
+            next_row += 1
+        for link in links:
+            other = (
+                link.second_edge
+                if current == link.first_edge else link.first_edge
+            )
+            width = self.model.edge_width_at_vertex(current, link.vertex)
+            other_width = self.model.edge_width_at_vertex(other, link.vertex)
+            synchronized = self.model.spacing_link_is_synchronized(link)
+            ttk.Label(
+                self.selection_frame,
+                text=(
+                    f"At {link.vertex}: {other[0]} — {other[1]}\n"
+                    f"Widths {_display_grading_number(width)} / "
+                    f"{_display_grading_number(other_width)} "
+                    f"({'matched' if synchronized else 'out of sync'})"
+                ),
+                foreground="#0b726c" if synchronized else "#b45309",
+                wraplength=self._px(245),
+            ).grid(
+                row=next_row, column=0, columnspan=2, sticky="w",
+                pady=(self._px(5), self._px(3)),
+            )
+            next_row += 1
+            ttk.Button(
+                self.selection_frame,
+                text=f"Remove link at {link.vertex}",
+                command=lambda first_edge=link.first_edge,
+                second_edge=link.second_edge: self.remove_selected_spacing_link(
+                    first_edge, second_edge
+                ),
+            ).grid(
+                row=next_row, column=0, columnspan=2, sticky="ew"
+            )
+            next_row += 1
+
+        ttk.Button(
+            self.selection_frame,
+            text="Synchronize links from this edge",
+            command=self.synchronize_selected_spacing_links,
+            state="normal" if links else "disabled",
+        ).grid(
+            row=next_row, column=0, columnspan=2, sticky="ew",
+            pady=(self._px(9), 0),
+        )
 
     def _configure_selection_edit_controls(self) -> None:
         can_add = self.selected_edge is not None \
@@ -1422,6 +1624,9 @@ class PropertiesPanelMixin:
         self.boundary_neighbour_selector.grid(
             row=detail_row, column=1, sticky="ew", pady=self._px(3)
         )
+        self.boundary_neighbour_selector.bind(
+            "<<ComboboxSelected>>", self._boundary_neighbour_selected
+        )
         detail_row += 1
 
         ttk.Label(
@@ -1438,12 +1643,6 @@ class PropertiesPanelMixin:
         )
         detail_row += 1
 
-        ttk.Button(
-            self.selection_frame,
-            text="Apply boundary type",
-            command=self.apply_boundary_definition,
-        ).grid(row=detail_row, column=0, columnspan=2, sticky="ew")
-        detail_row += 1
         ttk.Button(
             self.selection_frame,
             text="Remove boundary",

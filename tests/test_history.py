@@ -304,6 +304,27 @@ class ModelHistoryTests(unittest.TestCase):
             restored.edge_total_expansion(opposite), 1.0 / graded_ratio
         )
 
+    def test_spacing_link_creation_and_propagation_are_undoable(self) -> None:
+        model = MeshModel()
+        history = ModelHistory(model)
+        first = edge_key("v0", "v1")
+        second = edge_key("v1", "v2")
+        model.set_edge_grading(first, "total_ratio", 8.0)
+        history.record(model)
+
+        model.add_spacing_link(first, second)
+        history.record(model)
+        linked_ratio = model.edge_total_expansion(second)
+
+        restored = history.undo()
+        self.assertEqual(restored.spacing_links, set())
+        self.assertEqual(restored.edge_total_expansion(second), 1.0)
+        restored = history.redo()
+        self.assertEqual(len(restored.spacing_links), 1)
+        self.assertAlmostEqual(
+            restored.edge_total_expansion(second), linked_ratio
+        )
+
     def test_boundary_creation_assignment_and_removal_are_undoable(self) -> None:
         model = MeshModel()
         selected = edge_key("v0", "v3")

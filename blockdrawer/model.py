@@ -10,15 +10,16 @@ from typing import Iterable
 
 from .domain import (
     Block,
-    BlockCombineResult,
+    BlockCombineResult,  # noqa: F401 - backward-compatible re-export
     Boundary,
     EdgeGeometry,
     EdgeGradingValues,
     EdgeKey,
     EdgeOccurrence,
-    EdgeSplitResult,
+    EdgeSplitResult,  # noqa: F401 - backward-compatible re-export
     GeometryCurve,
-    ProjectionResult,
+    ProjectionResult,  # noqa: F401 - backward-compatible re-export
+    SpacingLink,
     TopologyError,
     Vertex,
     edge_key,
@@ -29,10 +30,15 @@ from .grading import (
     _grading_from_total_ratio,
 )
 from .reference_geometry import ReferenceGeometryMixin
+from .spacing import SpacingOperationsMixin
 from .topology import TopologyOperationsMixin
 
 
-class MeshModel(TopologyOperationsMixin, ReferenceGeometryMixin):
+class MeshModel(
+    SpacingOperationsMixin,
+    TopologyOperationsMixin,
+    ReferenceGeometryMixin,
+):
     """A conformal set of quadrilateral blocks with optional curved edges.
 
     ``edge_cells`` stores the number of intervals along an edge. Canvas markers
@@ -77,6 +83,7 @@ class MeshModel(TopologyOperationsMixin, ReferenceGeometryMixin):
         # Non-uniform total end/start ratios in canonical EdgeKey direction.
         # Uniform grading is implicit, like straight edge geometry.
         self.edge_grading: dict[EdgeKey, float] = {}
+        self.spacing_links: set[SpacingLink] = set()
         self.boundaries: dict[str, Boundary] = {}
         self.edge_boundaries: dict[EdgeKey, str] = {}
         self.geometry_curves: dict[str, GeometryCurve] = {}
@@ -105,6 +112,7 @@ class MeshModel(TopologyOperationsMixin, ReferenceGeometryMixin):
         }
         self.edge_geometry = {}
         self.edge_grading = {}
+        self.spacing_links = set()
         self.boundaries = {}
         self.edge_boundaries = {}
         self.geometry_curves = {}
@@ -317,10 +325,18 @@ class MeshModel(TopologyOperationsMixin, ReferenceGeometryMixin):
         if isinstance(cells, bool) or not isinstance(cells, int) or cells < 1:
             raise TopologyError("The edge cell count must be a positive integer")
         affected = self.edge_constraint_component(edge)
-        for current in affected:
-            self.edge_cells[current] = cells
-            if cells == 1:
-                self.edge_grading.pop(current, None)
+        previous_cells = dict(self.edge_cells)
+        previous_grading = dict(self.edge_grading)
+        try:
+            for current in affected:
+                self.edge_cells[current] = cells
+                if cells == 1:
+                    self.edge_grading.pop(current, None)
+            self._propagate_spacing_links(affected)
+        except Exception:
+            self.edge_cells = previous_cells
+            self.edge_grading = previous_grading
+            raise
         return affected
 
     def edge_total_expansion(self, edge: EdgeKey) -> float:
@@ -431,8 +447,15 @@ class MeshModel(TopologyOperationsMixin, ReferenceGeometryMixin):
                 self._edge_constraint_orientations(current)
                 if propagate else {current: False}
             )
-            for affected_edge in affected:
-                self.edge_grading.pop(affected_edge, None)
+            previous = dict(self.edge_grading)
+            try:
+                for affected_edge in affected:
+                    self.edge_grading.pop(affected_edge, None)
+                self._propagate_spacing_links(affected)
+                self.validate()
+            except Exception:
+                self.edge_grading = previous
+                raise
             return self.edge_grading_values(current)
 
         if parameter == "total_ratio":
@@ -468,6 +491,7 @@ class MeshModel(TopologyOperationsMixin, ReferenceGeometryMixin):
                     self.edge_grading.pop(affected_edge, None)
                 else:
                     self.edge_grading[affected_edge] = ratio
+            self._propagate_spacing_links(orientations)
             self.validate()
         except Exception:
             self.edge_grading = previous
@@ -1024,6 +1048,8 @@ class MeshModel(TopologyOperationsMixin, ReferenceGeometryMixin):
                 self.edge_cells[current],
                 total_ratio,
             )
+
+        self._validate_spacing_links(actual_edges)
 
         used_colors: set[str] = set()
         for name, boundary in self.boundaries.items():

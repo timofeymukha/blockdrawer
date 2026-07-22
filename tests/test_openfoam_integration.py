@@ -162,6 +162,18 @@ class OpenFoamIntegrationTests(unittest.TestCase):
             model, expected_points=expected_nodes
         )
 
+    def test_block_mesh_accepts_spacing_link_generated_grading(self) -> None:
+        model = MeshModel()
+        driver = edge_key("v1", "v2")
+        follower = edge_key("v0", "v1")
+        model.set_edge_grading(driver, "total_ratio", 8.0)
+        model.add_spacing_link(driver, follower)
+
+        self.assertTrue(model.spacing_link_is_synchronized(
+            next(iter(model.spacing_links))
+        ))
+        self._assert_block_mesh_accepts(model)
+
     def test_block_mesh_accepts_block_created_from_existing_vertices(self) -> None:
         model = build_ring_model()
         model.add_block_from_vertices(center_vertex_ids(model))
@@ -238,12 +250,17 @@ class OpenFoamIntegrationTests(unittest.TestCase):
     def test_interior_preview_matches_single_block_mesh_points(self) -> None:
         model = MeshModel()
         bottom = edge_key("v0", "v1")
+        right = edge_key("v1", "v2")
+        top = edge_key("v2", "v3")
         left = edge_key("v0", "v3")
         model.set_edge_cells(bottom, 4)
         model.set_edge_cells(left, 3)
         model.set_edge_type(bottom, "arc")
         model.set_arc_point(bottom, 0.5, -0.25)
         model.set_edge_grading(bottom, "total_ratio", 8.0)
+        model.set_edge_grading(right, "total_ratio", 0.25)
+        model.set_edge_grading(top, "total_ratio", 0.2)
+        model.set_edge_grading(left, "total_ratio", 3.0)
         preview = build_mesh_preview(model)
         expected_nodes = list({
             (point[0], point[1], model.z_min)

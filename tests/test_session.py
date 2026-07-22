@@ -85,7 +85,7 @@ class SessionTests(unittest.TestCase):
             loaded = load_session(path)
 
         self.assertEqual(parsed["format"], "blockDrawer")
-        self.assertEqual(parsed["version"], 6)
+        self.assertEqual(parsed["version"], 7)
         self.assertEqual(parsed["settings"]["zMinPatch"], {
             "name": "zMin", "type": "patch",
         })
@@ -105,7 +105,7 @@ class SessionTests(unittest.TestCase):
         self.assertTrue(all(
             loaded.edge_type(current) == "line" for current in loaded.edges()
         ))
-        self.assertEqual(to_data(loaded)["version"], 6)
+        self.assertEqual(to_data(loaded)["version"], 7)
 
     def test_version_two_session_is_migrated_with_uniform_grading(self) -> None:
         data = to_data(MeshModel())
@@ -118,7 +118,7 @@ class SessionTests(unittest.TestCase):
             loaded.edge_total_expansion(current) == 1.0
             for current in loaded.edges()
         ))
-        self.assertEqual(to_data(loaded)["version"], 6)
+        self.assertEqual(to_data(loaded)["version"], 7)
 
     def test_version_three_session_is_migrated_without_boundaries(self) -> None:
         data = to_data(MeshModel())
@@ -130,7 +130,7 @@ class SessionTests(unittest.TestCase):
 
         self.assertEqual(loaded.boundaries, {})
         self.assertEqual(loaded.edge_boundaries, {})
-        self.assertEqual(to_data(loaded)["version"], 6)
+        self.assertEqual(to_data(loaded)["version"], 7)
 
     def test_version_four_session_is_migrated_without_geometry_curves(self) -> None:
         data = to_data(MeshModel())
@@ -140,7 +140,17 @@ class SessionTests(unittest.TestCase):
         loaded = from_data(data)
 
         self.assertEqual(loaded.geometry_curves, {})
-        self.assertEqual(to_data(loaded)["version"], 6)
+        self.assertEqual(to_data(loaded)["version"], 7)
+
+    def test_version_six_session_is_migrated_without_spacing_links(self) -> None:
+        data = to_data(MeshModel())
+        data["version"] = 6
+        del data["spacingLinks"]
+
+        loaded = from_data(data)
+
+        self.assertEqual(loaded.spacing_links, set())
+        self.assertEqual(to_data(loaded)["version"], 7)
 
     def test_version_five_session_gets_nonconflicting_z_patch_defaults(self) -> None:
         model = MeshModel()
@@ -235,6 +245,21 @@ class SessionTests(unittest.TestCase):
             "expansionRatio": 8.0,
         }])
         self.assertEqual(restored.edge_total_expansion(selected), 8.0)
+
+    def test_spacing_links_round_trip_in_version_seven_schema(self) -> None:
+        model = MeshModel()
+        first = edge_key("v0", "v1")
+        second = edge_key("v1", "v2")
+        model.add_spacing_link(first, second)
+
+        data = to_data(model)
+        restored = from_data(data)
+
+        self.assertEqual(data["spacingLinks"], [{
+            "vertex": "v1",
+            "edges": [["v0", "v1"], ["v1", "v2"]],
+        }])
+        self.assertEqual(restored.spacing_links, model.spacing_links)
 
     def test_arc_geometry_uses_extensible_interpolation_point_schema(self) -> None:
         model = MeshModel()

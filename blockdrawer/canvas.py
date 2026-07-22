@@ -66,6 +66,17 @@ class CanvasControllerMixin:
         height = transform.height
         self._redraw_world_bounds = self._viewport_world_bounds(transform)
         edges = self.model.edges()
+        show_vertex_ids_var = getattr(self, "show_vertex_ids_var", None)
+        show_vertex_ids = (
+            show_vertex_ids_var is None or bool(show_vertex_ids_var.get())
+        )
+        show_edge_cell_counts_var = getattr(
+            self, "show_edge_cell_counts_var", None
+        )
+        show_edge_cell_counts = (
+            show_edge_cell_counts_var is None
+            or bool(show_edge_cell_counts_var.get())
+        )
         self.render_path_cache.prune(edges, self.model.geometry_curves)
         self._draw_grid(width, height)
         if self.show_mesh_preview_var.get():
@@ -87,6 +98,10 @@ class CanvasControllerMixin:
             ):
                 continue
             selected = current == self.selected_edge
+            spacing_staged = (
+                getattr(self, "spacing_link_mode_active", False)
+                and current == getattr(self, "spacing_link_first_edge", None)
+            )
             projection_selected = current in self.projection_edges
             boundary_name = self.model.edge_boundaries.get(current)
             boundary_color = (
@@ -95,6 +110,8 @@ class CanvasControllerMixin:
             )
             if projection_selected:
                 color = "#9c36b5"
+            elif spacing_staged:
+                color = "#7048a8"
             elif boundary_color is not None:
                 color = boundary_color
             elif self.boundary_mode_active and not self.model.is_boundary_edge(current):
@@ -114,6 +131,7 @@ class CanvasControllerMixin:
                 fill=color,
                 width=self._px(
                     5 if projection_selected or active_boundary_edge
+                    or spacing_staged
                     else 4 if selected
                     else 3 if boundary_color
                     else 2
@@ -124,7 +142,9 @@ class CanvasControllerMixin:
                 self._draw_edge_nodes(current, color)
 
             midpoint_world = self.model.edge_point(current, 0.5)
-            if point_in_bounds(midpoint_world, self._redraw_world_bounds):
+            if show_edge_cell_counts and point_in_bounds(
+                midpoint_world, self._redraw_world_bounds
+            ):
                 midpoint_x, midpoint_y = self.world_to_screen(*midpoint_world)
                 label = self.canvas.create_text(
                     midpoint_x,
@@ -187,6 +207,8 @@ class CanvasControllerMixin:
                         "control_point", point_target
                     )
 
+        self._draw_spacing_link_markers()
+
         for identifier, vertex in self.model.vertices.items():
             if not point_in_bounds(
                 (vertex.x, vertex.y), self._redraw_world_bounds
@@ -227,15 +249,16 @@ class CanvasControllerMixin:
                     font=self._font(7, "bold"),
                 )
                 self.item_targets[order_label] = ("vertex", identifier)
-            label = self.canvas.create_text(
-                x + self._px(11),
-                y + self._px(11),
-                text=identifier,
-                anchor="nw",
-                fill="#243b53",
-                font=self._font(9),
-            )
-            self.item_targets[label] = ("vertex", identifier)
+            if show_vertex_ids:
+                label = self.canvas.create_text(
+                    x + self._px(11),
+                    y + self._px(11),
+                    text=identifier,
+                    anchor="nw",
+                    fill="#243b53",
+                    font=self._font(9),
+                )
+                self.item_targets[label] = ("vertex", identifier)
 
         if self.show_geometry_var.get():
             self._draw_geometry_curves()
@@ -393,6 +416,39 @@ class CanvasControllerMixin:
                 self.item_targets[order_label] = (
                     "geometry_point", target
                 )
+
+    def _draw_spacing_link_markers(self) -> None:
+        """Draw short teal legs showing which edge endpoints are paired."""
+        marker_length = self._px(18)
+        for link in sorted(self.model.spacing_links):
+            vertex = self.model.vertices[link.vertex]
+            if not point_in_bounds(
+                (vertex.x, vertex.y), self._redraw_world_bounds
+            ):
+                continue
+            center_x, center_y = self.world_to_screen(vertex.x, vertex.y)
+            for current in (link.first_edge, link.second_edge):
+                fraction = 0.08 if link.vertex == current[0] else 0.92
+                world_x, world_y = self.model.edge_point(current, fraction)
+                target_x, target_y = self.world_to_screen(world_x, world_y)
+                delta_x = target_x - center_x
+                delta_y = target_y - center_y
+                distance = math.hypot(delta_x, delta_y)
+                if distance <= 0.0:
+                    continue
+                scale = min(1.0, marker_length / distance)
+                end_x = center_x + delta_x * scale
+                end_y = center_y + delta_y * scale
+                leg = self.canvas.create_line(
+                    center_x,
+                    center_y,
+                    end_x,
+                    end_y,
+                    fill="#0b8f87",
+                    width=self._px(4),
+                    capstyle=tk.ROUND,
+                )
+                self.item_targets[leg] = ("edge", current)
 
     def _draw_edge_nodes(self, current: EdgeKey, color: str) -> None:
         cells = self.model.edge_cells[current]
@@ -655,6 +711,8 @@ class CanvasControllerMixin:
     def apply_visibility(self) -> None:
         show_block_mesh = bool(self.show_block_mesh_var.get())
         show_geometry = bool(self.show_geometry_var.get())
+        show_vertex_ids = bool(self.show_vertex_ids_var.get())
+        show_edge_cell_counts = bool(self.show_edge_cell_counts_var.get())
         show_edge_nodes = bool(self.show_edge_nodes_var.get())
         show_edge_interpolation_points = bool(
             self.show_edge_interpolation_points_var.get()
@@ -663,6 +721,8 @@ class CanvasControllerMixin:
         self.preferences = self.preferences.with_visibility(
             show_block_mesh=show_block_mesh,
             show_geometry=show_geometry,
+            show_vertex_ids=show_vertex_ids,
+            show_edge_cell_counts=show_edge_cell_counts,
             show_edge_nodes=show_edge_nodes,
             show_edge_interpolation_points=show_edge_interpolation_points,
             show_mesh_preview=show_mesh_preview,
@@ -675,6 +735,7 @@ class CanvasControllerMixin:
             self.selected_control_point_index = None
             self.block_vertex_selection = None
             self.vertex_placement_active = False
+            self._clear_spacing_link_mode()
             if self.boundary_mode_active:
                 self.boundary_mode_active = False
                 self.boundary_button.configure(text="Set boundaries")
@@ -783,6 +844,19 @@ class CanvasControllerMixin:
             return
         if getattr(self, "projection_stage", None) is not None:
             self._toggle_projection_target(target)
+            return
+        if getattr(self, "spacing_link_mode_active", False):
+            current: EdgeKey | None = None
+            if target is not None and target[0] == "edge":
+                current = target[1]  # type: ignore[assignment]
+            elif target is not None and target[0] == "control_point":
+                current = target[1][0]  # type: ignore[index]
+            if current is None:
+                self.status.set(
+                    "Spacing links: click a mesh edge, or press Esc to finish."
+                )
+                return
+            self.select_spacing_link_edge(current)
             return
         if self.boundary_mode_active:
             if target is None or target[0] != "edge":
@@ -965,6 +1039,7 @@ class CanvasControllerMixin:
     def _on_double_click(self, _event: tk.Event) -> None:
         if self.split_edge_active is not None or self.export_mode_active \
                 or self.boundary_mode_active \
+                or getattr(self, "spacing_link_mode_active", False) \
                 or self.projection_stage is not None:
             return
         target = self._target_at_cursor()

@@ -278,6 +278,151 @@ class MeshModelTests(unittest.TestCase):
         self.assertAlmostEqual(grading.start_width, math.pi / 20.0)
         self.assertAlmostEqual(grading.end_width, math.pi / 20.0)
 
+    def test_spacing_link_matches_cell_width_at_shared_vertex(self) -> None:
+        model = MeshModel()
+        driver = edge_key("v0", "v1")
+        follower = edge_key("v1", "v2")
+        model.set_edge_grading(driver, "total_ratio", 8.0)
+
+        link = model.add_spacing_link(driver, follower)
+
+        self.assertEqual(link.vertex, "v1")
+        self.assertAlmostEqual(
+            model.edge_width_at_vertex(driver, "v1"),
+            model.edge_width_at_vertex(follower, "v1"),
+        )
+        self.assertAlmostEqual(
+            model.edge_total_expansion(follower), 1.0 / 8.0
+        )
+        model.validate()
+
+    def test_first_selected_spacing_edge_remains_the_driver_after_normalization(
+        self,
+    ) -> None:
+        model = MeshModel()
+        driver = edge_key("v1", "v2")
+        follower = edge_key("v0", "v1")
+        model.set_edge_grading(driver, "total_ratio", 5.0)
+        follower_before = model.edge_width_at_vertex(follower, "v1")
+
+        model.add_spacing_link(driver, follower)
+
+        self.assertNotAlmostEqual(
+            model.edge_width_at_vertex(follower, "v1"), follower_before
+        )
+        self.assertAlmostEqual(
+            model.edge_width_at_vertex(driver, "v1"),
+            model.edge_width_at_vertex(follower, "v1"),
+        )
+
+    def test_spacing_link_grading_propagates_through_a_chain(self) -> None:
+        model = MeshModel()
+        first = edge_key("v0", "v1")
+        second = edge_key("v1", "v2")
+        third = edge_key("v2", "v3")
+        model.add_spacing_link(first, second)
+        model.add_spacing_link(second, third)
+
+        model.set_edge_grading(first, "total_ratio", 8.0)
+
+        self.assertAlmostEqual(
+            model.edge_width_at_vertex(first, "v1"),
+            model.edge_width_at_vertex(second, "v1"),
+        )
+        self.assertAlmostEqual(
+            model.edge_width_at_vertex(second, "v2"),
+            model.edge_width_at_vertex(third, "v2"),
+        )
+
+    def test_cell_count_change_synchronizes_spacing_without_changing_follower_count(
+        self,
+    ) -> None:
+        model = MeshModel()
+        model.add_block(edge_key("v1", "v2"))
+        driver = edge_between(model, (0.0, 0.0), (1.0, 0.0))
+        follower = edge_between(model, (1.0, 0.0), (2.0, 0.0))
+        model.add_spacing_link(driver, follower)
+        model.set_edge_grading(driver, "total_ratio", 4.0)
+
+        model.set_edge_cells(driver, 16)
+
+        self.assertEqual(model.edge_cells[follower], 10)
+        self.assertAlmostEqual(
+            model.edge_width_at_vertex(driver, "v1"),
+            model.edge_width_at_vertex(follower, "v1"),
+        )
+
+    def test_geometry_change_waits_for_explicit_spacing_synchronization(self) -> None:
+        model = MeshModel()
+        model.add_block(edge_key("v1", "v2"))
+        driver = edge_between(model, (0.0, 0.0), (1.0, 0.0))
+        follower = edge_between(model, (1.0, 0.0), (2.0, 0.0))
+        model.add_spacing_link(driver, follower)
+        outer_id = next(
+            identifier
+            for identifier, vertex in model.vertices.items()
+            if math.isclose(vertex.x, 2.0) and math.isclose(vertex.y, 0.0)
+        )
+
+        model.move_vertex(outer_id, 3.0, 0.0)
+
+        link = next(iter(model.spacing_links))
+        self.assertFalse(model.spacing_link_is_synchronized(link))
+        self.assertNotAlmostEqual(
+            model.edge_width_at_vertex(driver, "v1"),
+            model.edge_width_at_vertex(follower, "v1"),
+        )
+        affected = model.synchronize_spacing_links(driver)
+        self.assertEqual(affected, {driver, follower})
+        self.assertTrue(model.spacing_link_is_synchronized(link))
+        self.assertAlmostEqual(
+            model.edge_width_at_vertex(driver, "v1"),
+            model.edge_width_at_vertex(follower, "v1"),
+        )
+
+    def test_spacing_link_rejects_nonincident_or_occupied_endpoints(self) -> None:
+        model = MeshModel()
+        bottom = edge_key("v0", "v1")
+        right = edge_key("v1", "v2")
+        top = edge_key("v2", "v3")
+
+        with self.assertRaisesRegex(TopologyError, "share exactly one"):
+            model.add_spacing_link(bottom, top)
+        model.add_block(right)
+        next_bottom = edge_between(model, (1.0, 0.0), (2.0, 0.0))
+        model.add_spacing_link(bottom, right)
+        with self.assertRaisesRegex(TopologyError, "already spacing-linked"):
+            model.add_spacing_link(right, next_bottom)
+        model.validate()
+
+    def test_unattainable_spacing_after_cell_change_rolls_back_atomically(self) -> None:
+        model = MeshModel()
+        model.add_block(edge_key("v1", "v2"))
+        driver = edge_between(model, (0.0, 0.0), (1.0, 0.0))
+        follower = edge_between(model, (1.0, 0.0), (2.0, 0.0))
+        model.add_spacing_link(driver, follower)
+        cells_before = dict(model.edge_cells)
+        grading_before = dict(model.edge_grading)
+
+        with self.assertRaisesRegex(TopologyError, "cannot attain"):
+            model.set_edge_cells(driver, 1)
+
+        self.assertEqual(model.edge_cells, cells_before)
+        self.assertEqual(model.edge_grading, grading_before)
+
+    def test_edge_deletion_prunes_disappearing_spacing_links(self) -> None:
+        model = MeshModel()
+        model.add_block(edge_key("v1", "v2"))
+        first = edge_between(model, (0.0, 0.0), (1.0, 0.0))
+        second = edge_between(model, (1.0, 0.0), (2.0, 0.0))
+        outer = edge_between(model, (2.0, 0.0), (2.0, 1.0))
+        model.add_spacing_link(first, second)
+
+        model.remove_edge(outer)
+
+        self.assertEqual(model.spacing_links, set())
+        model.validate()
+
     def test_arc_type_creates_a_curved_edge_with_one_control_point(self) -> None:
         model = MeshModel()
         selected = edge_key("v0", "v1")

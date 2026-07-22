@@ -80,9 +80,11 @@ class RecordingCanvas(CountingSizeCanvas):
     def __init__(self, width: int = 800, height: int = 600) -> None:
         super().__init__(width, height)
         self.created: list[str] = []
+        self.texts: list[str] = []
 
     def delete(self, _tag: str) -> None:
         self.created.clear()
+        self.texts.clear()
 
     def _create(self, kind: str) -> int:
         self.created.append(kind)
@@ -91,7 +93,8 @@ class RecordingCanvas(CountingSizeCanvas):
     def create_line(self, *_args, **_options) -> int:
         return self._create("line")
 
-    def create_text(self, *_args, **_options) -> int:
+    def create_text(self, *_args, **options) -> int:
+        self.texts.append(str(options.get("text", "")))
         return self._create("text")
 
     def create_oval(self, *_args, **_options) -> int:
@@ -126,6 +129,33 @@ class FakeAfterRoot:
 
 
 class DpiScalingTests(unittest.TestCase):
+    def test_adding_block_preserves_viewport_without_fitting(self) -> None:
+        app = BlockDrawerApp.__new__(BlockDrawerApp)
+        app.model = MeshModel()
+        app.selected_edge = edge_key("v1", "v2")
+        app.selected_vertex = None
+        app.selected_control_point_index = None
+        app.selected_geometry_curve = None
+        app.selected_geometry_point_index = None
+        app.view_x = 7.5
+        app.view_y = -3.25
+        app.pixels_per_unit = 1234.0
+        app.status = FakeStringVar()
+        redraws: list[bool] = []
+        app._commit_edit = lambda: None
+        app._update_property_panel = lambda: None
+        app.redraw = lambda: redraws.append(True)
+        app.fit_view = lambda: self.fail("adding a block must not fit the view")
+        app._show_error = lambda _title, error: self.fail(str(error))
+
+        app.add_selected_block()
+
+        self.assertEqual(len(app.model.blocks), 2)
+        self.assertEqual(redraws, [True])
+        self.assertEqual(app.view_x, 7.5)
+        self.assertEqual(app.view_y, -3.25)
+        self.assertEqual(app.pixels_per_unit, 1234.0)
+
     def test_redraw_culls_topology_completely_outside_viewport(self) -> None:
         app = BlockDrawerApp.__new__(BlockDrawerApp)
         app.root = FakeAfterRoot()
@@ -672,6 +702,48 @@ class DpiScalingTests(unittest.TestCase):
         self.assertEqual(app.z_min_patch_type_var.get(), "wall")
         self.assertEqual(app.z_max_patch_type_var.get(), "empty")
 
+    def test_boundary_type_and_neighbour_selections_apply_immediately(
+        self,
+    ) -> None:
+        app = BlockDrawerApp.__new__(BlockDrawerApp)
+        app.model = MeshModel()
+        for name in ("inlet", "outlet", "alternate"):
+            app.model.add_boundary(name)
+        app.active_boundary_name = "inlet"
+        app.boundary_type_var = FakeStringVar("wall")
+        app.boundary_neighbour_var = FakeStringVar("")
+        app.status = FakeStringVar()
+        commits: list[bool] = []
+        app._commit_edit = lambda: commits.append(True)
+        app._update_property_panel = lambda: None
+        app.redraw = lambda: None
+        app._show_error = lambda _title, error: self.fail(str(error))
+
+        app._boundary_type_selected(SimpleNamespace())
+
+        self.assertEqual(app.model.boundaries["inlet"].kind, "wall")
+        self.assertEqual(commits, [True])
+
+        app.boundary_type_var.set("cyclic")
+        app.boundary_neighbour_var.set("outlet")
+        app._boundary_type_selected(SimpleNamespace())
+
+        self.assertEqual(
+            app.model.boundaries["inlet"].neighbour_patch, "outlet"
+        )
+        self.assertEqual(
+            app.model.boundaries["outlet"].neighbour_patch, "inlet"
+        )
+
+        app.boundary_neighbour_var.set("alternate")
+        app._boundary_neighbour_selected(SimpleNamespace())
+
+        self.assertEqual(
+            app.model.boundaries["inlet"].neighbour_patch, "alternate"
+        )
+        self.assertEqual(app.model.boundaries["outlet"].kind, "patch")
+        self.assertEqual(commits, [True, True, True])
+
     def test_p_shortcut_starts_projection_only_outside_text_input(self) -> None:
         app = BlockDrawerApp.__new__(BlockDrawerApp)
         calls: list[bool] = []
@@ -861,6 +933,8 @@ class DpiScalingTests(unittest.TestCase):
         app.preferences = default_config("linux")
         app.show_block_mesh_var = FakeStringVar(True)
         app.show_geometry_var = FakeStringVar(True)
+        app.show_vertex_ids_var = FakeStringVar(False)
+        app.show_edge_cell_counts_var = FakeStringVar(False)
         app.show_edge_nodes_var = FakeStringVar(False)
         app.show_edge_interpolation_points_var = FakeStringVar(False)
         app.show_mesh_preview_var = FakeStringVar(True)
@@ -871,9 +945,57 @@ class DpiScalingTests(unittest.TestCase):
 
         app.apply_visibility()
 
+        self.assertFalse(app.preferences.show_vertex_ids)
+        self.assertFalse(app.preferences.show_edge_cell_counts)
         self.assertFalse(app.preferences.show_edge_nodes)
         self.assertFalse(app.preferences.show_edge_interpolation_points)
         self.assertTrue(app.preferences.show_mesh_preview)
+
+    def test_canvas_vertex_and_edge_count_labels_can_be_hidden(self) -> None:
+        app = BlockDrawerApp.__new__(BlockDrawerApp)
+        app.root = FakeAfterRoot()
+        app._viewport_redraw_after_id = None
+        app.canvas = RecordingCanvas()
+        app.item_targets = {}
+        app.model = MeshModel()
+        app.render_path_cache = RenderPathCache()
+        app.view_x = 0.5
+        app.view_y = 0.5
+        app.pixels_per_unit = 100.0
+        app.display_scale = 1.0
+        app.ui_scale_multiplier = 1.0
+        app.default_font_family = "TkDefaultFont"
+        app.show_mesh_preview_var = FakeStringVar(False)
+        app.show_block_mesh_var = FakeStringVar(True)
+        app.show_geometry_var = FakeStringVar(False)
+        app.show_vertex_ids_var = FakeStringVar(False)
+        app.show_edge_cell_counts_var = FakeStringVar(False)
+        app.show_edge_nodes_var = FakeStringVar(False)
+        app.show_edge_interpolation_points_var = FakeStringVar(False)
+        app.selected_edge = None
+        app.selected_vertex = None
+        app.selected_control_point_index = None
+        app.projection_edges = []
+        app.projection_vertex_ids = []
+        app.block_vertex_selection = None
+        app.boundary_mode_active = False
+        app.active_boundary_name = None
+        app.split_edge_active = None
+        app._draw_grid = lambda _width, _height: None
+
+        app.redraw()
+
+        self.assertEqual(app.canvas.texts, [])
+
+        app.show_vertex_ids_var.set(True)
+        app.show_edge_cell_counts_var.set(True)
+        app.redraw()
+
+        self.assertEqual(
+            {text for text in app.canvas.texts if text.startswith("v")},
+            {"v0", "v1", "v2", "v3"},
+        )
+        self.assertEqual(app.canvas.texts.count("10"), 4)
 
     def test_preview_coarsening_is_validated_and_stored_in_preferences(
         self,
@@ -976,6 +1098,63 @@ class DpiScalingTests(unittest.TestCase):
             1.0 / 8.0,
         )
         self.assertEqual(commits, [True])
+
+    def test_spacing_link_mode_selects_a_pair_and_commits_once(self) -> None:
+        app = BlockDrawerApp.__new__(BlockDrawerApp)
+        app.model = MeshModel()
+        first = edge_key("v0", "v1")
+        second = edge_key("v1", "v2")
+        app.spacing_link_first_edge = None
+        app.selected_vertex = None
+        app.selected_edge = None
+        app.selected_control_point_index = None
+        app.selected_geometry_curve = None
+        app.selected_geometry_point_index = None
+        app.status = FakeStringVar()
+        commits: list[bool] = []
+        app._commit_edit = lambda: commits.append(True)
+        app._update_property_panel = lambda: None
+        app.redraw = lambda: None
+        app._show_error = lambda _title, error: self.fail(str(error))
+
+        app.select_spacing_link_edge(first)
+        self.assertEqual(app.spacing_link_first_edge, first)
+        self.assertEqual(commits, [])
+        app.select_spacing_link_edge(second)
+
+        self.assertIsNone(app.spacing_link_first_edge)
+        self.assertEqual(app.selected_edge, second)
+        self.assertEqual(len(app.model.spacing_links), 1)
+        self.assertEqual(commits, [True])
+
+    def test_grading_ui_synchronizes_spacing_link_follower(self) -> None:
+        app = BlockDrawerApp.__new__(BlockDrawerApp)
+        app.model = MeshModel()
+        app.selected_edge = edge_key("v0", "v1")
+        follower = edge_key("v1", "v2")
+        app.model.add_spacing_link(app.selected_edge, follower)
+        app.selected_vertex = None
+        app.selected_control_point_index = None
+        app.edge_cells_var = FakeStringVar("10")
+        app.edge_length_var = FakeStringVar()
+        app.edge_cell_ratio_var = FakeStringVar()
+        app.edge_total_ratio_var = FakeStringVar("8")
+        app.edge_start_width_var = FakeStringVar()
+        app.edge_end_width_var = FakeStringVar()
+        app.edge_grading_propagate_var = SimpleNamespace(get=lambda: False)
+        app.point_x_var = None
+        app.point_y_var = None
+        app.status = FakeStringVar()
+        app._commit_edit = lambda: None
+        app.redraw = lambda: None
+        app._show_error = lambda _title, error: self.fail(str(error))
+
+        app.apply_edge_grading("total_ratio")
+
+        self.assertAlmostEqual(
+            app.model.edge_width_at_vertex(app.selected_edge, "v1"),
+            app.model.edge_width_at_vertex(follower, "v1"),
+        )
 
     def test_geometry_coordinate_input_updates_selected_point(self) -> None:
         app = BlockDrawerApp.__new__(BlockDrawerApp)

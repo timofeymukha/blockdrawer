@@ -132,6 +132,7 @@ class TopologyOperationsMixin:
         cells_before = dict(self.edge_cells)
         geometry_before = dict(self.edge_geometry)
         grading_before = dict(self.edge_grading)
+        spacing_links_before = set(self.spacing_links)
         edge_boundaries_before = dict(self.edge_boundaries)
 
         try:
@@ -314,6 +315,15 @@ class TopologyOperationsMixin:
                 assign_grading(cut, canonical_ratio)
             self.edge_grading = new_grading
 
+            spacing_replacements: dict[
+                tuple[EdgeKey, str], EdgeKey | None
+            ] = {}
+            for current in affected:
+                first_segment, second_segment = segments[current]
+                spacing_replacements[(current, current[0])] = first_segment
+                spacing_replacements[(current, current[1])] = second_segment
+            self._remap_spacing_link_endpoints(spacing_replacements)
+
             new_boundaries = {
                 current: name
                 for current, name in edge_boundaries_before.items()
@@ -352,6 +362,7 @@ class TopologyOperationsMixin:
             self.edge_cells = cells_before
             self.edge_geometry = geometry_before
             self.edge_grading = grading_before
+            self.spacing_links = spacing_links_before
             self.edge_boundaries = edge_boundaries_before
             raise
 
@@ -580,6 +591,7 @@ class TopologyOperationsMixin:
         cells_before = dict(self.edge_cells)
         geometry_before = dict(self.edge_geometry)
         grading_before = dict(self.edge_grading)
+        spacing_links_before = set(self.spacing_links)
         edge_boundaries_before = dict(self.edge_boundaries)
 
         try:
@@ -634,6 +646,21 @@ class TopologyOperationsMixin:
                 ):
                     self.edge_grading[current] = plan.total_ratio
 
+            spacing_replacements: dict[
+                tuple[EdgeKey, str], EdgeKey | None
+            ] = {
+                (current, vertex): None
+                for current in cut_edges
+                for vertex in current
+            }
+            for plan in combined_edge_plans.values():
+                for source in plan.source_edges:
+                    for vertex in source:
+                        spacing_replacements[(source, vertex)] = (
+                            plan.edge if vertex in plan.edge else None
+                        )
+            self._remap_spacing_link_endpoints(spacing_replacements)
+
             self.edge_boundaries = {
                 current: name
                 for current, name in edge_boundaries_before.items()
@@ -679,6 +706,7 @@ class TopologyOperationsMixin:
             self.edge_cells = cells_before
             self.edge_geometry = geometry_before
             self.edge_grading = grading_before
+            self.spacing_links = spacing_links_before
             self.edge_boundaries = edge_boundaries_before
             raise
 
@@ -1065,6 +1093,7 @@ class TopologyOperationsMixin:
         blocks_before = list(self.blocks)
         cells_before = dict(self.edge_cells)
         grading_before = dict(self.edge_grading)
+        spacing_links_before = set(self.spacing_links)
         edge_boundaries_before = dict(self.edge_boundaries)
 
         try:
@@ -1155,6 +1184,7 @@ class TopologyOperationsMixin:
             self.blocks = blocks_before
             self.edge_cells = cells_before
             self.edge_grading = grading_before
+            self.spacing_links = spacing_links_before
             self.edge_boundaries = edge_boundaries_before
             raise
 
@@ -1233,6 +1263,7 @@ class TopologyOperationsMixin:
         cells_before = dict(self.edge_cells)
         geometry_before = dict(self.edge_geometry)
         grading_before = dict(self.edge_grading)
+        spacing_links_before = set(self.spacing_links)
         edge_boundaries_before = dict(self.edge_boundaries)
         removed_ids = {occurrence[0].id for occurrence in occurrences}
         if len(removed_ids) >= len(self.blocks):
@@ -1279,6 +1310,7 @@ class TopologyOperationsMixin:
                 for current, ratio in self.edge_grading.items()
                 if current in surviving_edges
             }
+            self._prune_spacing_links()
             self._prune_boundary_assignments()
             self.validate()
             return removed
@@ -1288,6 +1320,7 @@ class TopologyOperationsMixin:
             self.edge_cells = cells_before
             self.edge_geometry = geometry_before
             self.edge_grading = grading_before
+            self.spacing_links = spacing_links_before
             self.edge_boundaries = edge_boundaries_before
             raise
 

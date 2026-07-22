@@ -13,6 +13,7 @@ from .render_cache import Bounds, points_bounds
 
 Point = tuple[float, float]
 Polyline = tuple[Point, ...]
+EdgeSample = tuple[float, Point]
 
 
 @dataclass(frozen=True)
@@ -91,8 +92,9 @@ def build_mesh_preview(model: MeshModel, coarsening: int = 1) -> MeshPreview:
     """Build coarsened interior grid lines for every quadrilateral block.
 
     Boundary node locations follow each edge's curve and grading. Interior
-    points use a Coons-patch blend of the four boundaries. This is deliberately
-    a visual approximation: it does not create or validate inter-block cells.
+    points use the 2D specialization of OpenFOAM's edge-weighted transfinite
+    interpolation. This is deliberately a visualization: it does not create or
+    validate inter-block cells.
     """
     _validate_coarsening(coarsening)
     polylines: list[Polyline] = []
@@ -125,20 +127,24 @@ def _build_block_preview(
     x_indices = _sample_indices(x_cells, coarsening)
     y_indices = _sample_indices(y_cells, coarsening)
 
+    bottom_direction = directed_edges[0]
+    right_direction = directed_edges[1]
+    top_direction = (directed_edges[2][1], directed_edges[2][0])
+    left_direction = (directed_edges[3][1], directed_edges[3][0])
     bottom = tuple(
-        _directed_edge_node(model, directed_edges[0], index)
+        _directed_edge_sample(model, bottom_direction, index)
         for index in x_indices
     )
     right = tuple(
-        _directed_edge_node(model, directed_edges[1], index)
+        _directed_edge_sample(model, right_direction, index)
         for index in y_indices
     )
     top = tuple(
-        _directed_edge_node(model, directed_edges[2], x_cells - index)
+        _directed_edge_sample(model, top_direction, index)
         for index in x_indices
     )
     left = tuple(
-        _directed_edge_node(model, directed_edges[3], y_cells - index)
+        _directed_edge_sample(model, left_direction, index)
         for index in y_indices
     )
 
@@ -147,11 +153,8 @@ def _build_block_preview(
     rows: list[Polyline] = []
     matrix: list[Polyline] = []
     for y_position, y_index in enumerate(y_indices):
-        v = y_index / y_cells
         row = tuple(
-            _coons_point(
-                x_index / x_cells,
-                v,
+            _block_mesh_point(
                 bottom[x_position],
                 right[y_position],
                 top[x_position],
@@ -172,49 +175,93 @@ def _build_block_preview(
     return tuple((*rows, *columns)), len(x_indices) * len(y_indices)
 
 
-def _directed_edge_node(
+def _directed_edge_sample(
     model: MeshModel,
     directed: tuple[str, str],
     local_index: int,
-) -> Point:
+) -> EdgeSample:
     current = edge_key(*directed)
     cells = model.edge_cells[current]
-    canonical_index = (
-        local_index if directed == current else cells - local_index
+    follows_canonical = directed == current
+    canonical_index = local_index if follows_canonical else cells - local_index
+    canonical_fraction = model.edge_node_fraction(current, canonical_index)
+    local_fraction = (
+        canonical_fraction if follows_canonical else 1.0 - canonical_fraction
     )
-    fraction = model.edge_node_fraction(current, canonical_index)
-    return model.edge_point(current, fraction)
+    return local_fraction, model.edge_point(current, canonical_fraction)
 
 
-def _coons_point(
-    u: float,
-    v: float,
-    bottom: Point,
-    right: Point,
-    top: Point,
-    left: Point,
+def _block_mesh_point(
+    bottom: EdgeSample,
+    right: EdgeSample,
+    top: EdgeSample,
+    left: EdgeSample,
     corners: tuple[Point, Point, Point, Point],
 ) -> Point:
+    """Reproduce blockMesh's edge-weighted interpolation in the 2D plane.
+
+    OpenFOAM blends three normalized contributions: the pair of x edges, the
+    pair of y edges, and the four z edges. In a pseudo-2D extrusion, the z-edge
+    points reduce to the four 2D corners. Curved-edge corrections are then
+    added with the same x/y edge weights.
+    """
+    bottom_fraction, bottom_point = bottom
+    right_fraction, right_point = right
+    top_fraction, top_point = top
+    left_fraction, left_point = left
     c00, c10, c11, c01 = corners
-    bilinear_x = (
-        (1.0 - u) * (1.0 - v) * c00[0]
-        + u * (1.0 - v) * c10[0]
-        + u * v * c11[0]
-        + (1.0 - u) * v * c01[0]
+
+    corner_weights = (
+        (1.0 - bottom_fraction) * (1.0 - left_fraction),
+        bottom_fraction * (1.0 - right_fraction),
+        top_fraction * right_fraction,
+        (1.0 - top_fraction) * left_fraction,
     )
-    bilinear_y = (
-        (1.0 - u) * (1.0 - v) * c00[1]
-        + u * (1.0 - v) * c10[1]
-        + u * v * c11[1]
-        + (1.0 - u) * v * c01[1]
+    weight_sum = sum(corner_weights)
+    normalized_corners = tuple(
+        weight / weight_sum for weight in corner_weights
     )
+
+    bottom_weight = normalized_corners[0] + normalized_corners[1]
+    top_weight = normalized_corners[2] + normalized_corners[3]
+    left_weight = normalized_corners[0] + normalized_corners[3]
+    right_weight = normalized_corners[1] + normalized_corners[2]
+
+    straight_bottom = _lerp(c00, c10, bottom_fraction)
+    straight_top = _lerp(c01, c11, top_fraction)
+    straight_left = _lerp(c00, c01, left_fraction)
+    straight_right = _lerp(c10, c11, right_fraction)
+
+    def component(axis: int) -> float:
+        x_contribution = (
+            bottom_weight * straight_bottom[axis]
+            + top_weight * straight_top[axis]
+        )
+        y_contribution = (
+            left_weight * straight_left[axis]
+            + right_weight * straight_right[axis]
+        )
+        z_contribution = sum(
+            weight * corner[axis]
+            for weight, corner in zip(normalized_corners, corners)
+        )
+        curved_correction = (
+            bottom_weight * (bottom_point[axis] - straight_bottom[axis])
+            + top_weight * (top_point[axis] - straight_top[axis])
+            + left_weight * (left_point[axis] - straight_left[axis])
+            + right_weight * (right_point[axis] - straight_right[axis])
+        )
+        return (
+            x_contribution + y_contribution + z_contribution
+        ) / 3.0 + curved_correction
+
+    return component(0), component(1)
+
+
+def _lerp(first: Point, second: Point, fraction: float) -> Point:
     return (
-        (1.0 - v) * bottom[0] + v * top[0]
-        + (1.0 - u) * left[0] + u * right[0]
-        - bilinear_x,
-        (1.0 - v) * bottom[1] + v * top[1]
-        + (1.0 - u) * left[1] + u * right[1]
-        - bilinear_y,
+        first[0] + fraction * (second[0] - first[0]),
+        first[1] + fraction * (second[1] - first[1]),
     )
 
 

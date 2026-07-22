@@ -11,6 +11,7 @@ from .domain import (
     Boundary,
     EdgeGeometry,
     GeometryCurve,
+    SpacingLink,
     TopologyError,
     Vertex,
     edge_key,
@@ -19,7 +20,7 @@ from .model import MeshModel
 
 
 FORMAT_NAME = "blockDrawer"
-FORMAT_VERSION = 6
+FORMAT_VERSION = 7
 
 
 class SessionError(ValueError):
@@ -89,6 +90,13 @@ def to_data(model: MeshModel) -> dict[str, Any]:
             for current in model.edges()
             if current in model.edge_grading
         ],
+        "spacingLinks": [
+            {
+                "vertex": link.vertex,
+                "edges": [list(link.first_edge), list(link.second_edge)],
+            }
+            for link in sorted(model.spacing_links)
+        ],
         "boundaries": [
             {
                 "name": boundary.name,
@@ -120,7 +128,7 @@ def from_data(data: Any) -> MeshModel:
             raise SessionError("This is not a BlockDrawer session")
         version = data.get("version")
         if isinstance(version, bool) \
-                or version not in (1, 2, 3, 4, 5, FORMAT_VERSION):
+                or version not in (1, 2, 3, 4, 5, 6, FORMAT_VERSION):
             raise SessionError(
                 f"Unsupported BlockDrawer session version {version!r}"
             )
@@ -133,6 +141,9 @@ def from_data(data: Any) -> MeshModel:
         # as an explicit migration to version 2's implicit-line representation.
         geometry_data = [] if version == 1 else _list(data, "edgeGeometry")
         grading_data = [] if version in (1, 2) else _list(data, "edgeGrading")
+        spacing_links_data = (
+            [] if version < 7 else _list(data, "spacingLinks")
+        )
         boundaries_data = [] if version in (1, 2, 3) else _list(data, "boundaries")
         edge_boundaries_data = (
             [] if version in (1, 2, 3) else _list(data, "edgeBoundaries")
@@ -232,6 +243,29 @@ def from_data(data: Any) -> MeshModel:
             if current in model.edge_grading:
                 raise SessionError(f"Duplicate edge grading for {current!r}")
             model.edge_grading[current] = _number(item, "expansionRatio")
+
+        for item in spacing_links_data:
+            if not isinstance(item, dict):
+                raise SessionError("Each spacingLinks entry must be an object")
+            vertex = _string(item, "vertex")
+            edges_data = _list(item, "edges")
+            if len(edges_data) != 2:
+                raise SessionError("A spacingLinks entry needs two edges")
+            parsed_edges = []
+            for vertices in edges_data:
+                if not isinstance(vertices, list) or len(vertices) != 2 \
+                        or not all(
+                    isinstance(value, str) for value in vertices
+                ):
+                    raise SessionError(
+                        "Each spacing-link edge needs two vertex IDs"
+                    )
+                parsed_edges.append(edge_key(vertices[0], vertices[1]))
+            first_edge, second_edge = sorted(parsed_edges)
+            link = SpacingLink(vertex, first_edge, second_edge)
+            if link in model.spacing_links:
+                raise SessionError("Duplicate spacing-link data")
+            model.spacing_links.add(link)
 
         for item in boundaries_data:
             if not isinstance(item, dict):

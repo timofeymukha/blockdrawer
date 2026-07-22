@@ -74,6 +74,15 @@ EdgeKey: TypeAlias = tuple[str, str]
 EdgeOccurrence: TypeAlias = tuple[Block, int, tuple[str, str]]
 
 
+@dataclass(frozen=True, order=True)
+class SpacingLink:
+    """Pair two topological edge endpoints at one shared vertex."""
+
+    vertex: str
+    first_edge: EdgeKey
+    second_edge: EdgeKey
+
+
 @dataclass(frozen=True)
 class ProjectionResult:
     """Summary of one atomic mesh-to-reference projection operation."""

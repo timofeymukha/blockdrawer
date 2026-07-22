@@ -51,6 +51,17 @@ blockdrawer
   **Propagate** to apply the setting across the same transitive set of opposite
   edges that receives a propagated cell count; reversed arrows are handled
   automatically.
+- Press `L` or click **Link spacing** to enter a grading-focused mode. Select two
+  edges that share a vertex; the second edge is regraded so its touching cell
+  width matches the first edge. A teal marker identifies every linked pair.
+  Subsequent cell-count or grading changes propagate along the complete chain of
+  spacing links, without changing the linked edges' own cell counts. The focused
+  Properties panel shows cell count, the four grading representations, endpoint
+  links, removal controls, and **Synchronize links from this edge**, while hiding
+  edge geometry and interpolation-point controls. Geometry edits deliberately do
+  not trigger propagation; use **Synchronize** afterwards with the desired driver
+  edge selected. Conflicting closed chains and unattainable one-cell widths are
+  rejected atomically. Press `L` or `Esc` to leave the mode.
 - Use the selected edge's **Type** control to choose `line`, `arc`, `polyLine`, or
   `spline`.
   An arc has one purple interpolation point through which its circle passes. A
@@ -66,7 +77,8 @@ blockdrawer
   average perpendicular thickness. The newly generated opposite edge inherits the
   source edge grading in the corresponding physical direction. It remains
   selected, making a row of blocks quick to create even when the source block is
-  skewed.
+  skewed. Adding the block preserves the current pan and zoom; use **Fit view**
+  explicitly when the complete expanded topology should be framed.
 - Press `N` to create a block from four existing vertices. Click the vertices in
   any order; staged vertices are shown in purple and numbered, and the fourth
   valid selection creates the block immediately. Click a staged vertex again to
@@ -106,12 +118,12 @@ blockdrawer
   also shown on its assigned edges. Press `B` or `Esc`, or click **Done
   boundaries**, to return to normal editing.
 - Boundary types are `patch`, `wall`, `symmetry`, `empty`, and `cyclic`. For a
-  cyclic boundary, choose its neighbouring patch and apply the type. BlockDrawer
-  configures the reciprocal pairing in one undoable operation; changing or
-  removing one member returns its former partner to `patch`. Ordinary cyclic
-  translation or rotation is inferred by OpenFOAM from the matching patches.
-  Export checks that cyclic partners both have edges with matching lengths and
-  subdivisions.
+  cyclic boundary, choose its neighbouring patch. Type and neighbour selections
+  apply immediately; there is no separate Apply button. BlockDrawer configures
+  the reciprocal pairing in one undoable operation; changing or removing one
+  member returns its former partner to `patch`. Ordinary cyclic translation or
+  rotation is inferred by OpenFOAM from the matching patches. Export checks that
+  cyclic partners both have edges with matching lengths and subdivisions.
 - Press `E`, choose **File → Export blockMeshDict…**, or click **Export** to open
   the Export panel. It contains the z cell count, z extents, scale, and the names
   and types of the automatic zMin/zMax patches. These values are applied when a
@@ -196,7 +208,8 @@ blockdrawer
   defaults are `Ctrl+Z`/`Ctrl+Y` on Linux and Windows, and
   `Command+Z`/`Command+Shift+Z` on macOS. A complete vertex or interpolation-point
   drag is one undo action, as is an edge-type, point-list, propagated grading, or
-  propagated edge-count edit.
+  propagated edge-count edit. Creating, removing, or synchronizing a spacing link
+  is likewise one undoable action.
 - Select an edge and press `Delete`, `Backspace`, or `X` to remove that edge and
   every incident block. The selection panel also shows an explicit delete button
   and the number of blocks that will be removed. Deletion is one undoable action;
@@ -208,8 +221,14 @@ blockdrawer
 Press `M` or enable **View → Mesh preview** to draw a visualization-only
 structured grid inside every block. Boundary nodes follow the configured cell
 counts, directional grading, and line/arc/polyLine/spline geometry. Interior
-points use a transfinite blend of the four block edges; this preview does not
-create a `polyMesh`, validate cell quality, or replace OpenFOAM's `blockMesh`.
+points use the 2D specialization of OpenFOAM's edge-weighted transfinite
+interpolation, including the actual graded fractions on all four block edges.
+This preview does not create a `polyMesh`, validate cell quality, or replace
+OpenFOAM's `blockMesh`.
+
+The **View** menu also controls the independent visibility of vertex-ID labels,
+numeric edge cell-count labels, mesh subdivision nodes, and curved-edge
+interpolation points. Hiding a label does not affect selection or mesh data.
 
 While preview is active, the right panel exposes a positive **Coarsening factor**.
 A value of `1` uses every edge subdivision; `10` uses every tenth subdivision,
@@ -251,10 +270,11 @@ BlockDrawer creates a human-editable JSON preferences file on first launch:
 Mesh geometry and extrusion values remain in the session JSON; this preferences
 file is for application-wide behavior. `ui.scale` accepts `"auto"` or a multiplier
 from `0.5` through `4`. `ui.showBlockMesh`, `ui.showGeometry`,
-`ui.showMeshPreview`, `ui.showEdgeNodes`, and `ui.showEdgeInterpolationPoints`
-are booleans for the corresponding visibility toggles. `ui.previewCoarsening`
-is a positive integer. Changes made through **View** or the preview panel update
-the file immediately. Manual edits are loaded on the next launch.
+`ui.showMeshPreview`, `ui.showVertexIds`, `ui.showEdgeCellCounts`,
+`ui.showEdgeNodes`, and `ui.showEdgeInterpolationPoints` are booleans for the
+corresponding visibility toggles. `ui.previewCoarsening` is a positive integer.
+Changes made through **View** or the preview panel update the file immediately.
+Manual edits are loaded on the next launch.
 
 Every keyboard action is configurable. A Linux/Windows default file looks like:
 
@@ -266,6 +286,8 @@ Every keyboard action is configurable. A Linux/Windows default file looks like:
     "scale": "auto",
     "showBlockMesh": true,
     "showGeometry": true,
+    "showVertexIds": true,
+    "showEdgeCellCounts": true,
     "showEdgeNodes": true,
     "showEdgeInterpolationPoints": true,
     "showMeshPreview": false,
@@ -286,6 +308,7 @@ Every keyboard action is configurable. A Linux/Windows default file looks like:
     "new_block": ["N"],
     "add_vertex": ["V"],
     "set_boundaries": ["B"],
+    "link_spacing": ["L"],
     "project": ["P"],
     "toggle_geometry": ["G"],
     "toggle_mesh_preview": ["M"],
@@ -308,11 +331,12 @@ defaults for that launch and report the problem without overwriting the file.
 **File → Save** writes a versioned BlockDrawer JSON session containing all
 vertices (including standalone ones), quadrilateral blocks, edge cell counts,
 optional edge geometry, per-edge grading, boundary definitions and assignments,
-reference-geometry curves, and export settings. Format version 6 adds the names
-and types of the automatic zMin/zMax patches; version 5 added named reference
+reference-geometry curves, spacing links, and export settings. Format version 7
+adds persistent endpoint spacing-link pairs; version 6 added the names and types
+of the automatic zMin/zMax patches; version 5 added named reference
 curves, their ordered point lists, and their point-marker visibility; version 4
 stores named boundaries and their colors, version 3 added non-uniform total
-expansion ratios, and version 2 introduced interpolation points. Versions 1–5
+expansion ratios, and version 2 introduced interpolation points. Versions 1–6
 remain loadable through explicit migrations.
 
 **Export blockMeshDict** writes an OpenFOAM dictionary with:

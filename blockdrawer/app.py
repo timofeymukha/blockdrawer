@@ -60,6 +60,8 @@ class BlockDrawerApp(
         self.block_vertex_selection: list[str] | None = None
         self.vertex_placement_active = False
         self.boundary_mode_active = False
+        self.spacing_link_mode_active = False
+        self.spacing_link_first_edge: EdgeKey | None = None
         self.export_mode_active = False
         self.split_edge_active: EdgeKey | None = None
         self.split_fraction = 0.5
@@ -101,6 +103,12 @@ class BlockDrawerApp(
         )
         self.show_geometry_var = tk.BooleanVar(
             value=self.preferences.show_geometry
+        )
+        self.show_vertex_ids_var = tk.BooleanVar(
+            value=self.preferences.show_vertex_ids
+        )
+        self.show_edge_cell_counts_var = tk.BooleanVar(
+            value=self.preferences.show_edge_cell_counts
         )
         self.show_edge_nodes_var = tk.BooleanVar(
             value=self.preferences.show_edge_nodes
@@ -261,6 +269,12 @@ class BlockDrawerApp(
             command=self.toggle_boundary_mode,
         )
         self.boundary_button.pack(side="left", padx=(self._px(5), 0))
+        self.spacing_link_button = ttk.Button(
+            self.toolbar,
+            text="Link spacing",
+            command=self.toggle_spacing_link_mode,
+        )
+        self.spacing_link_button.pack(side="left", padx=(self._px(5), 0))
         ttk.Button(
             self.toolbar,
             text="Add curve",
@@ -415,6 +429,11 @@ class BlockDrawerApp(
             command=self.toggle_boundary_mode,
         )
         self.edit_menu.add_command(
+            label="Link edge spacing",
+            accelerator=self._shortcut_label("link_spacing"),
+            command=self.toggle_spacing_link_mode,
+        )
+        self.edit_menu.add_command(
             label="Project onto geometry",
             accelerator=self._shortcut_label("project"),
             command=self.start_projection,
@@ -464,6 +483,16 @@ class BlockDrawerApp(
             command=self.apply_visibility,
         )
         view_menu.add_separator()
+        view_menu.add_checkbutton(
+            label="Vertex IDs",
+            variable=self.show_vertex_ids_var,
+            command=self.apply_visibility,
+        )
+        view_menu.add_checkbutton(
+            label="Edge cell counts",
+            variable=self.show_edge_cell_counts_var,
+            command=self.apply_visibility,
+        )
         view_menu.add_checkbutton(
             label="Mesh subdivision nodes",
             variable=self.show_edge_nodes_var,
@@ -519,6 +548,7 @@ class BlockDrawerApp(
             "new_block": self._new_block_shortcut,
             "add_vertex": self._new_vertex_shortcut,
             "set_boundaries": self._boundary_shortcut,
+            "link_spacing": self._spacing_link_shortcut,
             "project": self._projection_shortcut,
             "toggle_geometry": self._geometry_visibility_shortcut,
             "toggle_mesh_preview": self._mesh_preview_shortcut,
@@ -602,8 +632,8 @@ class BlockDrawerApp(
                 "Double-click an exterior edge: add block\n"
                 "V: place vertex · N: connect 4 vertices\n"
                 "S: split edge · Shift+S: combine\n"
-                "B: boundaries · P: project · M: preview\n"
-                "E: export · Esc: cancel"
+                "B: boundaries · L: link spacing · P: project\n"
+                "M: preview · E: export · Esc: cancel"
             ),
             foreground="#52606d",
             justify="left",
@@ -627,6 +657,7 @@ class BlockDrawerApp(
         self.block_vertex_selection = None
         self.vertex_placement_active = False
         self.boundary_mode_active = False
+        self._clear_spacing_link_mode()
         self._clear_split_state()
         self._clear_export_mode()
         self._clear_projection_state()
@@ -670,6 +701,7 @@ class BlockDrawerApp(
         self.block_vertex_selection = None
         self.vertex_placement_active = False
         self.boundary_mode_active = False
+        self._clear_spacing_link_mode()
         self._clear_split_state()
         self._clear_export_mode()
         self._clear_projection_state()
@@ -797,6 +829,7 @@ class BlockDrawerApp(
         self.model = restored
         self._clear_split_state()
         self._clear_projection_state()
+        self.spacing_link_first_edge = None
         self.block_vertex_selection = None
         self.vertex_placement_active = False
         if self.active_boundary_name not in self.model.boundaries:
@@ -859,7 +892,8 @@ class BlockDrawerApp(
             return None
         if getattr(self, "export_mode_active", False) \
                 or getattr(self, "split_edge_active", None) is not None \
-                or getattr(self, "projection_stage", None) is not None:
+                or getattr(self, "projection_stage", None) is not None \
+                or getattr(self, "spacing_link_mode_active", False):
             return "break"
         self.delete_selected_entity()
         return "break"
@@ -900,6 +934,12 @@ class BlockDrawerApp(
         self.toggle_boundary_mode()
         return "break"
 
+    def _spacing_link_shortcut(self, event: tk.Event) -> str | None:
+        if _is_text_input_class(event.widget.winfo_class()):
+            return None
+        self.toggle_spacing_link_mode()
+        return "break"
+
     def _projection_shortcut(self, event: tk.Event) -> str | None:
         if _is_text_input_class(event.widget.winfo_class()):
             return None
@@ -938,6 +978,9 @@ class BlockDrawerApp(
             return "break"
         if self.boundary_mode_active:
             self.toggle_boundary_mode()
+            return "break"
+        if getattr(self, "spacing_link_mode_active", False):
+            self.toggle_spacing_link_mode()
             return "break"
         if self.vertex_placement_active:
             self.cancel_vertex_placement()

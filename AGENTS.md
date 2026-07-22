@@ -37,6 +37,9 @@ them in the canvas widgets.
   geometry, grading, boundaries, and reference curves are keyed or stored here.
 - `blockdrawer/grading.py`: pure, numerically stable conversions among total
   expansion, cell-to-cell expansion, and start/end widths.
+- `blockdrawer/spacing.py`: UI-independent persistent endpoint spacing links,
+  endpoint-width solving, chain traversal, synchronization, and topology-remap
+  helpers. Geometry mutations do not invoke this propagation.
 - `blockdrawer/topology.py`: the `TopologyOperationsMixin` implementation of
   block add/remove, conformal split, and conformal combine. These compound
   mutations own their rollback logic; the public methods remain available on
@@ -44,9 +47,10 @@ them in the canvas widgets.
 - `blockdrawer/reference_geometry.py`: reference-curve CRUD and model-level
   projection orchestration. `blockdrawer/projection.py` contains the independent
   cubic intersection, closest-point, and fitted-spline numerical algorithms.
-- `blockdrawer/preview.py`: UI-independent, visualization-only Coons-patch grid
-  construction and a bounded cache keyed by the mesh state that affects sampled
-  points. It must never mutate the model or become an export dependency.
+- `blockdrawer/preview.py`: UI-independent, visualization-only implementation of
+  OpenFOAM's edge-weighted transfinite block interpolation and a bounded cache
+  keyed by the mesh state that affects sampled points. It must never mutate the
+  model or become an export dependency.
 - `blockdrawer/geometry.py`: UI-independent parsing of reference-geometry point
   files. Reference curves themselves are named model entities, independent of
   block vertices and OpenFOAM edge geometry.
@@ -144,10 +148,14 @@ them in the canvas widgets.
 - A block stores four distinct vertex IDs in counter-clockwise order and must
   remain strictly convex.
 - Mesh preview is a transient per-block visualization, not a mesher. Each block
-  samples the graded nodes of its four directed curved edges and blends them with
-  a Coons patch. The configured positive coarsening factor keeps every nth
-  subdivision index and always both endpoints. Only interior logical rows and
-  columns are drawn; inter-block cell connectivity is deliberately irrelevant.
+  samples the graded nodes of its four directed curved edges and applies the 2D
+  specialization of OpenFOAM's edge-weighted transfinite interpolation. In
+  particular, blending weights come from all four actual graded edge fractions,
+  not uniform logical indices; this must remain consistent with `blockMesh` when
+  opposite-edge grading differs. The configured positive coarsening factor keeps
+  every nth subdivision index and always both endpoints. Only interior logical
+  rows and columns are drawn; inter-block cell connectivity is deliberately
+  irrelevant.
   The cache signature includes used block vertices, ordered blocks, edge cell
   counts, grading, and edge geometry, but excludes loose vertices, boundaries,
   reference geometry, and selection. The GUI retains one cached sampled grid so
@@ -163,9 +171,10 @@ them in the canvas widgets.
   boundary. `cyclic` definitions are reciprocal pairs selected with
   `neighbourPatch`; ordinary `cyclic` geometry is inferred by OpenFOAM. Pairing
   two patches is atomic, while changing/removing one turns its former partner
-  back into `patch`. Boundary mode (`B`) assigns or reassigns an edge to the
-  active patch and toggles it off when clicked again. Internal edges are
-  unavailable in this mode.
+  back into `patch`. Boundary type and cyclic-neighbour combobox selections apply
+  immediately through one history action; there is no separate Apply button.
+  Boundary mode (`B`) assigns or reassigns an edge to the active patch and
+  toggles it off when clicked again. Internal edges are unavailable in this mode.
 - Straight (`line`) geometry is implicit. An `arc` stores exactly one finite,
   non-collinear interpolation point. A `polyLine` or `spline` stores one or
   more ordered, finite interpolation points, and no adjacent path points may
@@ -182,7 +191,8 @@ them in the canvas widgets.
 - Each redraw derives one world-space viewport box with 40 display pixels of
   padding. Wholly outside edge paths, reference curves, preview polylines, and
   vertices are not submitted to Tk; individual edge/geometry labels, control
-  points, subdivision nodes, and split markers are likewise skipped off-screen.
+  points, subdivision nodes, spacing-link legs, and split markers are likewise
+  skipped off-screen.
   Culling uses the cached display-path bounds, so it may admit conservative false
   positives but must never hide a visible sampled segment. This does not alter
   marker decimation or model/session/export data.
@@ -215,6 +225,35 @@ them in the canvas widgets.
   edge component as `set_edge_cells()`, reversing canonical ratios where needed
   so the grading follows one physical block direction. Each Set action is one
   history entry.
+- A spacing link pairs exactly two distinct topological edges at their one common
+  vertex. Each `(edge, vertex)` endpoint may occur in at most one link, while one
+  edge may have separate links at both endpoints. Links are symmetric after
+  creation, but creating one uses the first selected edge as the driver and
+  regrades the second. The linked quantity is the physical grading width touching
+  the shared vertex, not total or cell-to-cell expansion ratio.
+- Given edge length `L`, cell count `N > 1`, and required endpoint width `w`,
+  spacing synchronization solves the unique positive cell ratio satisfying
+  `L = w * (1 + q + ... + q**(N-1))`; canonical grading is inverted when the
+  linked vertex is the edge's canonical end. One-cell edges have fixed width `L`.
+  Unattainable widths, incompatible fixed anchors, and inconsistent closed chains
+  reject and roll back the complete edit.
+- Cell-count changes first update their normal opposite-edge constraint component;
+  grading changes first honor their existing Propagate choice. Every directly
+  affected edge is then a fixed anchor and endpoint-width synchronization walks
+  all reachable spacing links. Linked follower cell counts never change. Link
+  propagation, validation, and the initiating edit are one history action.
+- Persistent spacing links intentionally do not react to vertex, control-point,
+  projection, or other geometry mutations. The GUI's explicit **Synchronize links
+  from this edge** action re-establishes the linked widths using the selected edge
+  as driver. Configurable shortcut `L` enters a focused link mode: two incident
+  edge selections create a pair, `Esc`/`L` exits, and Properties exposes only cell
+  count, grading, link removal, and synchronization—not edge type or interpolation
+  controls. Short teal endpoint legs visualize saved pairs.
+- Splitting transfers a link on an affected edge to the sub-edge touching the
+  original linked endpoint. Combining transfers surviving outer-end links to the
+  merged edge and drops links at removed cut vertices; edge deletion prunes links
+  whose endpoints disappear. These topology rewrites and their link changes roll
+  back atomically.
 - `MeshModel.split_edge()` cuts the complete opposite-edge constraint component,
   not only the incident block. Every touched block is replaced by two conformal
   quadrilaterals, shared affected edges receive one shared split vertex, and
@@ -262,6 +301,8 @@ them in the canvas widgets.
   existing vertices when possible. A genuinely new opposite edge inherits the
   source edge grading with corresponding endpoints and physical direction; an
   already-existing opposite edge keeps its own grading.
+  GUI block addition redraws in the current viewport and must not call
+  `fit_view()`; framing the expanded topology is an explicit user action.
   Any boundary assignment on the extruded source edge moves to the new opposite
   exterior edge when possible. Other topology edits prune assignments that have
   become internal or disappeared.
@@ -302,6 +343,8 @@ and `edgeBoundaries` arrays. Version 5 adds `geometryCurves`, containing stable
 IDs, names, ordered 2D point lists, and per-curve `showPoints` flags. A missing
 `showPoints` field in an early version 5 file defaults to true. Version 6 adds
 the names and types of the automatic `zMinPatch` and `zMaxPatch` under settings.
+Version 7 adds `spacingLinks`, whose entries store the common `vertex` and two
+canonical edge pairs. Version 6 and older sessions migrate with no spacing links.
 Older sessions receive non-conflicting `zMin`/`zMax` patch names and `patch`
 types. Version 1
 straight-edge sessions migrate with empty geometry; versions 1 and 2 migrate with
@@ -316,6 +359,8 @@ Application preferences are separate from mesh sessions. They use JSON format
 `%APPDATA%/BlockDrawer/config.json` on Windows. The file is created with complete
 defaults on first launch. `ui.scale` is `auto` or a multiplier from 0.5 to 4;
 `ui.showBlockMesh` and `ui.showGeometry` persist the independent canvas layers;
+`ui.showVertexIds` and `ui.showEdgeCellCounts` independently persist the canvas
+annotation labels and default to visible when missing from an older config;
 `ui.showEdgeNodes` and `ui.showEdgeInterpolationPoints` independently persist
 the mesh-subdivision and curved-edge control markers. `ui.showMeshPreview`
 persists the preview overlay and `ui.previewCoarsening` is a positive integer;
@@ -325,6 +370,7 @@ configurable `toggle_geometry` action and defaults to `G`; preview visibility is
 `toggle_mesh_preview` and defaults to `M`. Export mode is the configurable
 `export_block_mesh_dict` action and defaults to `E`; version 1's untouched
 `Ctrl+E`/`Cmd+E` default migrates to `E`, while custom bindings are preserved.
+Spacing-link mode is the configurable `link_spacing` action and defaults to `L`.
 `shortcuts` maps every application
 action to a list of readable combinations such as `Ctrl+S`, `Cmd+Z`, `Delete`,
 `B`, `G`, `P`, or `S`; an empty list disables that action. Missing actions inherit

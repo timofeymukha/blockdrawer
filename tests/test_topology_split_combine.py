@@ -34,6 +34,34 @@ class SplitCombineTests(unittest.TestCase):
             )
         model.validate()
 
+    def test_split_and_combine_transfer_endpoint_spacing_link(self) -> None:
+        model = MeshModel()
+        selected = edge_key("v0", "v1")
+        incident = edge_key("v0", "v3")
+        model.add_spacing_link(selected, incident)
+
+        split = model.split_edge(selected, 0.4)
+
+        endpoint_segment = next(
+            current for current in split.selected_segments if "v0" in current
+        )
+        split_link = next(iter(model.spacing_links))
+        self.assertIn(endpoint_segment, (
+            split_link.first_edge, split_link.second_edge
+        ))
+        self.assertIn(incident, (split_link.first_edge, split_link.second_edge))
+
+        model.combine_blocks(split.cut_edges[0])
+
+        combined_link = next(iter(model.spacing_links))
+        self.assertIn(selected, (
+            combined_link.first_edge, combined_link.second_edge
+        ))
+        self.assertIn(incident, (
+            combined_link.first_edge, combined_link.second_edge
+        ))
+        model.validate()
+
     def test_combine_propagates_across_a_connected_multiblock_cut(self) -> None:
         model = MeshModel()
         shared = edge_key("v1", "v2")

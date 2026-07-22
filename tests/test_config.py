@@ -59,12 +59,15 @@ class ConfigTests(unittest.TestCase):
             linux.shortcuts["execute_split"], ("Enter", "NumpadEnter")
         )
         self.assertEqual(linux.shortcuts["combine_blocks"], ("Shift+S",))
+        self.assertEqual(linux.shortcuts["link_spacing"], ("L",))
         self.assertEqual(linux.shortcuts["project"], ("P",))
         self.assertEqual(linux.shortcuts["toggle_geometry"], ("G",))
         self.assertEqual(linux.shortcuts["toggle_mesh_preview"], ("M",))
         self.assertEqual(linux.shortcuts["fit_view"], ())
         self.assertTrue(linux.show_block_mesh)
         self.assertTrue(linux.show_geometry)
+        self.assertTrue(linux.show_vertex_ids)
+        self.assertTrue(linux.show_edge_cell_counts)
         self.assertTrue(linux.show_edge_nodes)
         self.assertTrue(linux.show_edge_interpolation_points)
         self.assertFalse(linux.show_mesh_preview)
@@ -126,6 +129,8 @@ class ConfigTests(unittest.TestCase):
         data["ui"]["scale"] = 1.75
         data["ui"]["showBlockMesh"] = False
         data["ui"]["showGeometry"] = True
+        data["ui"]["showVertexIds"] = False
+        data["ui"]["showEdgeCellCounts"] = False
         data["ui"]["showEdgeNodes"] = False
         data["ui"]["showEdgeInterpolationPoints"] = False
         data["ui"]["showMeshPreview"] = True
@@ -141,6 +146,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.ui_scale, "1.75")
         self.assertFalse(config.show_block_mesh)
         self.assertTrue(config.show_geometry)
+        self.assertFalse(config.show_vertex_ids)
+        self.assertFalse(config.show_edge_cell_counts)
         self.assertFalse(config.show_edge_nodes)
         self.assertFalse(config.show_edge_interpolation_points)
         self.assertTrue(config.show_mesh_preview)
@@ -153,8 +160,12 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.shortcuts["toggle_geometry"], ("G",))
         self.assertEqual(config.shortcuts["toggle_mesh_preview"], ("M",))
 
-    def test_missing_marker_visibility_fields_default_to_visible(self) -> None:
+    def test_missing_annotation_and_marker_fields_use_visibility_defaults(
+        self,
+    ) -> None:
         data = to_data(default_config("linux"))
+        del data["ui"]["showVertexIds"]
+        del data["ui"]["showEdgeCellCounts"]
         del data["ui"]["showEdgeNodes"]
         del data["ui"]["showEdgeInterpolationPoints"]
         del data["ui"]["showMeshPreview"]
@@ -162,6 +173,8 @@ class ConfigTests(unittest.TestCase):
 
         config = from_data(data, platform="linux")
 
+        self.assertTrue(config.show_vertex_ids)
+        self.assertTrue(config.show_edge_cell_counts)
         self.assertTrue(config.show_edge_nodes)
         self.assertTrue(config.show_edge_interpolation_points)
         self.assertFalse(config.show_mesh_preview)
@@ -181,6 +194,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(parsed["ui"]["scale"], 1.5)
         self.assertTrue(parsed["ui"]["showBlockMesh"])
         self.assertTrue(parsed["ui"]["showGeometry"])
+        self.assertTrue(parsed["ui"]["showVertexIds"])
+        self.assertTrue(parsed["ui"]["showEdgeCellCounts"])
         self.assertTrue(parsed["ui"]["showEdgeNodes"])
         self.assertTrue(parsed["ui"]["showEdgeInterpolationPoints"])
         self.assertFalse(parsed["ui"]["showMeshPreview"])
