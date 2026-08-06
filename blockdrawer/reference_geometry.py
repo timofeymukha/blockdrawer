@@ -185,16 +185,15 @@ class ReferenceGeometryMixin:
         samples_per_span: int,
     ) -> tuple[tuple[float, float], ...]:
         """Sample each Catmull-Rom span and retain its exact endpoints."""
+        evaluator = cls._spline_path_evaluator(path)
         result = [path[0]]
         for segment in range(len(path) - 1):
             for sample in range(1, samples_per_span + 1):
                 if sample == samples_per_span:
                     result.append(path[segment + 1])
                 else:
-                    result.append(cls._catmull_rom_segment_point(
-                        path,
-                        segment,
-                        sample / samples_per_span,
+                    result.append(evaluator.segment_point(
+                        segment, sample / samples_per_span
                     ))
         return tuple(result)
 

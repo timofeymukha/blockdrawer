@@ -35,6 +35,8 @@ them in the canvas widgets.
   global validation. Vertices may be standalone or shared by counter-clockwise
   quadrilateral blocks. Edges are derived only from block vertex pairs. Optional
   geometry, grading, boundaries, and reference curves are keyed or stored here.
+  Repeated spline evaluation uses bounded, value-keyed path evaluators that are
+  never persisted; bulk consumers use `edge_points()` to reuse geometry setup.
 - `blockdrawer/grading.py`: pure, numerically stable conversions among total
   expansion, cell-to-cell expansion, and start/end widths.
 - `blockdrawer/spacing.py`: UI-independent persistent endpoint spacing links,
@@ -47,10 +49,13 @@ them in the canvas widgets.
 - `blockdrawer/reference_geometry.py`: reference-curve CRUD and model-level
   projection orchestration. `blockdrawer/projection.py` contains the independent
   cubic intersection, closest-point, and fitted-spline numerical algorithms.
+  The fit-ranking proxy uses coefficient-only cubic spans; exact bounded spans
+  remain reserved for geometric closest-point measurements and pruning.
 - `blockdrawer/preview.py`: UI-independent, visualization-only implementation of
   OpenFOAM's edge-weighted transfinite block interpolation and a bounded cache
   keyed by the mesh state that affects sampled points. It must never mutate the
-  model or become an export dependency.
+  model or become an export dependency. Preview construction accumulates row and
+  column bounds while building the sampled grid rather than rescanning lines.
 - `blockdrawer/geometry.py`: UI-independent parsing of reference-geometry point
   files. Reference curves themselves are named model entities, independent of
   block vertices and OpenFOAM edge geometry.

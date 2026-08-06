@@ -8,7 +8,7 @@ from typing import Hashable
 
 from .domain import Block, EdgeKey, TopologyError, edge_key
 from .model import MeshModel
-from .render_cache import Bounds, points_bounds
+from .render_cache import Bounds
 
 
 Point = tuple[float, float]
@@ -98,17 +98,19 @@ def build_mesh_preview(model: MeshModel, coarsening: int = 1) -> MeshPreview:
     """
     _validate_coarsening(coarsening)
     polylines: list[Polyline] = []
+    polyline_bounds: list[Bounds] = []
     sampled_node_count = 0
     for block in model.blocks:
-        block_lines, node_count = _build_block_preview(
+        block_lines, block_bounds, node_count = _build_block_preview(
             model, block, coarsening
         )
         polylines.extend(block_lines)
+        polyline_bounds.extend(block_bounds)
         sampled_node_count += node_count
     sampled_polylines = tuple(polylines)
     return MeshPreview(
         sampled_polylines,
-        tuple(points_bounds(polyline) for polyline in sampled_polylines),
+        tuple(polyline_bounds),
         len(model.blocks),
         sampled_node_count,
         coarsening,
@@ -119,7 +121,7 @@ def _build_block_preview(
     model: MeshModel,
     block: Block,
     coarsening: int,
-) -> tuple[tuple[Polyline, ...], int]:
+) -> tuple[tuple[Polyline, ...], tuple[Bounds, ...], int]:
     directed_edges = tuple(block.directed_edge(index) for index in range(4))
     edges = tuple(edge_key(*directed) for directed in directed_edges)
     x_cells = model.edge_cells[edges[0]]
@@ -131,64 +133,99 @@ def _build_block_preview(
     right_direction = directed_edges[1]
     top_direction = (directed_edges[2][1], directed_edges[2][0])
     left_direction = (directed_edges[3][1], directed_edges[3][0])
-    bottom = tuple(
-        _directed_edge_sample(model, bottom_direction, index)
-        for index in x_indices
-    )
-    right = tuple(
-        _directed_edge_sample(model, right_direction, index)
-        for index in y_indices
-    )
-    top = tuple(
-        _directed_edge_sample(model, top_direction, index)
-        for index in x_indices
-    )
-    left = tuple(
-        _directed_edge_sample(model, left_direction, index)
-        for index in y_indices
-    )
+    bottom = _directed_edge_samples(model, bottom_direction, x_indices)
+    right = _directed_edge_samples(model, right_direction, y_indices)
+    top = _directed_edge_samples(model, top_direction, x_indices)
+    left = _directed_edge_samples(model, left_direction, y_indices)
 
     vertices = tuple(model.vertices[identifier] for identifier in block.vertices)
     corners = tuple((vertex.x, vertex.y) for vertex in vertices)
     rows: list[Polyline] = []
+    row_bounds: list[Bounds] = []
     matrix: list[Polyline] = []
+    column_min_x = [float("inf")] * len(x_indices)
+    column_min_y = [float("inf")] * len(x_indices)
+    column_max_x = [float("-inf")] * len(x_indices)
+    column_max_y = [float("-inf")] * len(x_indices)
     for y_position, y_index in enumerate(y_indices):
-        row = tuple(
-            _block_mesh_point(
+        row_points: list[Point] = []
+        min_x = min_y = float("inf")
+        max_x = max_y = float("-inf")
+        for x_position, _x_index in enumerate(x_indices):
+            point = _block_mesh_point(
                 bottom[x_position],
                 right[y_position],
                 top[x_position],
                 left[y_position],
                 corners,
             )
-            for x_position, x_index in enumerate(x_indices)
-        )
+            row_points.append(point)
+            x, y = point
+            if x < min_x:
+                min_x = x
+            if x > max_x:
+                max_x = x
+            if y < min_y:
+                min_y = y
+            if y > max_y:
+                max_y = y
+            if x < column_min_x[x_position]:
+                column_min_x[x_position] = x
+            if x > column_max_x[x_position]:
+                column_max_x[x_position] = x
+            if y < column_min_y[x_position]:
+                column_min_y[x_position] = y
+            if y > column_max_y[x_position]:
+                column_max_y[x_position] = y
+        row = tuple(row_points)
         matrix.append(row)
         if y_index not in (0, y_cells):
             rows.append(row)
+            row_bounds.append((min_x, min_y, max_x, max_y))
 
-    columns = [
-        tuple(row[x_position] for row in matrix)
-        for x_position, x_index in enumerate(x_indices)
-        if x_index not in (0, x_cells)
-    ]
-    return tuple((*rows, *columns)), len(x_indices) * len(y_indices)
+    columns: list[Polyline] = []
+    column_bounds: list[Bounds] = []
+    for x_position, x_index in enumerate(x_indices):
+        if x_index in (0, x_cells):
+            continue
+        columns.append(tuple(row[x_position] for row in matrix))
+        column_bounds.append((
+            column_min_x[x_position],
+            column_min_y[x_position],
+            column_max_x[x_position],
+            column_max_y[x_position],
+        ))
+    return (
+        tuple((*rows, *columns)),
+        tuple((*row_bounds, *column_bounds)),
+        len(x_indices) * len(y_indices),
+    )
 
 
-def _directed_edge_sample(
+def _directed_edge_samples(
     model: MeshModel,
     directed: tuple[str, str],
-    local_index: int,
-) -> EdgeSample:
+    local_indices: tuple[int, ...],
+) -> tuple[EdgeSample, ...]:
     current = edge_key(*directed)
     cells = model.edge_cells[current]
     follows_canonical = directed == current
-    canonical_index = local_index if follows_canonical else cells - local_index
-    canonical_fraction = model.edge_node_fraction(current, canonical_index)
-    local_fraction = (
-        canonical_fraction if follows_canonical else 1.0 - canonical_fraction
+    canonical_indices = tuple(
+        index if follows_canonical else cells - index
+        for index in local_indices
     )
-    return local_fraction, model.edge_point(current, canonical_fraction)
+    canonical_fractions = tuple(
+        model.edge_node_fraction(current, index)
+        for index in canonical_indices
+    )
+    points = model.edge_points(current, canonical_fractions)
+    return tuple(
+        (
+            fraction if follows_canonical else 1.0 - fraction,
+            point,
+        )
+        for fraction, point in zip(canonical_fractions, points)
+    )
 
 
 def _block_mesh_point(
@@ -211,58 +248,64 @@ def _block_mesh_point(
     left_fraction, left_point = left
     c00, c10, c11, c01 = corners
 
-    corner_weights = (
-        (1.0 - bottom_fraction) * (1.0 - left_fraction),
-        bottom_fraction * (1.0 - right_fraction),
-        top_fraction * right_fraction,
-        (1.0 - top_fraction) * left_fraction,
+    corner_00 = (1.0 - bottom_fraction) * (1.0 - left_fraction)
+    corner_10 = bottom_fraction * (1.0 - right_fraction)
+    corner_11 = top_fraction * right_fraction
+    corner_01 = (1.0 - top_fraction) * left_fraction
+    inverse_weight_sum = 1.0 / (
+        corner_00 + corner_10 + corner_11 + corner_01
     )
-    weight_sum = sum(corner_weights)
-    normalized_corners = tuple(
-        weight / weight_sum for weight in corner_weights
+    corner_00 *= inverse_weight_sum
+    corner_10 *= inverse_weight_sum
+    corner_11 *= inverse_weight_sum
+    corner_01 *= inverse_weight_sum
+
+    bottom_weight = corner_00 + corner_10
+    top_weight = corner_11 + corner_01
+    left_weight = corner_00 + corner_01
+    right_weight = corner_10 + corner_11
+
+    bottom_x = c00[0] + bottom_fraction * (c10[0] - c00[0])
+    bottom_y = c00[1] + bottom_fraction * (c10[1] - c00[1])
+    top_x = c01[0] + top_fraction * (c11[0] - c01[0])
+    top_y = c01[1] + top_fraction * (c11[1] - c01[1])
+    left_x = c00[0] + left_fraction * (c01[0] - c00[0])
+    left_y = c00[1] + left_fraction * (c01[1] - c00[1])
+    right_x = c10[0] + right_fraction * (c11[0] - c10[0])
+    right_y = c10[1] + right_fraction * (c11[1] - c10[1])
+
+    x_contribution = bottom_weight * bottom_x + top_weight * top_x
+    y_contribution = left_weight * left_x + right_weight * right_x
+    z_contribution = (
+        corner_00 * c00[0]
+        + corner_10 * c10[0]
+        + corner_11 * c11[0]
+        + corner_01 * c01[0]
+    )
+    x = (x_contribution + y_contribution + z_contribution) / 3.0
+    x += (
+        bottom_weight * (bottom_point[0] - bottom_x)
+        + top_weight * (top_point[0] - top_x)
+        + left_weight * (left_point[0] - left_x)
+        + right_weight * (right_point[0] - right_x)
     )
 
-    bottom_weight = normalized_corners[0] + normalized_corners[1]
-    top_weight = normalized_corners[2] + normalized_corners[3]
-    left_weight = normalized_corners[0] + normalized_corners[3]
-    right_weight = normalized_corners[1] + normalized_corners[2]
-
-    straight_bottom = _lerp(c00, c10, bottom_fraction)
-    straight_top = _lerp(c01, c11, top_fraction)
-    straight_left = _lerp(c00, c01, left_fraction)
-    straight_right = _lerp(c10, c11, right_fraction)
-
-    def component(axis: int) -> float:
-        x_contribution = (
-            bottom_weight * straight_bottom[axis]
-            + top_weight * straight_top[axis]
-        )
-        y_contribution = (
-            left_weight * straight_left[axis]
-            + right_weight * straight_right[axis]
-        )
-        z_contribution = sum(
-            weight * corner[axis]
-            for weight, corner in zip(normalized_corners, corners)
-        )
-        curved_correction = (
-            bottom_weight * (bottom_point[axis] - straight_bottom[axis])
-            + top_weight * (top_point[axis] - straight_top[axis])
-            + left_weight * (left_point[axis] - straight_left[axis])
-            + right_weight * (right_point[axis] - straight_right[axis])
-        )
-        return (
-            x_contribution + y_contribution + z_contribution
-        ) / 3.0 + curved_correction
-
-    return component(0), component(1)
-
-
-def _lerp(first: Point, second: Point, fraction: float) -> Point:
-    return (
-        first[0] + fraction * (second[0] - first[0]),
-        first[1] + fraction * (second[1] - first[1]),
+    x_contribution = bottom_weight * bottom_y + top_weight * top_y
+    y_contribution = left_weight * left_y + right_weight * right_y
+    z_contribution = (
+        corner_00 * c00[1]
+        + corner_10 * c10[1]
+        + corner_11 * c11[1]
+        + corner_01 * c01[1]
     )
+    y = (x_contribution + y_contribution + z_contribution) / 3.0
+    y += (
+        bottom_weight * (bottom_point[1] - bottom_y)
+        + top_weight * (top_point[1] - top_y)
+        + left_weight * (left_point[1] - left_y)
+        + right_weight * (right_point[1] - right_y)
+    )
+    return x, y
 
 
 def _sample_indices(cells: int, coarsening: int) -> tuple[int, ...]:

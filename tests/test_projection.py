@@ -1,6 +1,8 @@
 import math
 import unittest
+from unittest.mock import patch
 
+import blockdrawer.projection as projection
 from blockdrawer.projection import (
     DEFAULT_FIT_MAX_POINTS,
     ProjectionError,
@@ -10,6 +12,21 @@ from blockdrawer.model import MeshModel, TopologyError, edge_key
 
 
 class ReferenceProjectorTests(unittest.TestCase):
+    def test_proxy_cubic_construction_does_not_solve_exact_bounds(self) -> None:
+        path = ((0.0, 0.0), (0.4, 0.5), (1.0, 0.0))
+
+        with patch.object(
+            projection,
+            "_polynomial_range",
+            side_effect=AssertionError("exact bounds should not be calculated"),
+        ):
+            segment = projection._UnboundedCubicSegment.from_path(path, 0)
+
+        for actual, expected in zip(segment.point(0.0), path[0]):
+            self.assertAlmostEqual(actual, expected)
+        for actual, expected in zip(segment.point(1.0), path[1]):
+            self.assertAlmostEqual(actual, expected)
+
     def test_x_projection_moves_horizontally_to_nearest_intersection(self) -> None:
         projector = ReferenceProjector((
             ((-2.0, -1.0), (-2.0, 1.0)),

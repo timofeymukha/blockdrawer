@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import bisect
 from collections import deque
 import colorsys
+from dataclasses import dataclass
+from functools import lru_cache
 import math
 import re
 from typing import Iterable
@@ -32,6 +35,125 @@ from .grading import (
 from .reference_geometry import ReferenceGeometryMixin
 from .spacing import SpacingOperationsMixin
 from .topology import TopologyOperationsMixin
+
+
+@dataclass(frozen=True, slots=True)
+class _SplinePathEvaluator:
+    """Reusable chord-parameterized Catmull-Rom path data."""
+
+    path: tuple[tuple[float, float], ...]
+    cumulative_lengths: tuple[float, ...]
+    x_coefficients: tuple[tuple[float, float, float, float], ...]
+    y_coefficients: tuple[tuple[float, float, float, float], ...]
+
+    @classmethod
+    def from_path(
+        cls,
+        path: tuple[tuple[float, float], ...],
+    ) -> _SplinePathEvaluator:
+        cumulative_lengths = [0.0]
+        for start, end in zip(path, path[1:]):
+            cumulative_lengths.append(
+                cumulative_lengths[-1]
+                + math.hypot(end[0] - start[0], end[1] - start[1])
+            )
+        x_coefficients: list[tuple[float, float, float, float]] = []
+        y_coefficients: list[tuple[float, float, float, float]] = []
+        for segment in range(len(path) - 1):
+            first = path[segment]
+            second = path[segment + 1]
+            before = (
+                path[segment - 1]
+                if segment > 0
+                else (
+                    2.0 * first[0] - second[0],
+                    2.0 * first[1] - second[1],
+                )
+            )
+            after = (
+                path[segment + 2]
+                if segment + 2 < len(path)
+                else (
+                    2.0 * second[0] - first[0],
+                    2.0 * second[1] - first[1],
+                )
+            )
+            x_coefficients.append(_catmull_rom_coefficients(
+                before[0], first[0], second[0], after[0]
+            ))
+            y_coefficients.append(_catmull_rom_coefficients(
+                before[1], first[1], second[1], after[1]
+            ))
+        return cls(
+            path,
+            tuple(cumulative_lengths),
+            tuple(x_coefficients),
+            tuple(y_coefficients),
+        )
+
+    def point(self, fraction: float) -> tuple[float, float]:
+        if fraction <= 0.0:
+            return self.path[0]
+        if fraction >= 1.0:
+            return self.path[-1]
+        target = fraction * self.cumulative_lengths[-1]
+        segment = max(
+            0,
+            bisect.bisect_left(self.cumulative_lengths, target) - 1,
+        )
+        segment = min(segment, len(self.path) - 2)
+        start_length = self.cumulative_lengths[segment]
+        segment_length = (
+            self.cumulative_lengths[segment + 1] - start_length
+        )
+        local = min(1.0, max(
+            0.0, (target - start_length) / segment_length
+        ))
+        return self.segment_point(segment, local)
+
+    def segment_point(
+        self,
+        segment: int,
+        local: float,
+    ) -> tuple[float, float]:
+        x = self.x_coefficients[segment]
+        y = self.y_coefficients[segment]
+        return (
+            ((x[3] * local + x[2]) * local + x[1]) * local + x[0],
+            ((y[3] * local + y[2]) * local + y[1]) * local + y[0],
+        )
+
+
+def _catmull_rom_coefficients(
+    before: float,
+    first: float,
+    second: float,
+    after: float,
+) -> tuple[float, float, float, float]:
+    return (
+        first,
+        0.5 * (-before + second),
+        0.5 * (2.0 * before - 5.0 * first + 4.0 * second - after),
+        0.5 * (-before + 3.0 * first - 3.0 * second + after),
+    )
+
+
+_MAX_CACHED_SPLINE_PATH_POINTS = 4096
+
+
+@lru_cache(maxsize=16)
+def _cached_small_spline_path_evaluator(
+    path: tuple[tuple[float, float], ...],
+) -> _SplinePathEvaluator:
+    return _SplinePathEvaluator.from_path(path)
+
+
+def _spline_path_evaluator(
+    path: tuple[tuple[float, float], ...],
+) -> _SplinePathEvaluator:
+    if len(path) > _MAX_CACHED_SPLINE_PATH_POINTS:
+        return _SplinePathEvaluator.from_path(path)
+    return _cached_small_spline_path_evaluator(path)
 
 
 class MeshModel(
@@ -387,12 +509,11 @@ class MeshModel(
                 for start, end in zip(path, path[1:])
             )
 
-        previous = self.edge_point(current, 0.0)
+        evaluator = self._edge_spline_evaluator(current, geometry)
+        previous = evaluator.point(0.0)
         length = 0.0
         for index in range(1, self.SPLINE_LENGTH_SAMPLES + 1):
-            point = self.edge_point(
-                current, index / self.SPLINE_LENGTH_SAMPLES
-            )
+            point = evaluator.point(index / self.SPLINE_LENGTH_SAMPLES)
             length += math.hypot(
                 point[0] - previous[0], point[1] - previous[1]
             )
@@ -746,6 +867,63 @@ class MeshModel(
         if geometry.kind == "spline":
             return self._spline_point(current, geometry, fraction)
         return self._polyline_point(current, geometry, fraction)
+
+    def edge_points(
+        self,
+        edge: EdgeKey,
+        fractions: Iterable[float],
+    ) -> tuple[tuple[float, float], ...]:
+        """Evaluate several locations while reusing edge geometry setup."""
+        current = edge_key(*edge)
+        if current not in self.edge_cells:
+            raise TopologyError(f"Unknown edge {current!r}")
+        values = tuple(fractions)
+        if any(
+            not math.isfinite(fraction) or not 0.0 <= fraction <= 1.0
+            for fraction in values
+        ):
+            raise TopologyError("Edge fraction must be between 0 and 1")
+        first = self.vertices[current[0]]
+        second = self.vertices[current[1]]
+        first_point = first.x, first.y
+        second_point = second.x, second.y
+        geometry = self.edge_geometry.get(current)
+        if geometry is None:
+            return tuple(
+                first_point if fraction == 0.0
+                else second_point if fraction == 1.0
+                else (
+                    first.x + fraction * (second.x - first.x),
+                    first.y + fraction * (second.y - first.y),
+                )
+                for fraction in values
+            )
+        if geometry.kind == "arc":
+            center_x, center_y, radius, start_angle, sweep = self._arc_circle(
+                current, geometry
+            )
+            return tuple(
+                first_point if fraction == 0.0
+                else second_point if fraction == 1.0
+                else (
+                    center_x + radius * math.cos(
+                        start_angle + fraction * sweep
+                    ),
+                    center_y + radius * math.sin(
+                        start_angle + fraction * sweep
+                    ),
+                )
+                for fraction in values
+            )
+        if geometry.kind == "spline":
+            evaluator = self._edge_spline_evaluator(current, geometry)
+            return tuple(evaluator.point(fraction) for fraction in values)
+        return tuple(
+            first_point if fraction == 0.0
+            else second_point if fraction == 1.0
+            else self._polyline_point(current, geometry, fraction)
+            for fraction in values
+        )
 
     def edge_render_points(
         self,
@@ -1258,10 +1436,17 @@ class MeshModel(
         self, current: EdgeKey, geometry: EdgeGeometry, fraction: float
     ) -> tuple[float, float]:
         """Evaluate OpenFOAM's through-point Catmull-Rom spline."""
+        return self._edge_spline_evaluator(current, geometry).point(fraction)
+
+    def _edge_spline_evaluator(
+        self,
+        current: EdgeKey,
+        geometry: EdgeGeometry,
+    ) -> _SplinePathEvaluator:
         first = self.vertices[current[0]]
         second = self.vertices[current[1]]
-        path = [(first.x, first.y), *geometry.points, (second.x, second.y)]
-        return self._spline_path_point(path, fraction)
+        path = ((first.x, first.y), *geometry.points, (second.x, second.y))
+        return _spline_path_evaluator(path)
 
     @staticmethod
     def _spline_path_point(
@@ -1269,22 +1454,13 @@ class MeshModel(
         fraction: float,
     ) -> tuple[float, float]:
         """Evaluate a through-point Catmull-Rom path by chord fraction."""
-        lengths = [
-            math.hypot(end[0] - start[0], end[1] - start[1])
-            for start, end in zip(path, path[1:])
-        ]
-        target = fraction * sum(lengths)
-        traversed = 0.0
-        segment = len(lengths) - 1
-        local = 1.0
-        for index, length in enumerate(lengths):
-            if target <= traversed + length or index == len(lengths) - 1:
-                segment = index
-                local = min(1.0, max(0.0, (target - traversed) / length))
-                break
-            traversed += length
+        return _spline_path_evaluator(tuple(path)).point(fraction)
 
-        return MeshModel._catmull_rom_segment_point(path, segment, local)
+    @staticmethod
+    def _spline_path_evaluator(
+        path: tuple[tuple[float, float], ...] | list[tuple[float, float]],
+    ) -> _SplinePathEvaluator:
+        return _spline_path_evaluator(tuple(path))
 
     @staticmethod
     def _catmull_rom_segment_point(
@@ -1292,38 +1468,8 @@ class MeshModel(
         segment: int,
         local: float,
     ) -> tuple[float, float]:
-        p0 = path[segment]
-        p1 = path[segment + 1]
-        before = (
-            path[segment - 1]
-            if segment > 0
-            else (2.0 * p0[0] - p1[0], 2.0 * p0[1] - p1[1])
-        )
-        after = (
-            path[segment + 2]
-            if segment + 2 < len(path)
-            else (2.0 * p1[0] - p0[0], 2.0 * p1[1] - p0[1])
-        )
-        local_squared = local * local
-        local_cubed = local_squared * local
-        return (
-            0.5 * (
-                2.0 * p0[0]
-                + (-before[0] + p1[0]) * local
-                + (2.0 * before[0] - 5.0 * p0[0]
-                   + 4.0 * p1[0] - after[0]) * local_squared
-                + (-before[0] + 3.0 * p0[0]
-                   - 3.0 * p1[0] + after[0]) * local_cubed
-            ),
-            0.5 * (
-                2.0 * p0[1]
-                + (-before[1] + p1[1]) * local
-                + (2.0 * before[1] - 5.0 * p0[1]
-                   + 4.0 * p1[1] - after[1]) * local_squared
-                + (-before[1] + 3.0 * p0[1]
-                   - 3.0 * p1[1] + after[1]) * local_cubed
-            ),
-        )
+        evaluator = _spline_path_evaluator(tuple(path))
+        return evaluator.segment_point(segment, local)
 
     def _arc_circle(
         self, current: EdgeKey, geometry: EdgeGeometry

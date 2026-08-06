@@ -528,6 +528,29 @@ class MeshModelTests(unittest.TestCase):
         self.assertNotEqual(model.edge_point(selected, 0.5)[1], 0.0)
         model.validate()
 
+    def test_batched_edge_evaluation_matches_individual_points(self) -> None:
+        fractions = tuple(index / 16.0 for index in range(17))
+        for kind in MeshModel.SUPPORTED_EDGE_TYPES:
+            with self.subTest(kind=kind):
+                model = MeshModel()
+                selected = edge_key("v0", "v1")
+                model.set_edge_type(selected, kind)
+                if kind != "line":
+                    model.set_edge_control_point(selected, 0, 0.4, -0.3)
+                if kind in MeshModel.MULTI_POINT_EDGE_TYPES:
+                    second = model.add_edge_control_point(selected, 0)
+                    model.set_edge_control_point(selected, second, 0.7, -0.2)
+
+                expected = tuple(
+                    model.edge_point(selected, fraction)
+                    for fraction in fractions
+                )
+                actual = model.edge_points(selected, fractions)
+
+                for expected_point, actual_point in zip(expected, actual):
+                    self.assertAlmostEqual(expected_point[0], actual_point[0])
+                    self.assertAlmostEqual(expected_point[1], actual_point[1])
+
     def test_spline_rendering_samples_every_span_and_retains_all_points(
         self,
     ) -> None:

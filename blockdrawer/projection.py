@@ -48,16 +48,19 @@ class SplineFit:
     score: float
 
 
-@dataclass(frozen=True)
-class _CubicSegment:
-    """One polynomial Catmull-Rom span, with exact coordinate bounds."""
+@dataclass(frozen=True, slots=True)
+class _UnboundedCubicSegment:
+    """One cubic span without the exact bounds needed by root pruning."""
 
     x: tuple[float, float, float, float]
     y: tuple[float, float, float, float]
-    bounds: tuple[float, float, float, float]
 
     @classmethod
-    def from_path(cls, path: Sequence[Point], index: int) -> _CubicSegment:
+    def from_path(
+        cls,
+        path: Sequence[Point],
+        index: int,
+    ) -> _UnboundedCubicSegment:
         first = path[index]
         second = path[index + 1]
         before = (
@@ -76,12 +79,35 @@ class _CubicSegment:
                 2.0 * second[1] - first[1],
             )
         )
-        x = _catmull_rom_coefficients(
-            before[0], first[0], second[0], after[0]
+        return cls(
+            _catmull_rom_coefficients(
+                before[0], first[0], second[0], after[0]
+            ),
+            _catmull_rom_coefficients(
+                before[1], first[1], second[1], after[1]
+            ),
         )
-        y = _catmull_rom_coefficients(
-            before[1], first[1], second[1], after[1]
+
+    def point(self, parameter: float) -> Point:
+        return (
+            _polynomial_value(self.x, parameter),
+            _polynomial_value(self.y, parameter),
         )
+
+
+@dataclass(frozen=True)
+class _CubicSegment:
+    """One polynomial Catmull-Rom span, with exact coordinate bounds."""
+
+    x: tuple[float, float, float, float]
+    y: tuple[float, float, float, float]
+    bounds: tuple[float, float, float, float]
+
+    @classmethod
+    def from_path(cls, path: Sequence[Point], index: int) -> _CubicSegment:
+        coefficients = _UnboundedCubicSegment.from_path(path, index)
+        x = coefficients.x
+        y = coefficients.y
         min_x, max_x = _polynomial_range(x)
         min_y, max_y = _polynomial_range(y)
         return cls(x, y, (min_x, min_y, max_x, max_y))
@@ -771,7 +797,7 @@ def _parametric_fit_deviation(
     insertions remain interactive.
     """
     fitted = tuple(
-        _CubicSegment.from_path(nodes, index)
+        _UnboundedCubicSegment.from_path(nodes, index)
         for index in range(len(nodes) - 1)
     )
     target_ends = tuple(segment.end for segment in target_segments)

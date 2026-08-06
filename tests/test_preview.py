@@ -2,6 +2,7 @@ import unittest
 
 from blockdrawer.model import MeshModel, TopologyError, edge_key
 from blockdrawer.preview import MeshPreviewCache, build_mesh_preview
+from blockdrawer.render_cache import points_bounds
 
 
 class MeshPreviewTests(unittest.TestCase):
@@ -82,6 +83,19 @@ class MeshPreviewTests(unittest.TestCase):
         self.assertAlmostEqual(centre[0], 0.2627118644067797)
         self.assertAlmostEqual(centre[1], 0.3728813559322034)
         self.assertNotAlmostEqual(centre[1], 0.5)
+
+    def test_preview_accumulates_exact_bounds_for_every_polyline(self) -> None:
+        model = self._rectangular_model()
+        bottom = edge_key("v0", "v1")
+        model.set_edge_type(bottom, "arc")
+        model.set_arc_point(bottom, 0.5, -0.4)
+
+        preview = build_mesh_preview(model)
+
+        self.assertEqual(
+            preview.polyline_bounds,
+            tuple(points_bounds(polyline) for polyline in preview.polylines),
+        )
 
     def test_cache_reuses_unchanged_mesh_and_ignores_reference_geometry(self) -> None:
         model = self._rectangular_model()
