@@ -36,7 +36,8 @@ them in the canvas widgets.
   quadrilateral blocks. Edges are derived only from block vertex pairs. Optional
   geometry, grading, boundaries, and reference curves are keyed or stored here.
   Repeated spline evaluation uses bounded, value-keyed path evaluators that are
-  never persisted; bulk consumers use `edge_points()` to reuse geometry setup.
+  never persisted; bulk consumers use `edge_points()` and
+  `edge_node_fractions()` to reuse geometry and grading setup.
 - `blockdrawer/grading.py`: pure, numerically stable conversions among total
   expansion, cell-to-cell expansion, and start/end widths.
 - `blockdrawer/spacing.py`: UI-independent persistent endpoint spacing links,
@@ -85,11 +86,18 @@ them in the canvas widgets.
   pan-drag, and resize events update viewport state immediately but share one
   redraw timer at a 16 ms interval. Synchronous editing redraws cancel any pending
   viewport timer so a delayed duplicate cannot overwrite newer interaction state.
-- `blockdrawer/render_cache.py`: one world-space sampled path and bounding box per
-  current topological edge and reference curve. Cache signatures contain only
-  defining coordinates/geometry and sampling resolution, so selection, naming,
-  boundary, and marker-visibility changes remain hits. Entries are replaced when
-  defining points move and pruned when their entity disappears.
+  Dense edge-node coordinates are evaluated in one batch per edge and rasterized
+  from every exact node instead of creating one Tk item per node.
+- `blockdrawer/node_raster.py`: pure screen-space accumulation and
+  standard-library indexed PNG encoding for dense exact edge-node overlays.
+  Coincident nodes increase opacity so the fallback communicates density rather
+  than looking like sampled individual nodes.
+- `blockdrawer/render_cache.py`: one world-space sampled path, length, and
+  bounding box per current topological edge and reference curve. Cache
+  signatures contain only defining coordinates/geometry and sampling resolution,
+  so selection, naming, boundary, and marker-visibility changes remain hits.
+  Entries are replaced when defining points move and pruned when their entity
+  disappears.
 - `blockdrawer/ui_helpers.py`: shared UI constants and pure parsing/scaling/picking
   helpers. Keep these display-independent enough for headless unit tests.
 - `tests/`: model tests are separated from conformal split/combine tests;
@@ -226,10 +234,13 @@ them in the canvas widgets.
 - `MeshModel.set_edge_grading()` accepts cell-to-cell ratio, total ratio,
   start-cell width, or end-cell width. The UI exposes all four with per-field Set
   actions and recomputes the other representations. Canvas node markers use the
-  graded fractions. A persistent Propagate checkbox sweeps the same transitive
-  edge component as `set_edge_cells()`, reversing canonical ratios where needed
-  so the grading follows one physical block direction. Each Set action is one
-  history entry.
+  graded fractions. Sparse markers remain individual Tk items; dense markers are
+  one non-interactive transparent image per edge built from every exact node, with
+  opacity accumulation for nodes sharing screen pixels. This is display-only and
+  zooming can resolve individual locations without changing the model. A
+  persistent Propagate checkbox sweeps the same transitive edge component as
+  `set_edge_cells()`, reversing canonical ratios where needed so the grading
+  follows one physical block direction. Each Set action is one history entry.
 - A spacing link pairs exactly two distinct topological edges at their one common
   vertex. Each `(edge, vertex)` endpoint may occur in at most one link, while one
   edge may have separate links at both endpoints. Links are symmetric after

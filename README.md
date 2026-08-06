@@ -39,7 +39,10 @@ blockdrawer
 - Click an edge to edit its number of cells. The small edge markers are the
   graded subdivision locations. Opposite edges in every affected block receive
   the same cell count automatically, including transitive constraints through
-  shared edges.
+  shared edges. When subdivision markers overlap at the current zoom, the canvas
+  switches to a density image generated from every exact node: darker regions
+  contain more nodes, and zooming in resolves individual locations. This changes
+  neither the stored cell count nor export.
 - Each edge has independent directional grading. The properties panel shows the
   direction as `start → end`, the geometric edge length, cell-to-cell expansion
   ratio, total end/start expansion ratio, start-cell width, and end-cell width.

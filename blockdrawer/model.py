@@ -648,6 +648,43 @@ class MeshModel(
             / (-math.expm1(-cells * log_cell_ratio))
         )
 
+    def edge_node_fractions(
+        self,
+        edge: EdgeKey,
+        node_indices: Iterable[int],
+    ) -> tuple[float, ...]:
+        """Evaluate several graded node fractions with shared setup."""
+        current = edge_key(*edge)
+        cells = self.edge_cells.get(current)
+        if cells is None:
+            raise TopologyError(f"Unknown edge {current!r}")
+        indices = tuple(node_indices)
+        if any(
+            isinstance(index, bool) or not isinstance(index, int)
+            or not 0 <= index <= cells
+            for index in indices
+        ):
+            raise TopologyError("Edge node index is out of range")
+        total_ratio = self.edge_total_expansion(current)
+        if total_ratio == 1.0:
+            return tuple(index / cells for index in indices)
+        log_cell_ratio = math.log(total_ratio) / (cells - 1)
+        if abs(log_cell_ratio) <= 1.0e-14:
+            return tuple(index / cells for index in indices)
+        if log_cell_ratio < 0.0:
+            denominator = math.expm1(cells * log_cell_ratio)
+            return tuple(
+                math.expm1(index * log_cell_ratio) / denominator
+                for index in indices
+            )
+        denominator = -math.expm1(-cells * log_cell_ratio)
+        return tuple(
+            math.exp((index - cells) * log_cell_ratio)
+            * (-math.expm1(-index * log_cell_ratio))
+            / denominator
+            for index in indices
+        )
+
     def edge_type(self, edge: EdgeKey) -> str:
         """Return the OpenFOAM geometry type for ``edge``."""
         current = edge_key(*edge)

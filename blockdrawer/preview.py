@@ -214,9 +214,8 @@ def _directed_edge_samples(
         index if follows_canonical else cells - index
         for index in local_indices
     )
-    canonical_fractions = tuple(
-        model.edge_node_fraction(current, index)
-        for index in canonical_indices
+    canonical_fractions = model.edge_node_fractions(
+        current, canonical_indices
     )
     points = model.edge_points(current, canonical_fractions)
     return tuple(

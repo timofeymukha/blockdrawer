@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Hashable, Iterable
 
 from .domain import EdgeKey, edge_key
@@ -19,6 +20,7 @@ class RenderPath:
 
     points: tuple[Point, ...]
     bounds: Bounds
+    length: float
 
 
 class RenderPathCache:
@@ -128,4 +130,8 @@ def point_in_bounds(point: Point, bounds: Bounds) -> bool:
 
 def _render_path(points: Iterable[Point]) -> RenderPath:
     sampled = tuple(points)
-    return RenderPath(sampled, points_bounds(sampled))
+    length = sum(
+        math.hypot(end[0] - start[0], end[1] - start[1])
+        for start, end in zip(sampled, sampled[1:])
+    )
+    return RenderPath(sampled, points_bounds(sampled), length)

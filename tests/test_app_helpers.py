@@ -81,10 +81,12 @@ class RecordingCanvas(CountingSizeCanvas):
         super().__init__(width, height)
         self.created: list[str] = []
         self.texts: list[str] = []
+        self.lowered: list[tuple[int, int]] = []
 
     def delete(self, _tag: str) -> None:
         self.created.clear()
         self.texts.clear()
+        self.lowered.clear()
 
     def _create(self, kind: str) -> int:
         self.created.append(kind)
@@ -105,6 +107,12 @@ class RecordingCanvas(CountingSizeCanvas):
 
     def create_polygon(self, *_args, **_options) -> int:
         return self._create("polygon")
+
+    def create_image(self, *_args, **_options) -> int:
+        return self._create("image")
+
+    def tag_lower(self, item: int, below: int) -> None:
+        self.lowered.append((item, below))
 
 
 class FakeAfterRoot:
@@ -296,6 +304,35 @@ class DpiScalingTests(unittest.TestCase):
         self.assertIn(0, indices)
         self.assertIn(9_999, indices)
         self.assertIn(9_998, indices)
+
+    def test_canvas_rasterizes_dense_exact_nodes_into_one_tk_item(self) -> None:
+        app = BlockDrawerApp.__new__(BlockDrawerApp)
+        app.canvas = RecordingCanvas()
+        app.item_targets = {}
+        app.model = MeshModel()
+        selected = edge_key("v0", "v1")
+        app.model.set_edge_cells(selected, 1000)
+        app.view_x = 0.5
+        app.view_y = 0.5
+        app.pixels_per_unit = 500.0
+        app.display_scale = 1.0
+        app._redraw_world_bounds = (-1.0, -1.0, 2.0, 2.0)
+
+        image = object()
+        with patch("blockdrawer.canvas.tk.PhotoImage", return_value=image) \
+                as photo_image:
+            app._draw_edge_nodes(
+                selected,
+                "#334e68",
+                500.0,
+                edge_item=17,
+            )
+
+        photo_image.assert_called_once()
+        self.assertEqual(app.canvas.created, ["image"])
+        self.assertEqual(app.canvas.lowered, [(1, 17)])
+        self.assertEqual(app._edge_node_images, [image])
+        self.assertEqual(app.item_targets, {})
 
     def test_zoom_ceiling_supports_dense_geometry_inspection(self) -> None:
         app = BlockDrawerApp.__new__(BlockDrawerApp)

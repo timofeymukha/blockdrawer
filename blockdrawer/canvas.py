@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass
 import math
 from time import perf_counter
@@ -10,13 +11,15 @@ from tkinter import font as tkfont
 
 from .config import ConfigError, save_config
 from .model import EdgeKey, MeshModel, TopologyError
+from .node_raster import rasterize_node_markers
 from .render_cache import bounds_intersect, point_in_bounds
 from .ui_helpers import (
     CURVE_RENDER_SEGMENTS,
     GEOMETRY_SAMPLES_PER_SPAN,
+    MAX_INDIVIDUAL_EDGE_NODE_MARKERS,
     MAX_VISIBLE_CONTROL_POINTS,
-    MAX_VISIBLE_EDGE_MARKERS,
     MAX_ZOOM_PIXELS_PER_UNIT,
+    MIN_INDIVIDUAL_EDGE_NODE_SPACING_PIXELS,
     SPLINE_SAMPLES_PER_SPAN,
     display_number as _display_number,
     nice_grid_step as _nice_grid_step,
@@ -60,6 +63,7 @@ class CanvasControllerMixin:
             return
         self._cancel_viewport_redraw()
         self.canvas.delete("all")
+        self._edge_node_images = []
         self.item_targets.clear()
         transform = self._refresh_canvas_transform()
         width = transform.width
@@ -139,7 +143,12 @@ class CanvasControllerMixin:
             )
             self.item_targets[line] = ("edge", current)
             if self.show_edge_nodes_var.get():
-                self._draw_edge_nodes(current, color)
+                self._draw_edge_nodes(
+                    current,
+                    color,
+                    render_path.length * self.pixels_per_unit,
+                    line,
+                )
 
             midpoint_world = self.model.edge_point(current, 0.5)
             if show_edge_cell_counts and point_in_bounds(
@@ -450,28 +459,77 @@ class CanvasControllerMixin:
                 )
                 self.item_targets[leg] = ("edge", current)
 
-    def _draw_edge_nodes(self, current: EdgeKey, color: str) -> None:
+    def _draw_edge_nodes(
+        self,
+        current: EdgeKey,
+        color: str,
+        display_length: float,
+        edge_item: int | None = None,
+    ) -> None:
         cells = self.model.edge_cells[current]
         if cells <= 1:
             return
-        stride = max(1, math.ceil((cells - 1) / MAX_VISIBLE_EDGE_MARKERS))
+        fractions = self.model.edge_node_fractions(current, range(1, cells))
+        points = self.model.edge_points(current, fractions)
+        transform = self._current_canvas_transform()
+        radius = self._px(2.4)
+        marker_count = cells - 1
+        average_spacing = display_length / marker_count
+        dense = (
+            marker_count > MAX_INDIVIDUAL_EDGE_NODE_MARKERS
+            or average_spacing
+            < self._px(MIN_INDIVIDUAL_EDGE_NODE_SPACING_PIXELS)
+        )
+        if dense:
+            raster = rasterize_node_markers(
+                (
+                    transform.world_to_screen(world_x, world_y)
+                    for world_x, world_y in points
+                ),
+                canvas_width=transform.width,
+                canvas_height=transform.height,
+                color=color,
+                radius=radius,
+            )
+            if raster is None:
+                return
+            image = tk.PhotoImage(
+                master=self.canvas,
+                data=base64.b64encode(raster.png_bytes()).decode("ascii"),
+                format="png",
+            )
+            images = getattr(self, "_edge_node_images", None)
+            if images is None:
+                images = []
+                self._edge_node_images = images
+            images.append(image)
+            item = self.canvas.create_image(
+                raster.left,
+                raster.top,
+                anchor="nw",
+                image=image,
+                state=tk.DISABLED,
+            )
+            if edge_item is not None:
+                self.canvas.tag_lower(item, edge_item)
+            return
+
         visible_bounds = getattr(self, "_redraw_world_bounds", None)
-        for index in range(stride, cells, stride):
-            ratio = self.model.edge_node_fraction(current, index)
-            world_x, world_y = self.model.edge_point(current, ratio)
+        outline_width = self._px(1)
+        for world_x, world_y in points:
             if visible_bounds is not None and not point_in_bounds(
                 (world_x, world_y), visible_bounds
             ):
                 continue
-            x, y = self.world_to_screen(world_x, world_y)
+            x, y = transform.world_to_screen(world_x, world_y)
             item = self.canvas.create_oval(
-                x - self._px(2.4),
-                y - self._px(2.4),
-                x + self._px(2.4),
-                y + self._px(2.4),
+                x - radius,
+                y - radius,
+                x + radius,
+                y + radius,
                 fill="#ffffff",
                 outline=color,
-                width=self._px(1),
+                width=outline_width,
             )
             self.item_targets[item] = ("edge", current)
 

@@ -45,6 +45,7 @@ class RenderPathCacheTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertIsNot(first, moved)
         self.assertEqual(moved.bounds, (0.0, 0.0, 1.2, 0.0))
+        self.assertAlmostEqual(moved.length, 1.2)
 
     def test_curved_edge_sampling_options_are_part_of_cache_key(self) -> None:
         model = MeshModel()

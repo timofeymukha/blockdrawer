@@ -213,6 +213,26 @@ class MeshModelTests(unittest.TestCase):
             model.edge_expansion_in_direction("v1", "v0"), 1.0 / 8.0
         )
 
+    def test_batched_node_fractions_match_scalar_evaluation(self) -> None:
+        selected = edge_key("v0", "v1")
+        for total_ratio in (1.0, 8.0, 1.0 / 8.0):
+            with self.subTest(total_ratio=total_ratio):
+                model = MeshModel()
+                model.set_edge_cells(selected, 12)
+                model.set_edge_grading(
+                    selected, "total_ratio", total_ratio
+                )
+                indices = tuple(range(13))
+
+                batched = model.edge_node_fractions(selected, indices)
+                scalar = tuple(
+                    model.edge_node_fraction(selected, index)
+                    for index in indices
+                )
+
+                for actual, expected in zip(batched, scalar):
+                    self.assertAlmostEqual(actual, expected)
+
     def test_grading_propagates_over_cell_count_edges_with_direction(self) -> None:
         model = MeshModel()
         selected = edge_key("v0", "v1")
