@@ -371,7 +371,8 @@ class EditingControllerMixin:
             self._sync_property_values()
             return
         self._commit_edit()
-        if getattr(self, "spacing_link_mode_active", False):
+        if getattr(self, "spacing_link_mode_active", False) \
+                or self.model.spacing_links_for_edge(self.selected_edge):
             self._update_property_panel()
         else:
             self._sync_property_values()
@@ -395,13 +396,32 @@ class EditingControllerMixin:
             self.model.spacing_linked_component(current)
             for current in anchors
         ))
-        spacing_text = (
-            f" Synchronized {len(spacing_affected)} spacing-linked edges."
-            if len(spacing_affected) > len(anchors) else ""
+        spacing_links = {
+            link
+            for current in spacing_affected
+            for link in self.model.spacing_links_for_edge(current)
+        }
+        unsynchronized_links = tuple(
+            link
+            for link in spacing_links
+            if not self.model.spacing_link_is_synchronized(link)
         )
+        if unsynchronized_links:
+            count = len(unsynchronized_links)
+            spacing_text = (
+                f" Applied the grading, but {count} spacing link"
+                f"{'s remain' if count != 1 else ' remains'} out of sync; "
+                "press L to review or synchronize."
+            )
+        elif len(spacing_affected) > len(anchors):
+            spacing_text = (
+                f" Synchronized {len(spacing_affected)} spacing-linked edges."
+            )
+        else:
+            spacing_text = ""
         self.status.set(
             f"Set {labels[parameter]} for edge {first} → {second}; "
-            f"updated {affected_count} linked edge"
+            f"updated {affected_count} cell-count-linked edge"
             f"{'s' if affected_count != 1 else ''}." + spacing_text
         )
 

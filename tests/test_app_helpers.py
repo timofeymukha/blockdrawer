@@ -1,3 +1,5 @@
+from pathlib import Path
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -12,7 +14,7 @@ from blockdrawer.ui_helpers import (
     system_display_scale as _system_display_scale,
     visible_control_point_indices as _visible_control_point_indices,
 )
-from blockdrawer.config import default_config
+from blockdrawer.config import default_config, load_config
 from blockdrawer.model import MeshModel, edge_key
 from blockdrawer.preview import MeshPreviewCache
 from blockdrawer.render_cache import RenderPathCache
@@ -35,6 +37,20 @@ class FakeEntry:
 
     def bind(self, sequence, callback) -> None:
         self.bindings[sequence] = callback
+
+
+class RecordingMenu:
+    def __init__(self) -> None:
+        self.entries: list[dict[str, object]] = []
+
+    def delete(self, _first, _last=None) -> None:
+        self.entries.clear()
+
+    def add_command(self, **options) -> None:
+        self.entries.append({"kind": "command", **options})
+
+    def add_separator(self) -> None:
+        self.entries.append({"kind": "separator"})
 
 
 class FakeRoot:
@@ -163,6 +179,168 @@ class DpiScalingTests(unittest.TestCase):
         self.assertEqual(app.view_x, 7.5)
         self.assertEqual(app.view_y, -3.25)
         self.assertEqual(app.pixels_per_unit, 1234.0)
+
+    def test_recent_files_are_bounded_deduplicated_and_persisted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app = BlockDrawerApp.__new__(BlockDrawerApp)
+            app.preferences = default_config("linux")
+            app.config_path = root / "config.json"
+            app.config_write_enabled = True
+            app.open_recent_menu = RecordingMenu()
+
+            paths = [
+                root / f"session-{index}.json"
+                for index in range(12)
+            ]
+            for path in paths:
+                self.assertIsNone(app._record_recent_file(path))
+            app._record_recent_file(paths[5])
+
+            loaded = load_config(app.config_path, platform="linux")
+
+        self.assertEqual(len(app.preferences.recent_files), 10)
+        self.assertEqual(
+            app.preferences.recent_files[0],
+            str(paths[5].resolve()),
+        )
+        self.assertEqual(
+            len(set(app.preferences.recent_files)),
+            len(app.preferences.recent_files),
+        )
+        self.assertEqual(loaded.recent_files, app.preferences.recent_files)
+        self.assertEqual(
+            app.open_recent_menu.entries[-1]["label"],
+            "Clear Menu",
+        )
+        self.assertEqual(
+            app.open_recent_menu.entries[-1]["state"],
+            "normal",
+        )
+
+    def test_open_recent_loads_and_promotes_the_selected_session(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "selected.json"
+            source.write_text("placeholder", encoding="utf-8")
+            other = Path(directory) / "other.json"
+            app = BlockDrawerApp.__new__(BlockDrawerApp)
+            app.preferences = default_config("linux").with_recent_files((
+                str(other.resolve()),
+                str(source.resolve()),
+            ))
+            app.config_write_enabled = False
+            app.open_recent_menu = RecordingMenu()
+            app.status = FakeStringVar()
+            app._confirm_discard = lambda: True
+            app._show_error = lambda _title, error: self.fail(str(error))
+            installed: list[tuple[MeshModel, Path]] = []
+
+            def install(model: MeshModel, path: Path) -> None:
+                installed.append((model, path))
+                app.session_path = path
+
+            app._install_loaded_session = install
+            with patch(
+                "blockdrawer.app.load_session",
+                return_value=MeshModel(),
+            ):
+                app.open_recent_session(source)
+
+        self.assertEqual(len(installed), 1)
+        self.assertEqual(installed[0][1], source.resolve())
+        self.assertEqual(
+            app.preferences.recent_files[0],
+            str(source.resolve()),
+        )
+        self.assertIn("Loaded selected.json", app.status.get())
+
+    def test_missing_recent_file_is_removed_without_discard_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory) / "missing.json"
+            app = BlockDrawerApp.__new__(BlockDrawerApp)
+            app.preferences = default_config("linux").with_recent_files((
+                str(missing.resolve()),
+            ))
+            app.config_write_enabled = False
+            app.open_recent_menu = RecordingMenu()
+            app.status = FakeStringVar()
+            app._confirm_discard = lambda: self.fail(
+                "A missing recent file must not prompt to discard work"
+            )
+            errors: list[tuple[str, str]] = []
+            app._show_error = lambda title, error: errors.append(
+                (title, str(error))
+            )
+
+            app.open_recent_session(missing)
+
+        self.assertEqual(app.preferences.recent_files, ())
+        self.assertEqual(len(errors), 1)
+        self.assertIn("no longer exists", errors[0][1])
+        self.assertEqual(
+            app.open_recent_menu.entries[0]["label"],
+            "No Recent Files",
+        )
+        self.assertEqual(
+            app.open_recent_menu.entries[-1]["state"],
+            "disabled",
+        )
+
+    def test_successful_save_promotes_session_to_recent_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app = BlockDrawerApp.__new__(BlockDrawerApp)
+            app.model = MeshModel()
+            app.session_path = root / "saved.json"
+            app.history = SimpleNamespace(mark_saved=lambda _model: None)
+            app._refresh_dirty = lambda: None
+            app.preferences = default_config("linux")
+            app.config_path = root / "config.json"
+            app.config_write_enabled = True
+            app.open_recent_menu = RecordingMenu()
+            app.status = FakeStringVar()
+            app._show_error = lambda _title, error: self.fail(str(error))
+
+            saved = app.save()
+
+            loaded = load_config(app.config_path, platform="linux")
+
+        self.assertTrue(saved)
+        self.assertEqual(
+            app.preferences.recent_files,
+            (str(app.session_path.resolve()),),
+        )
+        self.assertEqual(loaded.recent_files, app.preferences.recent_files)
+        self.assertIn("Saved saved.json", app.status.get())
+
+    def test_clear_recent_files_updates_preferences_and_menu(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app = BlockDrawerApp.__new__(BlockDrawerApp)
+            app.preferences = default_config("linux").with_recent_files((
+                str((root / "one.json").resolve()),
+                str((root / "two.json").resolve()),
+            ))
+            app.config_path = root / "config.json"
+            app.config_write_enabled = True
+            app.open_recent_menu = RecordingMenu()
+            app.status = FakeStringVar()
+
+            app.clear_recent_files()
+
+            loaded = load_config(app.config_path, platform="linux")
+
+        self.assertEqual(app.preferences.recent_files, ())
+        self.assertEqual(loaded.recent_files, ())
+        self.assertEqual(
+            app.open_recent_menu.entries[0]["label"],
+            "No Recent Files",
+        )
+        self.assertEqual(
+            app.open_recent_menu.entries[-1]["state"],
+            "disabled",
+        )
+        self.assertIn("Cleared", app.status.get())
 
     def test_redraw_culls_topology_completely_outside_viewport(self) -> None:
         app = BlockDrawerApp.__new__(BlockDrawerApp)
@@ -1183,6 +1361,7 @@ class DpiScalingTests(unittest.TestCase):
         app.point_y_var = None
         app.status = FakeStringVar()
         app._commit_edit = lambda: None
+        app._update_property_panel = lambda: None
         app.redraw = lambda: None
         app._show_error = lambda _title, error: self.fail(str(error))
 
@@ -1192,6 +1371,48 @@ class DpiScalingTests(unittest.TestCase):
             app.model.edge_width_at_vertex(app.selected_edge, "v1"),
             app.model.edge_width_at_vertex(follower, "v1"),
         )
+
+    def test_grading_ui_keeps_edit_when_spacing_link_cannot_follow(self) -> None:
+        app = BlockDrawerApp.__new__(BlockDrawerApp)
+        app.model = MeshModel()
+        app.selected_edge = edge_key("v0", "v1")
+        follower = edge_key("v1", "v2")
+        app.model.move_vertex("v1", 10.0, 0.0)
+        app.model.move_vertex("v2", 10.0, 1.0)
+        app.model.set_edge_grading(
+            app.selected_edge, "total_ratio", 0.1
+        )
+        link = app.model.add_spacing_link(app.selected_edge, follower)
+        follower_ratio = app.model.edge_total_expansion(follower)
+        app.selected_vertex = None
+        app.selected_control_point_index = None
+        app.edge_cells_var = FakeStringVar("10")
+        app.edge_length_var = FakeStringVar()
+        app.edge_cell_ratio_var = FakeStringVar()
+        app.edge_total_ratio_var = FakeStringVar("1")
+        app.edge_start_width_var = FakeStringVar()
+        app.edge_end_width_var = FakeStringVar()
+        app.edge_grading_propagate_var = SimpleNamespace(get=lambda: False)
+        app.point_x_var = None
+        app.point_y_var = None
+        app.status = FakeStringVar()
+        commits: list[bool] = []
+        app._commit_edit = lambda: commits.append(True)
+        app._update_property_panel = lambda: None
+        app.redraw = lambda: None
+        app._show_error = lambda _title, error: self.fail(str(error))
+
+        app.apply_edge_grading("total_ratio")
+
+        self.assertEqual(
+            app.model.edge_total_expansion(app.selected_edge), 1.0
+        )
+        self.assertEqual(
+            app.model.edge_total_expansion(follower), follower_ratio
+        )
+        self.assertFalse(app.model.spacing_link_is_synchronized(link))
+        self.assertEqual(commits, [True])
+        self.assertIn("remains out of sync", app.status.get())
 
     def test_geometry_coordinate_input_updates_selected_point(self) -> None:
         app = BlockDrawerApp.__new__(BlockDrawerApp)

@@ -115,6 +115,27 @@ class SpacingOperationsMixin:
             raise
         return affected
 
+    def _try_propagate_spacing_links(
+        self, anchors: Iterable[EdgeKey]
+    ) -> bool:
+        """Try link propagation while preserving direct anchor grading.
+
+        Ordinary grading edits use spacing links as soft constraints. If a
+        follower cannot attain a required width, discard every link-driven
+        grading change while retaining and validating the caller's direct
+        anchors. Explicit synchronization and cell-count edits remain strict
+        and use ``_propagate_spacing_links()`` directly.
+        """
+        direct_grading = dict(self.edge_grading)
+        try:
+            self._propagate_spacing_links(anchors)
+            self.validate()
+        except TopologyError:
+            self.edge_grading = direct_grading
+            self.validate()
+            return False
+        return True
+
     def edge_width_at_vertex(self, edge: EdgeKey, vertex: str) -> float:
         """Return the grading cell width touching ``vertex`` on ``edge``."""
         current = edge_key(*edge)
@@ -155,13 +176,23 @@ class SpacingOperationsMixin:
                             f"{other_width:.12g}"
                         )
                     continue
-                self._set_edge_width_at_vertex(other, vertex, target_width)
+                self._set_edge_width_at_vertex(
+                    other,
+                    vertex,
+                    target_width,
+                    source_edge=current,
+                )
                 fixed.add(other)
                 pending.append(other)
         return fixed
 
     def _set_edge_width_at_vertex(
-        self, edge: EdgeKey, vertex: str, width: float
+        self,
+        edge: EdgeKey,
+        vertex: str,
+        width: float,
+        *,
+        source_edge: EdgeKey,
     ) -> None:
         current = edge_key(*edge)
         if vertex not in current:
@@ -173,19 +204,34 @@ class SpacingOperationsMixin:
         if cells == 1:
             if not self._spacing_widths_match(width, length):
                 raise TopologyError(
-                    f"One-cell edge {current!r} has fixed width {length:.12g} "
-                    f"and cannot match {width:.12g} at vertex {vertex!r}"
+                    f"Linked one-cell edge {current!r} cannot attain cell "
+                    f"width {width:.12g} at vertex {vertex!r}, requested by "
+                    f"edge {source_edge!r}; its fixed width and length are "
+                    f"{length:.12g}. Change the driver width or edge length, "
+                    "or remove the spacing link"
                 )
             self.edge_grading.pop(current, None)
             return
         if not math.isfinite(width) or not 0.0 < width < length:
             raise TopologyError(
-                f"Edge {current!r} cannot attain cell width {width:.12g} "
-                f"at vertex {vertex!r}"
+                f"Linked edge {current!r} cannot attain cell width "
+                f"{width:.12g} at vertex {vertex!r}, requested by edge "
+                f"{source_edge!r}; it has length {length:.12g} and {cells} "
+                "cells, so the endpoint width must be positive and smaller "
+                "than its length. Reduce the driver width, change the linked "
+                "edge length or cell count, or remove the spacing link"
             )
-        local_log_ratio = _cell_ratio_log_from_start_width(
-            length, cells, width
-        )
+        try:
+            local_log_ratio = _cell_ratio_log_from_start_width(
+                length, cells, width
+            )
+        except TopologyError as exc:
+            raise TopologyError(
+                f"Linked edge {current!r} cannot attain cell width "
+                f"{width:.12g} at vertex {vertex!r}, requested by edge "
+                f"{source_edge!r}; it has length {length:.12g} and {cells} "
+                f"cells: {exc}"
+            ) from exc
         canonical_log_ratio = (
             local_log_ratio if vertex == current[0] else -local_log_ratio
         )
@@ -193,7 +239,15 @@ class SpacingOperationsMixin:
         if abs(logarithm) <= 1.0e-14:
             self.edge_grading.pop(current, None)
         else:
-            self.edge_grading[current] = _finite_expansion_ratio(logarithm)
+            try:
+                self.edge_grading[current] = _finite_expansion_ratio(logarithm)
+            except TopologyError as exc:
+                raise TopologyError(
+                    f"Linked edge {current!r} cannot attain cell width "
+                    f"{width:.12g} at vertex {vertex!r}, requested by edge "
+                    f"{source_edge!r}; it has length {length:.12g} and {cells} "
+                    f"cells: {exc}"
+                ) from exc
 
     def _normalized_spacing_link(
         self, first_edge: EdgeKey, second_edge: EdgeKey

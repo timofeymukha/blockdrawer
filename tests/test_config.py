@@ -7,6 +7,7 @@ from blockdrawer.app import BlockDrawerApp
 from blockdrawer.config import (
     AppConfig,
     ConfigError,
+    MAX_RECENT_FILES,
     SHORTCUT_ACTIONS,
     default_config,
     default_config_path,
@@ -72,6 +73,7 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(linux.show_edge_interpolation_points)
         self.assertFalse(linux.show_mesh_preview)
         self.assertEqual(linux.preview_coarsening, 1)
+        self.assertEqual(linux.recent_files, ())
 
     def test_shortcut_notation_converts_to_tk_sequences(self) -> None:
         self.assertEqual(
@@ -181,7 +183,14 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.preview_coarsening, 1)
 
     def test_file_round_trip_writes_readable_complete_json(self) -> None:
-        config = default_config("linux").with_ui_scale(1.5)
+        config = (
+            default_config("linux")
+            .with_ui_scale(1.5)
+            .with_recent_files((
+                "/projects/duct.json",
+                "/projects/nozzle.json",
+            ))
+        )
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "nested" / "preferences.json"
 
@@ -190,7 +199,7 @@ class ConfigTests(unittest.TestCase):
             loaded = load_config(path, platform="linux")
 
         self.assertEqual(parsed["format"], "blockDrawerConfig")
-        self.assertEqual(parsed["version"], 3)
+        self.assertEqual(parsed["version"], 4)
         self.assertEqual(parsed["ui"]["scale"], 1.5)
         self.assertTrue(parsed["ui"]["showBlockMesh"])
         self.assertTrue(parsed["ui"]["showGeometry"])
@@ -200,6 +209,10 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(parsed["ui"]["showEdgeInterpolationPoints"])
         self.assertFalse(parsed["ui"]["showMeshPreview"])
         self.assertEqual(parsed["ui"]["previewCoarsening"], 1)
+        self.assertEqual(
+            parsed["recentFiles"],
+            ["/projects/duct.json", "/projects/nozzle.json"],
+        )
         self.assertEqual(set(parsed["shortcuts"]), set(SHORTCUT_ACTIONS))
         self.assertEqual(to_data(loaded), to_data(config))
 
@@ -235,6 +248,35 @@ class ConfigTests(unittest.TestCase):
         self.assertFalse(migrated.show_mesh_preview)
         self.assertEqual(migrated.preview_coarsening, 1)
         self.assertEqual(migrated.shortcuts["toggle_mesh_preview"], ("M",))
+        self.assertEqual(migrated.recent_files, ())
+
+    def test_version_three_config_migrates_without_recent_files(self) -> None:
+        data = to_data(default_config("linux"))
+        data["version"] = 3
+        del data["recentFiles"]
+
+        migrated = from_data(data, platform="linux")
+
+        self.assertEqual(migrated.recent_files, ())
+
+    def test_recent_file_list_validation_rejects_bad_data(self) -> None:
+        data = to_data(default_config("linux"))
+        for value, message in (
+            ("session.json", "array"),
+            ([""], "non-empty"),
+            (["/tmp/a.json", "/tmp/a.json"], "duplicate"),
+            (
+                [
+                    f"/tmp/session-{index}.json"
+                    for index in range(MAX_RECENT_FILES + 1)
+                ],
+                "at most",
+            ),
+        ):
+            with self.subTest(value=value):
+                data["recentFiles"] = value
+                with self.assertRaisesRegex(ConfigError, message):
+                    from_data(data, platform="linux")
 
     def test_app_loader_creates_defaults_on_first_run(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import sys
 import tkinter as tk
@@ -11,6 +12,7 @@ from typing import Callable
 from .config import (
     AppConfig,
     ConfigError,
+    MAX_RECENT_FILES,
     default_config,
     default_config_path,
     load_config,
@@ -229,6 +231,97 @@ class BlockDrawerApp(
             )
             return defaults
 
+    def _rebuild_open_recent_menu(self) -> None:
+        self.open_recent_menu.delete(0, "end")
+        recent_files = self.preferences.recent_files
+        if recent_files:
+            for value in recent_files:
+                source = Path(value)
+                self.open_recent_menu.add_command(
+                    label=f"{source.name} — {source.parent}",
+                    command=lambda path=value: self.open_recent_session(path),
+                )
+        else:
+            self.open_recent_menu.add_command(
+                label="No Recent Files",
+                state="disabled",
+            )
+        self.open_recent_menu.add_separator()
+        self.open_recent_menu.add_command(
+            label="Clear Menu",
+            command=self.clear_recent_files,
+            state="normal" if recent_files else "disabled",
+        )
+
+    def _record_recent_file(self, path: str | Path) -> str | None:
+        source = self._canonical_session_path(path)
+        ordered = [str(source)]
+        seen = {self._recent_path_key(source)}
+        for value in self.preferences.recent_files:
+            existing = self._canonical_session_path(value)
+            key = self._recent_path_key(existing)
+            if key in seen:
+                continue
+            seen.add(key)
+            ordered.append(str(existing))
+            if len(ordered) >= MAX_RECENT_FILES:
+                break
+        recent_files = tuple(ordered)
+        if recent_files == self.preferences.recent_files:
+            return None
+        return self._set_recent_files(recent_files)
+
+    def _remove_recent_file(self, path: str | Path) -> str | None:
+        key = self._recent_path_key(self._canonical_session_path(path))
+        recent_files = tuple(
+            value
+            for value in self.preferences.recent_files
+            if self._recent_path_key(
+                self._canonical_session_path(value)
+            ) != key
+        )
+        if recent_files == self.preferences.recent_files:
+            return None
+        return self._set_recent_files(recent_files)
+
+    def clear_recent_files(self) -> None:
+        if not self.preferences.recent_files:
+            self.status.set("The recent-session menu is already empty.")
+            return
+        warning = self._set_recent_files(())
+        message = "Cleared the recent-session menu."
+        if warning is not None:
+            message += f" {warning}"
+        self.status.set(message)
+
+    def _set_recent_files(self, paths: tuple[str, ...]) -> str | None:
+        self.preferences = self.preferences.with_recent_files(paths)
+        if hasattr(self, "open_recent_menu"):
+            self._rebuild_open_recent_menu()
+        if not self.config_write_enabled:
+            return (
+                "Recent files were not saved because preferences are "
+                "unavailable."
+            )
+        try:
+            save_config(self.preferences, self.config_path)
+        except (OSError, ConfigError) as exc:
+            self.config_write_enabled = False
+            return f"Recent files could not be saved to {self.config_path}: {exc}"
+        return None
+
+    @staticmethod
+    def _canonical_session_path(path: str | Path) -> Path:
+        source = Path(path).expanduser()
+        try:
+            return source.resolve()
+        except OSError:
+            return source.absolute()
+
+    @staticmethod
+    def _recent_path_key(path: Path) -> str:
+        return os.path.normcase(str(path))
+
     def _build_window(self) -> None:
         self.root.title(APP_NAME)
         screen_width = self.root.winfo_screenwidth()
@@ -367,37 +460,43 @@ class BlockDrawerApp(
 
     def _build_menu(self) -> None:
         menu = tk.Menu(self.root)
-        file_menu = tk.Menu(menu, tearoff=False)
-        file_menu.add_command(
+        self.file_menu = tk.Menu(menu, tearoff=False)
+        self.file_menu.add_command(
             label="New",
             accelerator=self._shortcut_label("new_session"),
             command=self.new_session,
         )
-        file_menu.add_command(
+        self.file_menu.add_command(
             label="Open…",
             accelerator=self._shortcut_label("open_session"),
             command=self.open_session,
         )
-        file_menu.add_separator()
-        file_menu.add_command(
+        self.open_recent_menu = tk.Menu(self.file_menu, tearoff=False)
+        self.file_menu.add_cascade(
+            label="Open Recent",
+            menu=self.open_recent_menu,
+        )
+        self._rebuild_open_recent_menu()
+        self.file_menu.add_separator()
+        self.file_menu.add_command(
             label="Save",
             accelerator=self._shortcut_label("save_session"),
             command=self.save,
         )
-        file_menu.add_command(
+        self.file_menu.add_command(
             label="Save As…",
             accelerator=self._shortcut_label("save_session_as"),
             command=self.save_as,
         )
-        file_menu.add_separator()
-        file_menu.add_command(
+        self.file_menu.add_separator()
+        self.file_menu.add_command(
             label="Export blockMeshDict…",
             accelerator=self._shortcut_label("export_block_mesh_dict"),
             command=self.toggle_export_mode,
         )
-        file_menu.add_separator()
-        file_menu.add_command(label="Exit", command=self.close)
-        menu.add_cascade(label="File", menu=file_menu)
+        self.file_menu.add_separator()
+        self.file_menu.add_command(label="Exit", command=self.close)
+        menu.add_cascade(label="File", menu=self.file_menu)
 
         self.edit_menu = tk.Menu(menu, tearoff=False)
         self.edit_menu.add_command(
@@ -685,14 +784,44 @@ class BlockDrawerApp(
         )
         if not filename:
             return
+        self._load_session_path(filename)
+
+    def open_recent_session(self, path: str | Path) -> None:
+        """Open a recent path, pruning it first if it no longer exists."""
+        source = self._canonical_session_path(path)
+        if not source.is_file():
+            warning = self._remove_recent_file(source)
+            message = f"Recent session no longer exists: {source}"
+            if warning is not None:
+                message += f". {warning}"
+            self._show_error(
+                "Could not open recent session",
+                FileNotFoundError(message),
+            )
+            return
+        if not self._confirm_discard():
+            return
+        self._load_session_path(source)
+
+    def _load_session_path(self, path: str | Path) -> bool:
+        source = self._canonical_session_path(path)
         try:
-            model = load_session(filename)
+            model = load_session(source)
         except SessionError as exc:
             self._show_error("Could not open session", exc)
-            return
+            return False
+        self._install_loaded_session(model, source)
+        warning = self._record_recent_file(source)
+        message = f"Loaded {self.session_path.name}."
+        if warning is not None:
+            message += f" {warning}"
+        self.status.set(message)
+        return True
+
+    def _install_loaded_session(self, model: MeshModel, source: Path) -> None:
         self.model = model
         self.history.reset(self.model)
-        self.session_path = Path(filename)
+        self.session_path = source
         self.selected_vertex = None
         self.selected_edge = None
         self.selected_control_point_index = None
@@ -717,7 +846,6 @@ class BlockDrawerApp(
         self._sync_global_values()
         self._update_property_panel()
         self.fit_view()
-        self.status.set(f"Loaded {self.session_path.name}.")
         self._update_title()
 
     def save(self) -> bool:
@@ -730,7 +858,11 @@ class BlockDrawerApp(
             return False
         self.history.mark_saved(self.model)
         self._refresh_dirty()
-        self.status.set(f"Saved {self.session_path.name}.")
+        warning = self._record_recent_file(self.session_path)
+        message = f"Saved {self.session_path.name}."
+        if warning is not None:
+            message += f" {warning}"
+        self.status.set(message)
         return True
 
     def save_as(self) -> bool:

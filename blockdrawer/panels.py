@@ -158,6 +158,29 @@ class PropertiesPanelMixin:
                 pady=(self._px(5), self._px(2)),
             )
             row += 1
+            spacing_links = self.model.spacing_links_for_edge(current)
+            if spacing_links:
+                unsynchronized = sum(
+                    not self.model.spacing_link_is_synchronized(link)
+                    for link in spacing_links
+                )
+                ttk.Label(
+                    self.selection_frame,
+                    text=(
+                        f"Spacing links: {len(spacing_links)}"
+                        + (
+                            f" ({unsynchronized} out of sync)."
+                            if unsynchronized else " (matched)."
+                        )
+                        + " Press L to review or synchronize."
+                    ),
+                    foreground="#b45309" if unsynchronized else "#0b726c",
+                    wraplength=self._px(245),
+                ).grid(
+                    row=row, column=0, columnspan=2, sticky="w",
+                    pady=(self._px(4), self._px(2)),
+                )
+                row += 1
         return row
 
     def _update_property_panel(self) -> None:
@@ -262,7 +285,8 @@ class PropertiesPanelMixin:
             self.sidebar_help.configure(
                 text=(
                     "Select two incident edges to link their cell widths.\n"
-                    "Cell-count and grading edits synchronize link chains.\n"
+                    "Cell counts require synchronized links; infeasible grading "
+                    "leaves links out of sync.\n"
                     "L or Esc: finish spacing links"
                 )
             )

@@ -57,14 +57,18 @@ blockdrawer
 - Press `L` or click **Link spacing** to enter a grading-focused mode. Select two
   edges that share a vertex; the second edge is regraded so its touching cell
   width matches the first edge. A teal marker identifies every linked pair.
-  Subsequent cell-count or grading changes propagate along the complete chain of
-  spacing links, without changing the linked edges' own cell counts. The focused
-  Properties panel shows cell count, the four grading representations, endpoint
+  Cell-count changes propagate along the complete chain of spacing links without
+  changing linked follower counts. Grading changes attempt the same
+  synchronization, but an unattainable linked width no longer rejects the
+  requested grading: followers retain their prior grading and the affected links
+  are marked out of sync. The normal Properties panel reports link status. The
+  focused panel shows cell count, the four grading representations, endpoint
   links, removal controls, and **Synchronize links from this edge**, while hiding
-  edge geometry and interpolation-point controls. Geometry edits deliberately do
-  not trigger propagation; use **Synchronize** afterwards with the desired driver
-  edge selected. Conflicting closed chains and unattainable one-cell widths are
-  rejected atomically. Press `L` or `Esc` to leave the mode.
+  edge geometry and interpolation-point controls. Geometry edits also leave links
+  out of sync; use **Synchronize** afterwards with the desired driver edge
+  selected. Link creation, cell-count propagation, and explicit synchronization
+  still reject conflicting or unattainable chains atomically and report the
+  limiting edge length and cell count. Press `L` or `Esc` to leave the mode.
 - Use the selected edge's **Type** control to choose `line`, `arc`, `polyLine`, or
   `spline`.
   An arc has one purple interpolation point through which its circle passes. A
@@ -271,20 +275,21 @@ BlockDrawer creates a human-editable JSON preferences file on first launch:
 - Windows: `%APPDATA%\BlockDrawer\config.json`
 
 Mesh geometry and extrusion values remain in the session JSON; this preferences
-file is for application-wide behavior. `ui.scale` accepts `"auto"` or a multiplier
-from `0.5` through `4`. `ui.showBlockMesh`, `ui.showGeometry`,
+file is for application-wide behavior. `recentFiles` stores up to ten session
+paths, most recent first. `ui.scale` accepts `"auto"` or a multiplier from `0.5`
+through `4`. `ui.showBlockMesh`, `ui.showGeometry`,
 `ui.showMeshPreview`, `ui.showVertexIds`, `ui.showEdgeCellCounts`,
 `ui.showEdgeNodes`, and `ui.showEdgeInterpolationPoints` are booleans for the
 corresponding visibility toggles. `ui.previewCoarsening` is a positive integer.
-Changes made through **View** or the preview panel update the file immediately.
-Manual edits are loaded on the next launch.
+Changes made through **View**, the preview panel, or the recent-session menu
+update the file immediately. Manual edits are loaded on the next launch.
 
 Every keyboard action is configurable. A Linux/Windows default file looks like:
 
 ```json
 {
   "format": "blockDrawerConfig",
-  "version": 3,
+  "version": 4,
   "ui": {
     "scale": "auto",
     "showBlockMesh": true,
@@ -296,6 +301,7 @@ Every keyboard action is configurable. A Linux/Windows default file looks like:
     "showMeshPreview": false,
     "previewCoarsening": 1
   },
+  "recentFiles": [],
   "shortcuts": {
     "new_session": ["Ctrl+N"],
     "open_session": ["Ctrl+O"],
@@ -330,6 +336,10 @@ platform default. Conflicting or malformed shortcuts cause BlockDrawer to use
 defaults for that launch and report the problem without overwriting the file.
 
 ## Save and export
+
+**File → Open Recent** lists the ten most recently opened or saved sessions.
+Selecting a missing file removes it from the list, and **Clear Menu** removes all
+entries.
 
 **File → Save** writes a versioned BlockDrawer JSON session containing all
 vertices (including standalone ones), quadrilateral blocks, edge cell counts,
@@ -369,6 +379,37 @@ blockMesh
 
 The UI never invokes `blockMesh` and never writes `polyMesh`; its interior mesh
 preview is a transient visualization derived independently within each block.
+
+## Symmetrize a session
+
+`symmetrize_session.py` is a headless utility for BlockDrawer session JSON—not an
+OpenFOAM mesh. It preserves one half of the editor topology and rebuilds the
+other half by reflection. For an airfoil edited above the x-axis:
+
+```bash
+python symmetrize_session.py airfoil.json --axis x
+```
+
+This writes `airfoil-symmetric.json` beside the input without modifying the
+original. Choose another destination or copy the negative half instead:
+
+```bash
+python symmetrize_session.py airfoil.json --axis x \
+  --source-side negative --output airfoil-updated.json
+```
+
+`--axis x` reflects `y → -y`; `--axis y` reflects `x → -x`. The utility mirrors
+blocks, standalone mesh vertices, curved-edge interpolation points, cell counts,
+directional grading, exterior boundary assignments, and compatible spacing
+links. Boundary definitions and export settings are retained, and the mirrored
+edges use the same patch names as their source edges. Independent reference
+curves are left unchanged.
+
+The symmetry axis must follow block edges: a block with vertices on both sides is
+rejected with instructions to split the topology first. A non-straight edge
+shared on the axis must itself be reflection-symmetric. Target-side IDs are
+regenerated with `mirror_` prefixes. If an output file already exists, pass
+`--overwrite` explicitly.
 
 ## Tests
 

@@ -325,6 +325,29 @@ class ModelHistoryTests(unittest.TestCase):
             restored.edge_total_expansion(second), linked_ratio
         )
 
+    def test_grading_that_leaves_link_out_of_sync_is_undoable(self) -> None:
+        model = MeshModel()
+        driver = edge_key("v0", "v1")
+        follower = edge_key("v1", "v2")
+        model.move_vertex("v1", 10.0, 0.0)
+        model.move_vertex("v2", 10.0, 1.0)
+        model.set_edge_grading(driver, "total_ratio", 0.1)
+        link = model.add_spacing_link(driver, follower)
+        history = ModelHistory(model)
+
+        model.set_edge_grading(driver, "total_ratio", 1.0)
+        history.record(model)
+
+        self.assertFalse(model.spacing_link_is_synchronized(link))
+        restored = history.undo()
+        self.assertTrue(restored.spacing_link_is_synchronized(link))
+        self.assertAlmostEqual(
+            restored.edge_total_expansion(driver), 0.1
+        )
+        restored = history.redo()
+        self.assertFalse(restored.spacing_link_is_synchronized(link))
+        self.assertEqual(restored.edge_total_expansion(driver), 1.0)
+
     def test_boundary_creation_assignment_and_removal_are_undoable(self) -> None:
         model = MeshModel()
         selected = edge_key("v0", "v3")

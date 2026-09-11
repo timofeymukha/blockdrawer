@@ -354,6 +354,66 @@ class MeshModelTests(unittest.TestCase):
             model.edge_width_at_vertex(third, "v2"),
         )
 
+    def test_unattainable_link_does_not_reject_direct_grading_edit(self) -> None:
+        model = MeshModel()
+        driver = edge_key("v0", "v1")
+        follower = edge_key("v1", "v2")
+        model.move_vertex("v1", 10.0, 0.0)
+        model.move_vertex("v2", 10.0, 1.0)
+        model.set_edge_grading(driver, "total_ratio", 0.1)
+        link = model.add_spacing_link(driver, follower)
+        follower_ratio = model.edge_total_expansion(follower)
+
+        grading = model.set_edge_grading(driver, "total_ratio", 1.0)
+
+        self.assertEqual(grading.total_ratio, 1.0)
+        self.assertEqual(model.edge_total_expansion(driver), 1.0)
+        self.assertEqual(
+            model.edge_total_expansion(follower), follower_ratio
+        )
+        self.assertFalse(model.spacing_link_is_synchronized(link))
+        model.validate()
+
+        with self.assertRaisesRegex(
+            TopologyError,
+            r"requested by edge .*length 1 and 10 cells",
+        ):
+            model.synchronize_spacing_links(driver)
+        self.assertEqual(model.edge_total_expansion(driver), 1.0)
+        self.assertEqual(
+            model.edge_total_expansion(follower), follower_ratio
+        )
+
+    def test_failed_soft_sync_restores_all_link_driven_gradings(self) -> None:
+        model = MeshModel()
+        driver = edge_key("v0", "v1")
+        middle = edge_key("v1", "v2")
+        short_follower = edge_key("v2", "v3")
+        model.move_vertex("v1", 10.0, 0.0)
+        model.move_vertex("v2", 10.0, 1.0)
+        model.move_vertex("v3", 9.9, 1.0)
+        model.set_edge_grading(driver, "total_ratio", 0.1)
+        model.add_spacing_link(driver, middle)
+        model.add_spacing_link(middle, short_follower)
+        middle_ratio = model.edge_total_expansion(middle)
+        follower_ratio = model.edge_total_expansion(short_follower)
+
+        model.set_edge_grading(driver, "total_ratio", 0.01)
+
+        self.assertAlmostEqual(model.edge_total_expansion(driver), 0.01)
+        self.assertEqual(
+            model.edge_total_expansion(middle), middle_ratio
+        )
+        self.assertEqual(
+            model.edge_total_expansion(short_follower), follower_ratio
+        )
+        first_link = model.spacing_link_at(driver, "v1")
+        second_link = model.spacing_link_at(middle, "v2")
+        assert first_link is not None
+        assert second_link is not None
+        self.assertFalse(model.spacing_link_is_synchronized(first_link))
+        self.assertTrue(model.spacing_link_is_synchronized(second_link))
+
     def test_cell_count_change_synchronizes_spacing_without_changing_follower_count(
         self,
     ) -> None:

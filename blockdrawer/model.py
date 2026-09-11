@@ -572,8 +572,7 @@ class MeshModel(
             try:
                 for affected_edge in affected:
                     self.edge_grading.pop(affected_edge, None)
-                self._propagate_spacing_links(affected)
-                self.validate()
+                self._try_propagate_spacing_links(affected)
             except Exception:
                 self.edge_grading = previous
                 raise
@@ -612,8 +611,7 @@ class MeshModel(
                     self.edge_grading.pop(affected_edge, None)
                 else:
                     self.edge_grading[affected_edge] = ratio
-            self._propagate_spacing_links(orientations)
-            self.validate()
+            self._try_propagate_spacing_links(orientations)
         except Exception:
             self.edge_grading = previous
             raise

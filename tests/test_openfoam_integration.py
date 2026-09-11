@@ -10,6 +10,7 @@ import unittest
 from blockdrawer.foam import write_block_mesh_dict
 from blockdrawer.model import MeshModel, edge_key
 from blockdrawer.preview import build_mesh_preview
+from blockdrawer.symmetry import symmetrize_model
 from tests.helpers import build_ring_model, center_vertex_ids
 
 
@@ -18,6 +19,19 @@ from tests.helpers import build_ring_model, center_vertex_ids
     "set BLOCKMESH_COMMAND to run the OpenFOAM integration test",
 )
 class OpenFoamIntegrationTests(unittest.TestCase):
+    def test_block_mesh_accepts_symmetrized_session(self) -> None:
+        model = MeshModel()
+        outer = edge_key("v2", "v3")
+        model.set_edge_type(outer, "spline")
+        model.set_edge_control_point_count(outer, 3)
+        model.set_edge_cells(outer, 8)
+        model.set_edge_grading(outer, "total_ratio", 4.0)
+
+        mirrored = symmetrize_model(model, axis="x").model
+
+        self.assertEqual(len(mirrored.blocks), 2)
+        self._assert_block_mesh_accepts(mirrored)
+
     def test_block_mesh_accepts_combined_curved_graded_split(self) -> None:
         model = MeshModel()
         selected = edge_key("v0", "v1")

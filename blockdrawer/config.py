@@ -13,10 +13,11 @@ from typing import Any, Mapping
 
 
 FORMAT_NAME = "blockDrawerConfig"
-FORMAT_VERSION = 3
+FORMAT_VERSION = 4
 MIN_UI_SCALE = 0.5
 MAX_UI_SCALE = 4.0
 DEFAULT_PREVIEW_COARSENING = 1
+MAX_RECENT_FILES = 10
 
 SHORTCUT_ACTIONS = (
     "new_session",
@@ -95,6 +96,7 @@ class AppConfig:
     show_edge_interpolation_points: bool = True
     show_mesh_preview: bool = False
     preview_coarsening: int = DEFAULT_PREVIEW_COARSENING
+    recent_files: tuple[str, ...] = ()
 
     def with_ui_scale(self, value: str | float) -> AppConfig:
         return replace(self, ui_scale=_ui_scale(value))
@@ -135,6 +137,9 @@ class AppConfig:
                 value, "ui.previewCoarsening"
             ),
         )
+
+    def with_recent_files(self, paths: tuple[str, ...]) -> AppConfig:
+        return replace(self, recent_files=_recent_files(paths))
 
 
 def default_shortcuts(platform: str | None = None) -> dict[str, tuple[str, ...]]:
@@ -238,7 +243,8 @@ def from_data(data: Any, *, platform: str | None = None) -> AppConfig:
     if data.get("format") != FORMAT_NAME:
         raise ConfigError("This is not a BlockDrawer config file")
     version = data.get("version")
-    if isinstance(version, bool) or version not in (1, 2, FORMAT_VERSION):
+    if isinstance(version, bool) \
+            or version not in (1, 2, 3, FORMAT_VERSION):
         raise ConfigError(
             f"Unsupported BlockDrawer config version {version!r}"
         )
@@ -273,6 +279,7 @@ def from_data(data: Any, *, platform: str | None = None) -> AppConfig:
         ui.get("previewCoarsening", DEFAULT_PREVIEW_COARSENING),
         "ui.previewCoarsening",
     )
+    recent_files = _recent_files(data.get("recentFiles", ()))
 
     shortcuts_data = data.get("shortcuts", {})
     if not isinstance(shortcuts_data, dict):
@@ -318,6 +325,7 @@ def from_data(data: Any, *, platform: str | None = None) -> AppConfig:
         show_edge_interpolation_points=show_edge_interpolation_points,
         show_mesh_preview=show_mesh_preview,
         preview_coarsening=preview_coarsening,
+        recent_files=recent_files,
     )
 
 
@@ -343,6 +351,7 @@ def to_data(config: AppConfig) -> dict[str, Any]:
             "showMeshPreview": config.show_mesh_preview,
             "previewCoarsening": config.preview_coarsening,
         },
+        "recentFiles": list(config.recent_files),
         "shortcuts": {
             action: list(config.shortcuts[action])
             for action in SHORTCUT_ACTIONS
@@ -419,6 +428,23 @@ def _positive_integer(value: Any, name: str) -> int:
     return value
 
 
+def _recent_files(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        raise ConfigError("'recentFiles' must be an array")
+    if len(value) > MAX_RECENT_FILES:
+        raise ConfigError(
+            f"'recentFiles' may contain at most {MAX_RECENT_FILES} paths"
+        )
+    if not all(isinstance(path, str) and path for path in value):
+        raise ConfigError(
+            "'recentFiles' must contain non-empty path strings"
+        )
+    paths = tuple(value)
+    if len(set(paths)) != len(paths):
+        raise ConfigError("'recentFiles' must not contain duplicate paths")
+    return paths
+
+
 def _validate_shortcuts(shortcuts: Mapping[str, tuple[str, ...]]) -> None:
     if set(shortcuts) != set(SHORTCUT_ACTIONS):
         raise ConfigError("The shortcut map does not cover every action")
@@ -453,4 +479,5 @@ def _validate_config(config: AppConfig) -> None:
     )
     _boolean(config.show_mesh_preview, "ui.showMeshPreview")
     _positive_integer(config.preview_coarsening, "ui.previewCoarsening")
+    _recent_files(config.recent_files)
     _validate_shortcuts(config.shortcuts)

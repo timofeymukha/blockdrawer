@@ -20,6 +20,7 @@ them in the canvas widgets.
 - Tkinter/ttk for the cross-platform GUI (part of the normal Python installer).
 - Python standard library only at runtime and in tests; no compiled dependencies.
 - Launch: `python -m blockdrawer`
+- Symmetrize a session: `python symmetrize_session.py SESSION --axis x|y`
 - Tests: `python -m unittest discover -s tests -v`
 - Supplied OpenFOAM 2606 integration check: `make integration-test`
 - For another installation, set `BLOCKMESH_COMMAND` to a command prefix that can
@@ -62,6 +63,10 @@ them in the canvas widgets.
   block vertices and OpenFOAM edge geometry.
 - `blockdrawer/session.py`: versioned JSON persistence. Keep this independent of
   Tk so sessions can be tested and converted headlessly.
+- `blockdrawer/symmetry.py`: UI-independent whole-session half-mirroring. It
+  retains the selected source half and rebuilds the other half with deterministic
+  `mirror_` IDs, preserving mesh-edge metadata in physical path direction.
+  `symmetrize_session.py` is its thin command-line entry point.
 - `blockdrawer/config.py`: versioned, human-editable application preferences,
   independent of Tk. It resolves the native per-platform location, validates UI
   scale and shortcut names, merges missing keys from platform defaults, and
@@ -252,19 +257,27 @@ them in the canvas widgets.
   `L = w * (1 + q + ... + q**(N-1))`; canonical grading is inverted when the
   linked vertex is the edge's canonical end. One-cell edges have fixed width `L`.
   Unattainable widths, incompatible fixed anchors, and inconsistent closed chains
-  reject and roll back the complete edit.
+  reject and roll back link creation, explicit synchronization, and cell-count
+  edits. Diagnostics identify the source edge, follower edge, shared vertex,
+  requested width, follower length, and follower cell count.
 - Cell-count changes first update their normal opposite-edge constraint component;
-  grading changes first honor their existing Propagate choice. Every directly
-  affected edge is then a fixed anchor and endpoint-width synchronization walks
-  all reachable spacing links. Linked follower cell counts never change. Link
-  propagation, validation, and the initiating edit are one history action.
+  every directly affected edge is then a fixed anchor and endpoint-width
+  synchronization walks all reachable spacing links. Linked follower cell counts
+  never change, and any failure rolls back the complete cell-count edit. Grading
+  changes first honor their existing Propagate choice and validate those direct
+  grading changes. They then attempt the same link synchronization. If it is
+  unattainable, restore every link-driven follower grading while retaining the
+  direct grading change; the affected links remain out of sync and the direct
+  change is one history action. Successful grading and link propagation also
+  remain one history action.
 - Persistent spacing links intentionally do not react to vertex, control-point,
   projection, or other geometry mutations. The GUI's explicit **Synchronize links
   from this edge** action re-establishes the linked widths using the selected edge
   as driver. Configurable shortcut `L` enters a focused link mode: two incident
   edge selections create a pair, `Esc`/`L` exits, and Properties exposes only cell
   count, grading, link removal, and synchronization—not edge type or interpolation
-  controls. Short teal endpoint legs visualize saved pairs.
+  controls. The normal edge Properties panel reports matched or out-of-sync
+  endpoint links. Short teal endpoint legs visualize saved pairs.
 - Splitting transfers a link on an affected edge to the sub-edge touching the
   original linked endpoint. Combining transfers surviving outer-end links to the
   merged edge and drops links at removed cut vertices; edge deletion prunes links
@@ -348,6 +361,20 @@ them in the canvas widgets.
   be distinct from each other and from every selectable side-boundary name. If
   either extrusion patch is selected as `cyclic`, both are normalized to
   `cyclic`; export writes reciprocal `neighbourPatch` entries automatically.
+- Session symmetrization treats `--axis x` as `y -> -y` and `--axis y` as
+  `x -> -x`; the positive half is the default source and the negative half is an
+  option. Source blocks may touch but never straddle the axis. The result retains
+  source-side block and vertex IDs, mirrors source-side standalone vertices,
+  rebuilds target blocks and vertices with deterministic `mirror_` IDs, and
+  reverses mirrored block order to remain counter-clockwise. Cell counts,
+  interpolation geometry, directional total grading, exterior boundary
+  assignments, and structurally compatible spacing links mirror with their
+  source edges. Boundary definitions, export settings, and independent reference
+  curves remain unchanged. An axis edge becomes internal and loses any former
+  exterior assignment; non-straight axis geometry must equal its own reflection.
+  Reject a straddling block, conflicting mirrored metadata, or invalid result
+  rather than guessing. The CLI writes a new `*-symmetric.json` path by default
+  and requires `--overwrite` before replacing an existing file.
 
 ## Data and compatibility
 
@@ -371,9 +398,12 @@ silently reinterpret old data. JSON is a project/session format, not an OpenFOAM
 format.
 
 Application preferences are separate from mesh sessions. They use JSON format
-`blockDrawerConfig`, version 3, at `~/.blockdrawer` on Linux and macOS, and
+`blockDrawerConfig`, version 4, at `~/.blockdrawer` on Linux and macOS, and
 `%APPDATA%/BlockDrawer/config.json` on Windows. The file is created with complete
-defaults on first launch. `ui.scale` is `auto` or a multiplier from 0.5 to 4;
+defaults on first launch. Version 4 adds `recentFiles`, an ordered array of at
+most ten session paths. Successful opens and saves promote a normalized path,
+selecting a missing recent file removes it, and versions 1–3 migrate with an
+empty list. `ui.scale` is `auto` or a multiplier from 0.5 to 4;
 `ui.showBlockMesh` and `ui.showGeometry` persist the independent canvas layers;
 `ui.showVertexIds` and `ui.showEdgeCellCounts` independently persist the canvas
 annotation labels and default to visible when missing from an older config;
