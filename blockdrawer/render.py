@@ -113,6 +113,15 @@ def render_png(
     model: MeshModel, path: str | Path, options: RenderOptions | None = None
 ) -> None:
     """Write the picture as a PNG using Pillow."""
+    Path(path).write_bytes(render_png_bytes(model, options))
+
+
+def render_png_bytes(
+    model: MeshModel, options: RenderOptions | None = None
+) -> bytes:
+    """Return the picture as PNG bytes using Pillow."""
+    import io
+
     settings = options or RenderOptions()
     try:
         from PIL import Image, ImageDraw, ImageFont  # noqa: F401
@@ -124,7 +133,9 @@ def render_png(
     scale = max(1, int(settings.supersample))
     painter = _PillowPainter(settings.width, settings.height, scale)
     _draw(model, settings, painter, scale=float(scale))
-    painter.finish().save(Path(path), format="PNG")
+    buffer = io.BytesIO()
+    painter.finish().save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 def content_bounds(

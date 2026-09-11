@@ -215,6 +215,32 @@ def format_description(
     return "\n".join(lines).strip("\n") + "\n"
 
 
+def filter_description(data: dict[str, Any], wanted: set[str]) -> dict[str, Any]:
+    """Keep only entities named in ``wanted`` plus what touches those blocks."""
+    filtered = dict(data)
+    filtered["blocks"] = [item for item in data["blocks"] if item["id"] in wanted]
+    filtered["edges"] = [
+        item for item in data["edges"]
+        if item["id"] in wanted or any(block in wanted for block in item["blocks"])
+    ]
+    filtered["vertices"] = [
+        item for item in data["vertices"]
+        if item["id"] in wanted or any(block in wanted for block in item["blocks"])
+    ]
+    filtered["boundaries"] = [
+        item for item in data["boundaries"] if item["name"] in wanted
+    ]
+    filtered["curves"] = [
+        item for item in data["curves"]
+        if item["id"] in wanted or item["name"] in wanted
+    ]
+    filtered["spacing_links"] = [
+        item for item in data["spacing_links"]
+        if item["vertex"] in wanted or any(edge in wanted for edge in item["edges"])
+    ]
+    return filtered
+
+
 def _blocks_by_vertex(model: MeshModel) -> dict[str, list[str]]:
     result: dict[str, list[str]] = {}
     for block in model.blocks:

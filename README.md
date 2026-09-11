@@ -468,6 +468,26 @@ make check SESSION=case.json
 blockdrawer-cli check case.json --case /tmp/case --json   # keep the case and logs
 ```
 
+### MCP server for coding agents
+
+The same operations are available as Model Context Protocol tools, so Claude
+Code or any MCP client can inspect, edit, render, and check sessions directly.
+Install the optional dependency and register the server:
+
+```bash
+python -m pip install 'blockdrawer[mcp]'      # or: pip install 'mcp>=2,<3' Pillow
+blockdrawer-mcp                               # stdio transport, for MCP clients
+```
+
+The repository ships a `.mcp.json` that registers the server for Claude Code
+when it is started in this directory, including the `BLOCKMESH_COMMAND` for the
+supplied OpenFOAM container; edit that entry for another installation. The
+tools are `describe_session`, `list_commands`, `edit_session` (atomic command
+batches), `quality_report`, `render_session` (returns the picture inline),
+`validate_session`, `export_block_mesh_dict`, `check_mesh`, and `new_session`.
+Every tool takes the session path, so agents and the GUI can share one file:
+save in the editor, let the agent edit and check, then reopen.
+
 ## Tests
 
 All normal tests are headless and use the standard library:

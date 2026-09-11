@@ -25,6 +25,9 @@ them in the canvas widgets.
 - Headless work: `python -m blockdrawer.cli COMMAND` (installed as
   `blockdrawer-cli`). Subcommands: `new`, `describe`, `quality`, `render`,
   `export`, `validate`, `check`, `apply`, and `commands`.
+- Agent tools: `python -m blockdrawer.mcp_server` (installed as
+  `blockdrawer-mcp`; needs `pip install blockdrawer[mcp]`). Keep the MCP tool
+  surface and the CLI in step: both must go through `commands.py`.
 - Symmetrize a session: `python symmetrize_session.py SESSION --axis x|y`
 - Tests: `python -m unittest discover -s tests -v`
 - Supplied OpenFOAM 2606 integration check: `make integration-test`
@@ -97,6 +100,15 @@ them in the canvas widgets.
 - `blockdrawer/cli.py`: argparse front end over the modules above. Every
   subcommand supports `--json`; failures exit 1 with `error: ...` on stderr or
   a JSON object carrying an `error` key.
+- `blockdrawer/mcp_server.py`: Model Context Protocol server (`blockdrawer-mcp`,
+  stdio by default) exposing the same operations as typed tools:
+  `describe_session`, `list_commands`, `edit_session`, `quality_report`,
+  `render_session` (returns the PNG inline), `validate_session`,
+  `export_block_mesh_dict`, `check_mesh`, and `new_session`. Tools are plain,
+  path-based functions so the server is stateless and testable without `mcp`;
+  only `build_server()` imports the optional `mcp>=2` package and translates
+  BlockDrawer errors into `ToolError` so agents see the real message. The
+  repository's `.mcp.json` registers the server for Claude Code.
 - `blockdrawer/config.py`: versioned, human-editable application preferences,
   independent of Tk. It resolves the native per-platform location, validates UI
   scale and shortcut names, merges missing keys from platform defaults, and

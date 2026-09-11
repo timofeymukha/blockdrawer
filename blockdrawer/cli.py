@@ -31,7 +31,12 @@ from .commands import (
     read_command_lines,
     spec_help_text,
 )
-from .describe import SECTIONS, describe_model, format_description
+from .describe import (
+    SECTIONS,
+    describe_model,
+    filter_description,
+    format_description,
+)
 from .domain import TopologyError
 from .foam import block_mesh_dict, write_block_mesh_dict
 from .geometry import GeometryImportError
@@ -311,7 +316,7 @@ def _cmd_describe(args: argparse.Namespace) -> int:
     model = _load(args.session)
     data = describe_model(model)
     if args.only:
-        data = _filter_description(data, set(args.only))
+        data = filter_description(data, set(args.only))
     sections = tuple(args.section) if args.section else None
     text = format_description(data, sections=sections)
     if sections:
@@ -320,49 +325,19 @@ def _cmd_describe(args: argparse.Namespace) -> int:
     return 0
 
 
-def _filter_description(data: dict[str, Any], wanted: set[str]) -> dict[str, Any]:
-    filtered = dict(data)
-    filtered["blocks"] = [item for item in data["blocks"] if item["id"] in wanted]
-    filtered["edges"] = [
-        item for item in data["edges"]
-        if item["id"] in wanted or any(block in wanted for block in item["blocks"])
-    ]
-    filtered["vertices"] = [
-        item for item in data["vertices"]
-        if item["id"] in wanted or any(block in wanted for block in item["blocks"])
-    ]
-    filtered["boundaries"] = [
-        item for item in data["boundaries"] if item["name"] in wanted
-    ]
-    filtered["curves"] = [
-        item for item in data["curves"]
-        if item["id"] in wanted or item["name"] in wanted
-    ]
-    filtered["spacing_links"] = [
-        item for item in data["spacing_links"]
-        if item["vertex"] in wanted or any(edge in wanted for edge in item["edges"])
-    ]
-    return filtered
-
-
 def _cmd_quality(args: argparse.Namespace) -> int:
     model = _load(args.session)
-    defaults = QualityThresholds()
-    thresholds = QualityThresholds(
-        min_angle=_or(args.min_angle, defaults.min_angle),
-        max_angle=_or(args.max_angle, defaults.max_angle),
-        non_orthogonality=_or(args.non_orthogonality, defaults.non_orthogonality),
-        cell_aspect_ratio=_or(args.aspect_ratio, defaults.cell_aspect_ratio),
-        cell_growth_ratio=_or(args.growth_ratio, defaults.cell_growth_ratio),
-        interface_size_ratio=_or(args.interface_ratio, defaults.interface_size_ratio),
+    thresholds = QualityThresholds.from_overrides(
+        min_angle=args.min_angle,
+        max_angle=args.max_angle,
+        non_orthogonality=args.non_orthogonality,
+        cell_aspect_ratio=args.aspect_ratio,
+        cell_growth_ratio=args.growth_ratio,
+        interface_size_ratio=args.interface_ratio,
     )
     report = assess_quality(model, thresholds)
     _emit(report.to_data(), format_quality(report), args.json)
     return 0
-
-
-def _or(value: Any, default: Any) -> Any:
-    return default if value is None else value
 
 
 def _cmd_render(args: argparse.Namespace) -> int:

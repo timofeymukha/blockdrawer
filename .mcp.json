@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "blockdrawer": {
+      "command": "python3",
+      "args": ["-m", "blockdrawer.mcp_server"],
+      "env": {
+        "BLOCKMESH_COMMAND": "apptainer exec /tmp/timofey/code/openfoam-apptainer/openfoam-2606.sif bash -lc 'source /usr/lib/openfoam/openfoam2606/etc/bashrc && exec blockMesh \"$@\"' blockMesh"
+      }
+    }
+  }
+}

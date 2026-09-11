@@ -15,9 +15,11 @@ blockdrawer = "blockdrawer.app:main"
 
 [project.scripts]
 blockdrawer-cli = "blockdrawer.cli:main"
+blockdrawer-mcp = "blockdrawer.mcp_server:main"
 
 [project.optional-dependencies]
 png = ["Pillow>=10.1"]
+mcp = ["mcp>=2,<3", "Pillow>=10.1"]
 
 [tool.setuptools.packages.find]
 include = ["blockdrawer*"]

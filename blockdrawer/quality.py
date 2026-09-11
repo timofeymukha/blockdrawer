@@ -31,6 +31,13 @@ class QualityThresholds:
     cell_growth_ratio: float = 1.3
     interface_size_ratio: float = 2.5
 
+    @classmethod
+    def from_overrides(cls, **overrides: float | None) -> "QualityThresholds":
+        """Build thresholds from keyword overrides, ignoring ``None`` values."""
+        return cls(**{
+            key: value for key, value in overrides.items() if value is not None
+        })
+
 
 @dataclass(frozen=True)
 class CornerQuality:
