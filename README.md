@@ -29,6 +29,31 @@ python -m pip install .
 blockdrawer
 ```
 
+### Browser editor
+
+The same editor also runs in a browser tab, served by a small local server
+from the standard library. It has the same toolbar, menus, modes, panels, and
+shortcuts as the Tk window, draws with an anti-aliased canvas, and updates
+live when a script or agent edits the open session file.
+
+```bash
+python -m blockdrawer.web mesh-blocks.json      # or: blockdrawer-web
+```
+
+The server listens on a loopback port chosen at random, prints its URL, and
+opens it; the URL contains a per-launch token so other pages cannot drive the
+editor. Use `--port` to pin the port and `--no-browser` to skip opening a tab.
+File dialogs browse the server's filesystem. When the session file changes on
+disk, a banner offers to reload it, which is how an agent editing through
+`blockdrawer-cli apply` or the MCP server shows up in the open editor.
+
+Markers scale with the zoom level: vertices, interpolation points, and labels
+shrink or hide when their edges are small on screen, and mesh nodes turn into
+dots and then vanish as they crowd together. The mesh preview is computed in
+the browser from the edge nodes and kept as a cached bitmap, so panning and
+zooming a topology with hundreds of thousands of preview cells stays fluid
+and vertex drags update the preview without a server round trip for it.
+
 ## Edit a topology
 
 - Click and drag a blue vertex to move every block that shares it. Coordinates can

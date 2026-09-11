@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BlockDrawer</title>
+<link rel="stylesheet" href="/static/style.css">
+<script>window.BLOCKDRAWER_TOKEN = "__TOKEN__";</script>
+</head>
+<body>
+<div id="app" class="app">
+  <header class="menubar" id="menubar">
+    <div class="brand"><span class="brand-mark"></span>BlockDrawer</div>
+    <nav class="menus" id="menus"></nav>
+    <div class="doc-title" id="doc-title">Untitled</div>
+  </header>
+  <div class="toolbar" id="toolbar"></div>
+  <div class="banner" id="banner" hidden></div>
+  <main class="workspace">
+    <div class="canvas-host" id="canvas-host">
+      <canvas id="canvas"></canvas>
+      <div class="canvas-hud" id="hud"></div>
+    </div>
+    <aside class="sidebar" id="sidebar">
+      <h1 class="sidebar-title" id="sidebar-title">Properties</h1>
+      <section class="card" id="selection-card">
+        <h2 class="card-title" id="selection-title">Selection</h2>
+        <div class="card-body" id="panel"></div>
+      </section>
+      <p class="help" id="sidebar-help"></p>
+    </aside>
+  </main>
+  <footer class="statusbar" id="status"></footer>
+</div>
+<div class="modal-root" id="modal-root" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

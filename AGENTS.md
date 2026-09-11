@@ -28,6 +28,9 @@ them in the canvas widgets.
 - Agent tools: `python -m blockdrawer.mcp_server` (installed as
   `blockdrawer-mcp`; needs `pip install blockdrawer[mcp]`). Keep the MCP tool
   surface and the CLI in step: both must go through `commands.py`.
+- Browser editor: `python -m blockdrawer.web [SESSION]` (installed as
+  `blockdrawer-web`). Standard library only; it opens a tab on a loopback
+  port and must stay functionally equivalent to the Tk editor.
 - Symmetrize a session: `python symmetrize_session.py SESSION --axis x|y`
 - Tests: `python -m unittest discover -s tests -v`
 - Supplied OpenFOAM 2606 integration check: `make integration-test`
@@ -109,6 +112,37 @@ them in the canvas widgets.
   only `build_server()` imports the optional `mcp>=2` package and translates
   BlockDrawer errors into `ToolError` so agents see the real message. The
   repository's `.mcp.json` registers the server for Claude Code.
+- `blockdrawer/web/`: the browser editor. `session.py` holds what the Tk app
+  keeps outside its window: model, `ModelHistory`, session path, preferences,
+  recent files, export, a version counter, and a lock. Its `snapshot()` sends
+  sampled edge paths, every exact node position with graded node fractions,
+  control points, grading, curves, and links, so the client never evaluates
+  curves itself; the only geometry it computes is the transfinite preview
+  interpolation from those nodes. `server.py` is a `ThreadingHTTPServer`
+  with a JSON API, static files, and a server-sent-events stream that reports
+  version changes and edits made to the session file by other tools; every
+  `/api` request needs the per-launch token embedded in the page.
+  `static/app.js` owns viewport, selection, and modes and ports `editing.py`,
+  `panels.py`, and `canvas.py` one for one, including status texts; drags send
+  `drag` requests without history and one `drag_end` that records. Registry
+  commands are the only mutation path besides drag, undo/redo, open/save, and
+  export, so every browser edit is also available to the CLI and MCP server.
+  Performance rules: the snapshot computes occurrences, constraint components
+  (union-find), and grading once per edge and never calls `edge_length` per
+  link endpoint; the dirty flag comes from `ModelHistory.is_at_saved_index()`
+  plus the drag flag, not from re-serializing the model. The server never
+  builds the mesh preview for the browser: every edge carries all node
+  positions and, for graded edges, canonical node fractions, and
+  `static/app.js` (`buildPreview`) ports `preview.py`'s edge-weighted
+  transfinite interpolation and coarsening sampling; keep the two
+  implementations identical (the Playwright check compares them to 1e-6).
+  The client caches the canvas size, keeps the preview as a bitmap layer that
+  pans and zooms by translated or scaled blits and re-strokes only after the
+  view rests for 120 ms, draws the layer as one culled path with sub-pixel
+  decimation, batches node markers into one `Path2D` per color, and scales
+  markers per entity from the shortest incident on-screen edge
+  (`computeDetail`) so zoomed-out topologies stay legible; node markers shrink
+  with spacing and disappear below 2.5 px.
 - `blockdrawer/config.py`: versioned, human-editable application preferences,
   independent of Tk. It resolves the native per-platform location, validates UI
   scale and shortcut names, merges missing keys from platform defaults, and
@@ -151,7 +185,12 @@ them in the canvas widgets.
   persistence, export, projection, and UI helpers have focused modules. Tests must
   not require a display. CLI and OpenFOAM-runner tests use stub executables and
   captured log text; only `tests/test_openfoam_integration.py` needs
-  `BLOCKMESH_COMMAND`, and PNG tests skip without Pillow.
+  `BLOCKMESH_COMMAND`, and PNG tests skip without Pillow. `tests/test_web.py`
+  drives `WebSession` directly and the HTTP API through `http.client` on an
+  ephemeral port; the JavaScript client has no unit tests, so exercise changes
+  to it in a real browser (Playwright against `python -m blockdrawer.web
+  --no-browser --port 0` works well) and keep `window.__blockdrawer` exposed
+  for that purpose.
 
 ## Headless and agent workflow
 

@@ -24,6 +24,7 @@ class ModelHistory:
         self._states: list[dict[str, Any]] = []
         self._index = 0
         self._saved_state: dict[str, Any] = {}
+        self._saved_index = 0
         self.reset(model)
 
     @property
@@ -40,6 +41,7 @@ class ModelHistory:
         self._states = [state]
         self._index = 0
         self._saved_state = deepcopy(state)
+        self._saved_index = 0
 
     def record(self, model: MeshModel) -> bool:
         """Record a changed model, discarding a now-inaccessible redo branch."""
@@ -54,6 +56,7 @@ class ModelHistory:
             excess = len(self._states) - self.limit
             del self._states[:excess]
             self._index -= excess
+            self._saved_index -= excess
         return True
 
     def undo(self) -> MeshModel | None:
@@ -70,6 +73,16 @@ class ModelHistory:
 
     def mark_saved(self, model: MeshModel) -> None:
         self._saved_state = deepcopy(to_data(model))
+        self._saved_index = self._index
+
+    def is_at_saved_index(self) -> bool:
+        """Cheap dirty check: is the current history position the saved one?
+
+        Recorded states are distinct, so this matches :meth:`is_dirty` for a
+        model whose latest edit has been recorded. Callers with unrecorded
+        changes (a drag in progress) must account for those themselves.
+        """
+        return self._saved_index == self._index
 
     def is_dirty(self, model: MeshModel) -> bool:
         return to_data(model) != self._saved_state

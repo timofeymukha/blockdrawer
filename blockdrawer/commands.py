@@ -689,6 +689,74 @@ def _run_remove_curve(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
     return {"removed": args["curve"], "curves": sorted(model.geometry_curves)}
 
 
+def _curve_result(model: MeshModel, curve_id: str) -> dict[str, Any]:
+    curve = model.geometry_curves[curve_id]
+    return {
+        "curve": curve.id,
+        "name": curve.name,
+        "point_count": len(curve.points),
+        "show_points": curve.show_points,
+    }
+
+
+def _run_rename_curve(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
+    model.set_geometry_curve_name(args["curve"], args["name"])
+    return _curve_result(model, args["curve"])
+
+
+def _run_set_curve_show_points(
+    model: MeshModel, args: dict[str, Any]
+) -> dict[str, Any]:
+    model.set_geometry_curve_point_visibility(args["curve"], args["visible"])
+    return _curve_result(model, args["curve"])
+
+
+def _run_set_curve_point(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
+    model.set_geometry_curve_point(args["curve"], args["index"], args["x"], args["y"])
+    data = _curve_result(model, args["curve"])
+    data["index"] = args["index"]
+    return data
+
+
+def _run_add_curve_point(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
+    curve = model.geometry_curves.get(args["curve"])
+    after_index = args["after_index"]
+    if after_index is None and curve is not None:
+        after_index = len(curve.points) - 1
+    index = model.add_geometry_curve_point(args["curve"], after_index)
+    data = _curve_result(model, args["curve"])
+    data["index"] = index
+    return data
+
+
+def _run_remove_curve_point(
+    model: MeshModel, args: dict[str, Any]
+) -> dict[str, Any]:
+    model.remove_geometry_curve_point(args["curve"], args["index"])
+    return _curve_result(model, args["curve"])
+
+
+def _run_replace_curve_points(
+    model: MeshModel, args: dict[str, Any]
+) -> dict[str, Any]:
+    model.replace_geometry_curve_points(args["curve"], args["points"])
+    return _curve_result(model, args["curve"])
+
+
+def _run_replace_curve_points_from_file(
+    model: MeshModel, args: dict[str, Any]
+) -> dict[str, Any]:
+    try:
+        points = load_point_pairs(args["path"])
+    except GeometryImportError as exc:
+        raise CommandError(str(exc)) from exc
+    model.replace_geometry_curve_points(args["curve"], points)
+    model.set_geometry_curve_point_visibility(args["curve"], False)
+    data = _curve_result(model, args["curve"])
+    data["path"] = args["path"]
+    return data
+
+
 def _run_project(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
     result = model.project_to_geometry(
         args["curves"],
@@ -971,6 +1039,74 @@ _register(CommandSpec(
     _run_remove_curve,
 ))
 _register(CommandSpec(
+    "rename_curve",
+    "Rename a reference curve.",
+    (
+        Parameter("curve", "curve", "curve ID or name"),
+        Parameter("name", "str", "new unique name"),
+    ),
+    _run_rename_curve,
+))
+_register(CommandSpec(
+    "set_curve_show_points",
+    "Show or hide a reference curve's point markers in the GUI.",
+    (
+        Parameter("curve", "curve", "curve ID or name"),
+        Parameter("visible", "bool", "true to show point markers"),
+    ),
+    _run_set_curve_show_points,
+))
+_register(CommandSpec(
+    "set_curve_point",
+    "Move one point of a reference curve.",
+    (
+        Parameter("curve", "curve", "curve ID or name"),
+        Parameter("index", "int", "zero-based point index"),
+        Parameter("x", "float", "new x coordinate"),
+        Parameter("y", "float", "new y coordinate"),
+    ),
+    _run_set_curve_point,
+))
+_register(CommandSpec(
+    "add_curve_point",
+    "Insert a reference-curve point after an index (default: append).",
+    (
+        Parameter("curve", "curve", "curve ID or name"),
+        Parameter(
+            "after_index", "int", "insert after this zero-based index",
+            required=False, default=None,
+        ),
+    ),
+    _run_add_curve_point,
+))
+_register(CommandSpec(
+    "remove_curve_point",
+    "Remove one reference-curve point; two points must remain.",
+    (
+        Parameter("curve", "curve", "curve ID or name"),
+        Parameter("index", "int", "zero-based point index"),
+    ),
+    _run_remove_curve_point,
+))
+_register(CommandSpec(
+    "replace_curve_points",
+    "Replace every point of a reference curve, e.g. 0,0;0.5,0.2;1,0.",
+    (
+        Parameter("curve", "curve", "curve ID or name"),
+        Parameter("points", "points", "at least two x,y points separated by ;"),
+    ),
+    _run_replace_curve_points,
+))
+_register(CommandSpec(
+    "replace_curve_points_from_file",
+    "Replace a reference curve's points from a text file and hide its markers.",
+    (
+        Parameter("curve", "curve", "curve ID or name"),
+        Parameter("path", "str", "point-file path"),
+    ),
+    _run_replace_curve_points_from_file,
+))
+_register(CommandSpec(
     "project",
     "Project vertices or whole edges onto reference curves as one atomic edit.",
     (
@@ -1131,6 +1267,10 @@ def bind_arguments(
             bound[parameter.name] = coerce_argument(
                 model, parameter, raw[parameter.name]
             )
+        elif parameter.name in raw and parameter.kind == "optional_str":
+            # An explicit null is a valid value for optional-string fields
+            # such as set_edge_boundary's patch name.
+            bound[parameter.name] = None
         elif parameter.required:
             raise CommandError(
                 f"Missing argument {parameter.name!r} for {spec.name}; "
