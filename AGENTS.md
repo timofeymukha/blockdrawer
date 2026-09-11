@@ -19,7 +19,12 @@ them in the canvas widgets.
 - Python 3.10+.
 - Tkinter/ttk for the cross-platform GUI (part of the normal Python installer).
 - Python standard library only at runtime and in tests; no compiled dependencies.
+  The one exception is optional: PNG rendering imports Pillow when present and
+  otherwise fails with a message pointing at SVG output.
 - Launch: `python -m blockdrawer`
+- Headless work: `python -m blockdrawer.cli COMMAND` (installed as
+  `blockdrawer-cli`). Subcommands: `new`, `describe`, `quality`, `render`,
+  `export`, `validate`, `check`, `apply`, and `commands`.
 - Symmetrize a session: `python symmetrize_session.py SESSION --axis x|y`
 - Tests: `python -m unittest discover -s tests -v`
 - Supplied OpenFOAM 2606 integration check: `make integration-test`
@@ -67,6 +72,31 @@ them in the canvas widgets.
   retains the selected source half and rebuilds the other half with deterministic
   `mirror_` IDs, preserving mesh-edge metadata in physical path direction.
   `symmetrize_session.py` is its thin command-line entry point.
+- `blockdrawer/commands.py`: the UI-independent command registry. Every public
+  model mutation is a named `CommandSpec` with typed parameters; commands are
+  parsed from shell-like text (`set_edge_cells v0-v1 20`) or JSON objects
+  (`{"op": ..., ...}`), coerced against the current model, and applied.
+  `apply_commands()` works on a copy and is atomic for the whole batch. This is
+  the single vocabulary shared by the CLI, batch files, and any future MCP
+  server; add new model operations here as well as to the model.
+- `blockdrawer/describe.py`: complete JSON description of a model plus a compact
+  text rendering. Entities carry the same IDs the command registry accepts.
+- `blockdrawer/quality.py`: mesher-style heuristics computed from the stored
+  topology, curves, and grading: first-cell corner angles, non-orthogonality,
+  equiangle skewness, corner cell aspect ratios, cell-to-cell growth, and cell
+  size jumps across internal edges. Thresholds are a dataclass so callers can
+  tune them; `checkMesh` remains the authority.
+- `blockdrawer/render.py`: headless SVG/PNG rendering through one layout routine
+  and two painters. Labels (vertex IDs, block IDs, cell counts, patch legend)
+  are on by default; bounds, zoom-to-entity, and highlights select a region.
+- `blockdrawer/checkmesh.py`: writes a minimal case, runs `blockMesh` and
+  `checkMesh` through the `BLOCKMESH_COMMAND` prefix convention, and parses the
+  logs into counts, geometry statistics, `***` problem lines, and FOAM FATAL
+  errors. A `checkMesh` prefix is derived by substituting the word `blockMesh`
+  unless `CHECKMESH_COMMAND` or an explicit prefix overrides it.
+- `blockdrawer/cli.py`: argparse front end over the modules above. Every
+  subcommand supports `--json`; failures exit 1 with `error: ...` on stderr or
+  a JSON object carrying an `error` key.
 - `blockdrawer/config.py`: versioned, human-editable application preferences,
   independent of Tk. It resolves the native per-platform location, validates UI
   scale and shortcut names, merges missing keys from platform defaults, and
@@ -107,7 +137,38 @@ them in the canvas widgets.
   helpers. Keep these display-independent enough for headless unit tests.
 - `tests/`: model tests are separated from conformal split/combine tests;
   persistence, export, projection, and UI helpers have focused modules. Tests must
-  not require a display.
+  not require a display. CLI and OpenFOAM-runner tests use stub executables and
+  captured log text; only `tests/test_openfoam_integration.py` needs
+  `BLOCKMESH_COMMAND`, and PNG tests skip without Pillow.
+
+## Headless and agent workflow
+
+- An edge is always written `first-second` in canonical (sorted) vertex-ID
+  order, and accepted in either order. Because vertex IDs may themselves contain
+  hyphens, text parsing tries every split against known vertex IDs and asks for
+  the JSON list form when that is ambiguous. Blocks, vertices, patches, and
+  curves are referenced by ID; curves also accept a unique name.
+- `apply` is atomic: commands run in order against a copy of the loaded
+  session, and nothing is written when any step fails. The error names the
+  failing step and repeats the offending command. Without `-o` or `--in-place`
+  the result is reported but not saved.
+- Describe and quality JSON is meant to be diffed between edits. Keep field
+  names stable, keep floats unrounded, and add fields rather than renaming them.
+  Text output rounds to six significant digits.
+- Quality thresholds are screening heuristics, not OpenFOAM's checks. Corner
+  angles are measured between the first mesh cell's edges at each block corner
+  so curved edges and grading count; interface ratios compare the transverse
+  first-cell widths of the two blocks sharing an internal edge.
+- Rendering reserves a band for the legend so it never covers geometry, culls
+  entities outside the requested bounds, offsets cell-count labels outward from
+  the first incident block, decimates control-point labels above 250 points,
+  and hides node ticks above the canvas's individual-marker limit (200 cells). Highlight fills
+  follow sampled curved edges. Do not add rendering paths that depend on Tk.
+- `check` exports to a temporary or named case with a minimal `controlDict`,
+  `fvSchemes`, and `fvSolution`, then runs `blockMesh` and `checkMesh`. The
+  result is ok only when blockMesh succeeds and checkMesh prints `Mesh OK.`;
+  every `***` line is surfaced as a problem. Logs are always kept in the case
+  as `log.blockMesh` and `log.checkMesh` when the case is kept.
 
 ## Topology invariants
 

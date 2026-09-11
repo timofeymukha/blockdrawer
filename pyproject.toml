@@ -13,5 +13,11 @@ dependencies = []
 [project.gui-scripts]
 blockdrawer = "blockdrawer.app:main"
 
+[project.scripts]
+blockdrawer-cli = "blockdrawer.cli:main"
+
+[project.optional-dependencies]
+png = ["Pillow>=10.1"]
+
 [tool.setuptools.packages.find]
 include = ["blockdrawer*"]

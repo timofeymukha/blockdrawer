@@ -411,6 +411,63 @@ shared on the axis must itself be reflection-symmetric. Target-side IDs are
 regenerated with `mirror_` prefixes. If an output file already exists, pass
 `--overwrite` explicitly.
 
+## Command line and agents
+
+Everything the editor stores can be inspected and edited without the GUI, which
+also makes BlockDrawer usable by scripts and coding agents. The entry point is
+`python -m blockdrawer.cli` (installed as `blockdrawer-cli`). Every subcommand
+accepts `--json` for machine-readable output and exits with status 1 and an
+`error:` line (or a JSON object with an `error` key) on failure.
+
+```bash
+blockdrawer-cli new case.json
+blockdrawer-cli describe case.json                 # blocks, edges, vertices, patches, curves, links
+blockdrawer-cli describe case.json --json --section edges --only b1
+blockdrawer-cli quality case.json                  # angles, aspect, growth, size jumps, warnings
+blockdrawer-cli render case.json -o case.png --preview --highlight b1 v0-v1
+blockdrawer-cli render case.json -o zoom.svg --zoom v4 --margin 0.5
+blockdrawer-cli export case.json --case /path/to/openfoam/case
+blockdrawer-cli check case.json                    # runs blockMesh and checkMesh
+blockdrawer-cli commands                           # lists every editing command
+```
+
+Edits are applied atomically with `apply`. Commands are short text lines or
+JSON objects; edges are written `first-second` in either order, and several
+commands may be given at once, read from a file with `-f`, or piped through
+`--stdin`. If any command fails nothing is written.
+
+```bash
+blockdrawer-cli apply case.json --in-place \
+  "set_edge_cells v0-v1 40" \
+  "set_edge_grading v0-v1 start_width 0.002" \
+  "set_edge_type v2-v3 arc" "set_control_point v2-v3 0 0.5 1.2" \
+  "add_block v1-v2" \
+  "add_boundary inlet" "set_edge_boundary v0-v3 inlet" \
+  '{"op": "split_edge", "edge": ["v1", "v2"], "fraction": 0.5}'
+```
+
+`describe` lists every entity with the IDs the commands accept. `quality`
+reports per-block corner angles measured from the first mesh cell,
+non-orthogonality, equiangle skewness, corner cell aspect ratios, cell-to-cell
+growth, and the cell size jump across every internal edge, with warnings at
+adjustable thresholds; these are screening heuristics, not a substitute for
+`checkMesh`. `render` draws the topology with vertex IDs, block IDs, cell
+counts, patch colors, reference curves, and spacing links to SVG (standard
+library) or PNG (requires Pillow, `pip install blockdrawer[png]`); `--zoom`
+frames named entities and `--highlight` emphasizes them.
+
+`check` closes the loop with OpenFOAM. It writes a minimal case, runs
+`blockMesh` and `checkMesh`, and summarizes cell counts, patch sizes,
+non-orthogonality, skewness, aspect ratio, volumes, and every `***` problem
+line. Set `BLOCKMESH_COMMAND` to any prefix that accepts `-case PATH`; the
+`checkMesh` prefix is derived from it unless `CHECKMESH_COMMAND` is set. With
+the supplied container:
+
+```bash
+make check SESSION=case.json
+blockdrawer-cli check case.json --case /tmp/case --json   # keep the case and logs
+```
+
 ## Tests
 
 All normal tests are headless and use the standard library:

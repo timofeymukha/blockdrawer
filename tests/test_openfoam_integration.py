@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import unittest
 
+from blockdrawer.checkmesh import run_mesh_check
 from blockdrawer.foam import write_block_mesh_dict
 from blockdrawer.model import MeshModel, edge_key
 from blockdrawer.preview import build_mesh_preview
@@ -364,6 +365,47 @@ class OpenFoamIntegrationTests(unittest.TestCase):
         self.assertEqual(result.fitted_edges, (selected,))
         self.assertEqual(model.edge_type(selected), "spline")
         self._assert_block_mesh_accepts(model)
+
+    def test_mesh_check_runner_parses_real_logs(self) -> None:
+        model = MeshModel()
+        model.set_export_settings(
+            1, 0.0, 0.1, 1.0, "front", "empty", "back", "empty",
+        )
+        model.add_boundary("walls")
+        for current in model.edges():
+            model.set_edge_boundary(current, "walls")
+        model.move_vertex("v2", 1.6, 1.0)
+
+        result = run_mesh_check(model)
+
+        self.assertTrue(result.block_mesh.ok, result.block_mesh.log)
+        self.assertIsNotNone(result.check_mesh, "checkMesh prefix was not derived")
+        self.assertTrue(result.ok, result.check_mesh.log)
+        self.assertEqual(result.mesh_stats["cells"], 100)
+        self.assertEqual(
+            [patch["name"] for patch in result.patches], ["walls", "front", "back"]
+        )
+        self.assertIn("max_non_orthogonality", result.geometry)
+        self.assertEqual(result.geometry["solution_directions"], 2)
+        self.assertIs(result.mesh_ok, True)
+        self.assertEqual(result.problems, ())
+        self.assertFalse(Path(result.case_dir).exists())
+
+    def test_mesh_check_runner_reports_three_dimensional_patch_problem(self) -> None:
+        # zMin/zMax stay plain patches, so checkMesh treats the mesh as 3D and
+        # flags the skewed block's edges as not aligned with any direction.
+        model = MeshModel()
+        model.move_vertex("v2", 1.6, 1.0)
+
+        result = run_mesh_check(model)
+
+        self.assertTrue(result.block_mesh.ok)
+        self.assertFalse(result.ok)
+        self.assertEqual(result.failed_checks, 1)
+        self.assertTrue(
+            any("not aligned" in problem for problem in result.problems),
+            result.problems,
+        )
 
     def _assert_block_mesh_accepts(
         self,
