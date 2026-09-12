@@ -16,12 +16,12 @@ from __future__ import annotations
 import argparse
 import functools
 from pathlib import Path
-import shlex
 import sys
 from typing import Any, Callable, Sequence
 
 from .checkmesh import format_mesh_check, run_mesh_check
 from .cli import HANDLED_ERRORS, CliError
+from .command_line import split_command_line
 from .commands import (
     COMMANDS,
     apply_commands as _apply_commands,
@@ -326,8 +326,12 @@ def check_mesh(
     model = load_session(path)
     result = run_mesh_check(
         model,
-        blockmesh_command=shlex.split(blockmesh_command) if blockmesh_command else None,
-        checkmesh_command=shlex.split(checkmesh_command) if checkmesh_command else None,
+        blockmesh_command=(
+            split_command_line(blockmesh_command) if blockmesh_command else None
+        ),
+        checkmesh_command=(
+            split_command_line(checkmesh_command) if checkmesh_command else None
+        ),
         case_dir=case_dir,
         keep=keep,
         run_checkmesh=run_checkmesh,

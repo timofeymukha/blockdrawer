@@ -85,6 +85,10 @@ them in the canvas widgets.
   `apply_commands()` works on a copy and is atomic for the whole batch. This is
   the single vocabulary shared by the CLI, batch files, and any future MCP
   server; add new model operations here as well as to the model.
+- `blockdrawer/command_line.py`: shared shell-like tokenization for textual
+  commands and OpenFOAM command prefixes. POSIX hosts use normal shell escaping;
+  Windows preserves path backslashes while retaining POSIX quote grouping for
+  WSL, container, and SSH wrappers around the Linux OpenFOAM tools.
 - `blockdrawer/describe.py`: complete JSON description of a model plus a compact
   text rendering. Entities carry the same IDs the command registry accepts.
 - `blockdrawer/quality.py`: mesher-style heuristics computed from the stored
@@ -220,6 +224,8 @@ them in the canvas widgets.
   result is ok only when blockMesh succeeds and checkMesh prints `Mesh OK.`;
   every `***` line is surfaced as a problem. Logs are always kept in the case
   as `log.blockMesh` and `log.checkMesh` when the case is kept.
+  On Windows, the configured Linux-tool wrapper owns any host-to-guest case-path
+  translation or mount and must still accept the appended `-case PATH` pair.
 
 ## Topology invariants
 

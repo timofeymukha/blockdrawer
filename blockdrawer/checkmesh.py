@@ -19,6 +19,7 @@ import subprocess
 import tempfile
 from typing import Any, Sequence
 
+from .command_line import split_command_line
 from .foam import write_block_mesh_dict
 from .model import MeshModel
 
@@ -147,12 +148,12 @@ def _run_data(run: FoamRun) -> dict[str, Any]:
 
 def blockmesh_command_from_env() -> list[str] | None:
     value = os.environ.get(BLOCKMESH_ENV)
-    return shlex.split(value) if value else None
+    return split_command_line(value) if value else None
 
 
 def checkmesh_command_from_env() -> list[str] | None:
     value = os.environ.get(CHECKMESH_ENV)
-    return shlex.split(value) if value else None
+    return split_command_line(value) if value else None
 
 
 def derive_checkmesh_command(blockmesh_command: Sequence[str]) -> list[str] | None:

@@ -493,6 +493,13 @@ make check SESSION=case.json
 blockdrawer-cli check case.json --case /tmp/case --json   # keep the case and logs
 ```
 
+On Windows, native paths in CLI commands and command prefixes retain their
+backslashes, while POSIX single/double-quoted groups remain available for WSL,
+container, or SSH wrappers around the Linux OpenFOAM applications. Such a
+wrapper must accept the appended `-case PATH` arguments and make that generated
+host case directory visible inside its Linux environment, translating or
+mounting the path when necessary.
+
 ### MCP server for coding agents
 
 The same operations are available as Model Context Protocol tools, so Claude

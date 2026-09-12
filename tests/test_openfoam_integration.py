@@ -2,12 +2,12 @@ import math
 import os
 from pathlib import Path
 import re
-import shlex
 import subprocess
 import tempfile
 import unittest
 
 from blockdrawer.checkmesh import run_mesh_check
+from blockdrawer.command_line import split_command_line
 from blockdrawer.foam import write_block_mesh_dict
 from blockdrawer.model import MeshModel, edge_key
 from blockdrawer.preview import build_mesh_preview
@@ -437,7 +437,7 @@ writeInterval 1;
             )
             write_block_mesh_dict(model, case / "system" / "blockMeshDict")
             command = [
-                *shlex.split(os.environ["BLOCKMESH_COMMAND"]),
+                *split_command_line(os.environ["BLOCKMESH_COMMAND"]),
                 "-case",
                 str(case),
             ]

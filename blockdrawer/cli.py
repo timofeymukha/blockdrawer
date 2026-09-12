@@ -22,6 +22,7 @@ from .checkmesh import (
     format_mesh_check,
     run_mesh_check,
 )
+from .command_line import split_command_line
 from .commands import (
     COMMANDS,
     CommandError,
@@ -425,16 +426,16 @@ def _cmd_validate(args: argparse.Namespace) -> int:
 
 
 def _cmd_check(args: argparse.Namespace) -> int:
-    import shlex
-
     model = _load(args.session)
     result = run_mesh_check(
         model,
         blockmesh_command=(
-            shlex.split(args.blockmesh_command) if args.blockmesh_command else None
+            split_command_line(args.blockmesh_command)
+            if args.blockmesh_command else None
         ),
         checkmesh_command=(
-            shlex.split(args.checkmesh_command) if args.checkmesh_command else None
+            split_command_line(args.checkmesh_command)
+            if args.checkmesh_command else None
         ),
         case_dir=args.case,
         keep=args.keep,

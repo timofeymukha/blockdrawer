@@ -17,9 +17,9 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, is_dataclass
 import json
 import math
-import shlex
 from typing import Any, Callable, Iterable, Sequence
 
+from .command_line import split_command_line
 from .domain import EdgeKey, SpacingLink, TopologyError, edge_key
 from .geometry import GeometryImportError, load_point_pairs
 from .model import MeshModel
@@ -1196,7 +1196,7 @@ def parse_command(command: Any) -> tuple[str, dict[str, Any]]:
                 raise CommandError(f"Invalid JSON command: {exc}") from exc
             return parse_command(loaded)
         try:
-            tokens = shlex.split(text)
+            tokens = split_command_line(text)
         except ValueError as exc:
             raise CommandError(f"Could not parse command {text!r}: {exc}") from exc
         name = tokens[0]
