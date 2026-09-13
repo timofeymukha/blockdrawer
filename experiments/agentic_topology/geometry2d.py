@@ -1,0 +1,401 @@
+"""Vectorised planar-geometry helpers for the agentic-topology prototype.
+
+Nothing here hard-codes a tolerance in model units: callers pass a domain
+scale and derive their own tolerances from it.  Polylines are ``(k, 2)`` float
+arrays.  A *loop* is a polyline whose last point repeats its first point.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+
+import numpy as np
+
+
+# ---------------------------------------------------------------------------
+# Basic polyline structure
+# ---------------------------------------------------------------------------
+
+
+def as_polyline(points) -> np.ndarray:
+    array = np.asarray(points, dtype=np.float64)
+    if array.ndim != 2 or array.shape[1] != 2 or len(array) < 2:
+        raise ValueError("a polyline needs at least two 2D points")
+    if not np.all(np.isfinite(array)):
+        raise ValueError("polyline coordinates must be finite")
+    return array
+
+
+def drop_repeated(points, tolerance: float) -> np.ndarray:
+    """Return the polyline without consecutive duplicates."""
+    array = np.asarray(points, dtype=np.float64)
+    keep = [0]
+    for index in range(1, len(array)):
+        if math.dist(array[index], array[keep[-1]]) > tolerance:
+            keep.append(index)
+    return array[keep]
+
+
+def close_loop(points, tolerance: float) -> np.ndarray:
+    """Return a loop array whose last point repeats the first exactly."""
+    array = drop_repeated(points, tolerance)
+    if len(array) >= 2 and math.dist(array[0], array[-1]) <= tolerance:
+        array = array[:-1]
+    if len(array) < 3:
+        raise ValueError("a closed body needs at least three distinct points")
+    return np.vstack([array, array[:1]])
+
+
+def segment_lengths(poly: np.ndarray) -> np.ndarray:
+    return np.linalg.norm(poly[1:] - poly[:-1], axis=1)
+
+
+def cumulative_length(poly: np.ndarray) -> np.ndarray:
+    return np.concatenate(([0.0], np.cumsum(segment_lengths(poly))))
+
+
+def total_length(poly: np.ndarray) -> float:
+    return float(np.sum(segment_lengths(poly)))
+
+
+def signed_area(loop: np.ndarray) -> float:
+    """Signed area of a closed loop; positive when anticlockwise."""
+    x = loop[:-1, 0]
+    y = loop[:-1, 1]
+    return 0.5 * float(np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y))
+
+
+def orient_anticlockwise(loop: np.ndarray) -> np.ndarray:
+    return loop if signed_area(loop) > 0.0 else loop[::-1].copy()
+
+
+def centroid_by_arclength(poly: np.ndarray) -> np.ndarray:
+    """Arc-length weighted centroid; covariant under rigid motions."""
+    lengths = segment_lengths(poly)
+    midpoints = 0.5 * (poly[1:] + poly[:-1])
+    total = float(np.sum(lengths))
+    if total <= 0.0:
+        return poly[0].copy()
+    return np.sum(midpoints * lengths[:, None], axis=0) / total
+
+
+# ---------------------------------------------------------------------------
+# Sampling and sectioning
+# ---------------------------------------------------------------------------
+
+
+def sample_at_arclength(poly: np.ndarray, distances) -> np.ndarray:
+    """Evaluate a polyline at absolute arc-length positions."""
+    lengths = segment_lengths(poly)
+    cumulative = np.concatenate(([0.0], np.cumsum(lengths)))
+    total = float(cumulative[-1])
+    values = np.clip(np.asarray(distances, dtype=np.float64), 0.0, total)
+    index = np.clip(
+        np.searchsorted(cumulative, values, side="right") - 1, 0, len(lengths) - 1
+    )
+    safe = np.where(lengths[index] > 0.0, lengths[index], 1.0)
+    local = (values - cumulative[index]) / safe
+    return poly[index] + local[:, None] * (poly[index + 1] - poly[index])
+
+
+def resample(poly: np.ndarray, count: int) -> np.ndarray:
+    """Return ``count`` points spread evenly by arc length, endpoints kept."""
+    if count < 2:
+        raise ValueError("resampling needs at least two points")
+    total = total_length(poly)
+    result = sample_at_arclength(poly, np.linspace(0.0, total, count))
+    result[0] = poly[0]
+    result[-1] = poly[-1]
+    return result
+
+
+def densify(poly: np.ndarray, step: float) -> np.ndarray:
+    """Insert points so that no segment is longer than ``step``."""
+    pieces = [poly[:1]]
+    for start, end in zip(poly[:-1], poly[1:]):
+        distance = float(np.linalg.norm(end - start))
+        parts = max(1, int(math.ceil(distance / step))) if step > 0.0 else 1
+        fractions = np.linspace(0.0, 1.0, parts + 1)[1:]
+        pieces.append(start[None, :] + fractions[:, None] * (end - start)[None, :])
+    return np.vstack(pieces)
+
+
+def polyline_section(poly: np.ndarray, start: float, end: float) -> np.ndarray:
+    """Return the sub-path of an open polyline between two arc lengths."""
+    cumulative = cumulative_length(poly)
+    total = float(cumulative[-1])
+    first = min(max(float(start), 0.0), total)
+    last = min(max(float(end), 0.0), total)
+    if last < first:
+        return polyline_section(poly, last, first)[::-1].copy()
+    tolerance = 1e-12 * max(total, 1.0)
+    interior = poly[(cumulative > first + tolerance) & (cumulative < last - tolerance)]
+    ends = sample_at_arclength(poly, [first, last])
+    return np.vstack([ends[:1], interior, ends[1:]])
+
+
+def loop_section(
+    loop: np.ndarray, start: float, end: float, *, forward: bool
+) -> np.ndarray:
+    """Return the sub-path of a closed loop between two arc lengths.
+
+    ``forward`` follows increasing arc length, which is the loop's stored
+    winding direction.  Equal endpoints request the complete loop.
+    """
+    cumulative = cumulative_length(loop)
+    total = float(cumulative[-1])
+    tolerance = 1e-12 * total
+    origin = float(start) % total
+    target = float(end) % total
+    nodes = cumulative[:-1]
+    if forward:
+        span = (target - origin) % total
+        if span <= tolerance:
+            span = total
+        candidates = np.concatenate([nodes, nodes + total])
+        window = (candidates > origin + tolerance) & (
+            candidates < origin + span - tolerance
+        )
+        stations = np.concatenate(
+            ([origin], np.sort(candidates[window]), [origin + span])
+        )
+    else:
+        span = (origin - target) % total
+        if span <= tolerance:
+            span = total
+        candidates = np.concatenate([nodes - total, nodes])
+        window = (candidates < origin - tolerance) & (
+            candidates > origin - span + tolerance
+        )
+        stations = np.concatenate(
+            ([origin], np.sort(candidates[window])[::-1], [origin - span])
+        )
+    points = sample_at_arclength(loop, np.mod(stations, total))
+    points[0] = sample_at_arclength(loop, [origin])[0]
+    points[-1] = sample_at_arclength(loop, [np.mod(stations[-1], total)])[0]
+    return points
+
+
+# ---------------------------------------------------------------------------
+# Closest-point queries
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ClosestResult:
+    distance: np.ndarray
+    point: np.ndarray
+    arclength: np.ndarray
+    segment: np.ndarray
+
+
+def closest_on_polyline(
+    poly: np.ndarray, queries, *, chunk: int = 256
+) -> ClosestResult:
+    """Closest point on a polyline for every query point."""
+    starts = poly[:-1]
+    vectors = poly[1:] - poly[:-1]
+    lengths_squared = np.einsum("ij,ij->i", vectors, vectors)
+    safe = np.where(lengths_squared > 0.0, lengths_squared, 1.0)
+    cumulative = np.concatenate(([0.0], np.cumsum(np.sqrt(lengths_squared))))
+    points = np.atleast_2d(np.asarray(queries, dtype=np.float64))
+    distance = np.empty(len(points))
+    closest = np.empty((len(points), 2))
+    arclength = np.empty(len(points))
+    segment = np.empty(len(points), dtype=np.int64)
+    for first in range(0, len(points), chunk):
+        sample = points[first : first + chunk]
+        offset = sample[:, None, :] - starts[None, :, :]
+        fraction = np.einsum("qsi,si->qs", offset, vectors) / safe[None, :]
+        np.clip(fraction, 0.0, 1.0, out=fraction)
+        targets = starts[None, :, :] + fraction[:, :, None] * vectors[None, :, :]
+        delta = sample[:, None, :] - targets
+        squared = np.einsum("qsi,qsi->qs", delta, delta)
+        index = np.argmin(squared, axis=1)
+        rows = np.arange(len(sample))
+        stop = first + len(sample)
+        distance[first:stop] = np.sqrt(squared[rows, index])
+        closest[first:stop] = targets[rows, index]
+        arclength[first:stop] = cumulative[index] + fraction[rows, index] * np.sqrt(
+            lengths_squared[index]
+        )
+        segment[first:stop] = index
+    return ClosestResult(distance, closest, arclength, segment)
+
+
+def distance_to_polyline(poly: np.ndarray, queries, *, chunk: int = 256) -> np.ndarray:
+    """Distances only; avoids materialising the closest-point arrays.
+
+    Chunks stay small on purpose: the per-segment temporaries then fit in cache,
+    which matters when the raster asks for a million distances at once.
+    """
+    starts = poly[:-1]
+    vectors = poly[1:] - poly[:-1]
+    lengths_squared = np.einsum("ij,ij->i", vectors, vectors)
+    safe = np.where(lengths_squared > 0.0, lengths_squared, 1.0)
+    points = np.atleast_2d(np.asarray(queries, dtype=np.float64))
+    answer = np.empty(len(points))
+    for first in range(0, len(points), chunk):
+        sample = points[first : first + chunk]
+        offset_x = sample[:, None, 0] - starts[None, :, 0]
+        offset_y = sample[:, None, 1] - starts[None, :, 1]
+        fraction = offset_x * vectors[None, :, 0]
+        fraction += offset_y * vectors[None, :, 1]
+        fraction /= safe[None, :]
+        np.clip(fraction, 0.0, 1.0, out=fraction)
+        offset_x -= fraction * vectors[None, :, 0]
+        offset_y -= fraction * vectors[None, :, 1]
+        offset_x *= offset_x
+        offset_y *= offset_y
+        offset_x += offset_y
+        answer[first : first + len(sample)] = np.sqrt(np.min(offset_x, axis=1))
+    return answer
+
+
+def minimum_separation(first: np.ndarray, second: np.ndarray) -> float:
+    return float(np.min(closest_on_polyline(second, first[:-1]).distance))
+
+
+# ---------------------------------------------------------------------------
+# Containment, simplification, curvature
+# ---------------------------------------------------------------------------
+
+
+def points_in_loop(loop: np.ndarray, queries, *, chunk: int = 256) -> np.ndarray:
+    """Vectorised even-odd containment test for a closed loop."""
+    points = np.atleast_2d(np.asarray(queries, dtype=np.float64))
+    x1, y1 = loop[:-1, 0], loop[:-1, 1]
+    x2, y2 = loop[1:, 0], loop[1:, 1]
+    sloped = y1 != y2
+    x1, y1, x2, y2 = x1[sloped], y1[sloped], x2[sloped], y2[sloped]
+    if not len(x1):
+        return np.zeros(len(points), dtype=bool)
+    inverse = 1.0 / (y2 - y1)
+    inside = np.empty(len(points), dtype=bool)
+    for first in range(0, len(points), chunk):
+        sample = points[first : first + chunk]
+        py = sample[:, 1][:, None]
+        crossing = (y1[None, :] > py) != (y2[None, :] > py)
+        x_at = x1[None, :] + (py - y1[None, :]) * ((x2 - x1) * inverse)[None, :]
+        hits = crossing & (sample[:, 0][:, None] < x_at)
+        inside[first : first + len(sample)] = np.count_nonzero(hits, axis=1) % 2 == 1
+    return inside
+
+
+def simplify(poly: np.ndarray, tolerance: float) -> np.ndarray:
+    """Ramer-Douglas-Peucker simplification in model units."""
+    if len(poly) <= 2:
+        return poly
+    keep = np.zeros(len(poly), dtype=bool)
+    keep[0] = keep[-1] = True
+    stack = [(0, len(poly) - 1)]
+    limit = tolerance * tolerance
+    while stack:
+        first, last = stack.pop()
+        if last <= first + 1:
+            continue
+        span = poly[last] - poly[first]
+        span_squared = float(span @ span)
+        candidates = poly[first + 1 : last]
+        if span_squared == 0.0:
+            delta = candidates - poly[first]
+        else:
+            fraction = np.clip(
+                (candidates - poly[first]) @ span / span_squared, 0.0, 1.0
+            )
+            delta = candidates - (poly[first] + fraction[:, None] * span)
+        squared = np.einsum("ij,ij->i", delta, delta)
+        relative = int(np.argmax(squared))
+        if float(squared[relative]) > limit:
+            index = first + 1 + relative
+            keep[index] = True
+            stack.append((first, index))
+            stack.append((index, last))
+    return poly[keep]
+
+
+def turning_angles(poly: np.ndarray, *, closed: bool) -> np.ndarray:
+    """Signed exterior turning angle at every interior (or every) vertex."""
+    if closed:
+        nodes = poly[:-1]
+        previous = np.roll(nodes, 1, axis=0)
+        current = nodes
+        following = np.roll(nodes, -1, axis=0)
+    else:
+        previous = poly[:-2]
+        current = poly[1:-1]
+        following = poly[2:]
+    incoming = current - previous
+    outgoing = following - current
+    cross = incoming[:, 0] * outgoing[:, 1] - incoming[:, 1] * outgoing[:, 0]
+    dot = np.einsum("ij,ij->i", incoming, outgoing)
+    return np.arctan2(cross, dot)
+
+
+def discrete_curvature(loop: np.ndarray) -> np.ndarray:
+    """Signed turning per unit length at every distinct loop node."""
+    nodes = loop[:-1]
+    angles = turning_angles(loop, closed=True)
+    previous = np.roll(nodes, 1, axis=0)
+    following = np.roll(nodes, -1, axis=0)
+    span = 0.5 * (
+        np.linalg.norm(nodes - previous, axis=1)
+        + np.linalg.norm(following - nodes, axis=1)
+    )
+    return angles / np.where(span > 0.0, span, 1.0)
+
+
+def total_turning(poly: np.ndarray) -> float:
+    """Accumulated absolute turning along an open polyline, in radians."""
+    if len(poly) < 3:
+        return 0.0
+    return float(np.sum(np.abs(turning_angles(poly, closed=False))))
+
+
+# ---------------------------------------------------------------------------
+# Quadrilateral measures
+# ---------------------------------------------------------------------------
+
+
+def quad_corner_crosses(corners) -> np.ndarray:
+    points = np.asarray(corners, dtype=np.float64)
+    following = np.roll(points, -1, axis=0)
+    after = np.roll(points, -2, axis=0)
+    incoming = following - points
+    outgoing = after - following
+    return incoming[:, 0] * outgoing[:, 1] - incoming[:, 1] * outgoing[:, 0]
+
+
+def strictly_convex(corners, tolerance: float = 0.0) -> bool:
+    values = quad_corner_crosses(corners)
+    return bool(np.all(values > tolerance) or np.all(values < -tolerance))
+
+
+def quad_corner_angles(corners) -> np.ndarray:
+    """Interior angles, in radians, of the straight-sided quadrilateral."""
+    points = np.asarray(corners, dtype=np.float64)
+    previous = np.roll(points, 1, axis=0)
+    following = np.roll(points, -1, axis=0)
+    incoming = previous - points
+    outgoing = following - points
+    cross = incoming[:, 0] * outgoing[:, 1] - incoming[:, 1] * outgoing[:, 0]
+    dot = np.einsum("ij,ij->i", incoming, outgoing)
+    return np.abs(np.arctan2(cross, dot))
+
+
+def polygon_area(points) -> float:
+    array = np.asarray(points, dtype=np.float64)
+    x = array[:, 0]
+    y = array[:, 1]
+    return 0.5 * float(np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y))
+
+
+def quad_aspect_ratio(corners) -> float:
+    """Longest over shortest side of the straight-sided quadrilateral."""
+    points = np.asarray(corners, dtype=np.float64)
+    sides = np.linalg.norm(np.roll(points, -1, axis=0) - points, axis=1)
+    shortest = float(np.min(sides))
+    if shortest <= 0.0:
+        return math.inf
+    return float(np.max(sides)) / shortest

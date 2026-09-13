@@ -36,6 +36,9 @@ them in the canvas widgets.
 - Supplied OpenFOAM 2606 integration check: `make integration-test`
 - For another installation, set `BLOCKMESH_COMMAND` to a command prefix that can
   accept `-case <path>`, then run the test suite.
+- Research prototypes: `make research-test` and `make research-30p30n`. These
+  live in `experiments/`, need NumPy and Pillow, and are excluded from the
+  normal suite; see `experiments/agentic_topology/README.md`.
 
 ## Architecture
 
@@ -195,6 +198,13 @@ them in the canvas widgets.
   to it in a real browser (Playwright against `python -m blockdrawer.web
   --no-browser --port 0` works well) and keep `window.__blockdrawer` exposed
   for that purpose.
+- `experiments/`: research prototypes outside the runtime package and outside
+  `tests/`. `experiments/agentic_topology/` builds a conformal quadrilateral
+  block topology around arbitrary disjoint 2D bodies from an exact generalized
+  Voronoi graph and emits an ordinary session; it may use NumPy and Pillow and
+  keeps its own self-tests beside it. It imports BlockDrawer but nothing in
+  `blockdrawer/` may import it, and none of its numerical code belongs in the
+  package until it earns its way in.
 
 ## Headless and agent workflow
 

@@ -544,5 +544,22 @@ setup is already captured by:
 make integration-test
 ```
 
+## Research prototypes
+
+`experiments/` holds research code that is deliberately outside the runtime
+package and outside the normal test suite. `experiments/agentic_topology/`
+builds a complete conformal quadrilateral block topology around an arbitrary
+collection of disjoint closed 2D point-list bodies and writes it as an ordinary
+BlockDrawer session. It needs NumPy and Pillow, which are not BlockDrawer
+dependencies, and it has its own self-tests:
+
+```bash
+make research-test        # python -m unittest discover -s experiments/agentic_topology -v
+make research-30p30n      # downloads the 30P30N case and emits a session
+```
+
+See [experiments/agentic_topology/README.md](experiments/agentic_topology/README.md)
+for the algorithm and its current limits.
+
 See [AGENTS.md](AGENTS.md) for the architecture, invariants, and contributor resume
 guide.

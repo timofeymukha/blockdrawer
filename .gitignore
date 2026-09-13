@@ -25,3 +25,7 @@ constant/polyMesh/
 processor*/
 postProcessing/
 log.*
+
+# Research prototypes: downloaded geometry and generated artifacts
+experiments/**/geometry/
+experiments/**/output/
