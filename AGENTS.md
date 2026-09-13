@@ -36,9 +36,11 @@ them in the canvas widgets.
 - Supplied OpenFOAM 2606 integration check: `make integration-test`
 - For another installation, set `BLOCKMESH_COMMAND` to a command prefix that can
   accept `-case <path>`, then run the test suite.
-- Research prototypes: `make research-test` and `make research-30p30n`. These
-  live in `experiments/`, need NumPy and Pillow, and are excluded from the
-  normal suite; see `experiments/agentic_topology/README.md`.
+- Research prototypes: `make research-test`, `make research-periodic-hill` and
+  `make research-30p30n`. These live in `experiments/`, need NumPy and Pillow,
+  and are excluded from the normal suite; see
+  `experiments/agentic_topology/README.md`. The research command line is
+  `python experiments/agentic_topology/research_cli.py {run,describe,candidates,apply,focus}`.
 
 ## Architecture
 
@@ -199,12 +201,21 @@ them in the canvas widgets.
   --no-browser --port 0` works well) and keep `window.__blockdrawer` exposed
   for that purpose.
 - `experiments/`: research prototypes outside the runtime package and outside
-  `tests/`. `experiments/agentic_topology/` builds a conformal quadrilateral
-  block topology around arbitrary disjoint 2D bodies from an exact generalized
-  Voronoi graph and emits an ordinary session; it may use NumPy and Pillow and
-  keeps its own self-tests beside it. It imports BlockDrawer but nothing in
-  `blockdrawer/` may import it, and none of its numerical code belongs in the
-  package until it earns its way in.
+  `tests/`. `experiments/agentic_topology/` turns an explicit planar fluid
+  domain into a conformal quadrilateral block topology with explicit near-wall
+  bands and emits an ordinary session. It carries two producers over one
+  intermediate representation: an exact generalized medial graph plus wall bands
+  for external flow around any number of disjoint bodies, and a sweep/submapping
+  core for simply connected internal flow with named wall, inlet, outlet,
+  symmetry or translational-periodic chains. Cell counts come from a size metric
+  through BlockDrawer's own opposite-edge equality components, and quality is
+  measured on every sampled cell of the transfinite grid by reusing
+  `blockdrawer.preview`'s interpolation - block-corner measures are only early
+  filters. It may use NumPy and Pillow and keeps its own self-tests beside it.
+  It imports BlockDrawer but nothing in `blockdrawer/` may import it, and none
+  of its numerical code belongs in the package until it earns its way in. Its
+  experimental agent operations stay in `research_cli.py`; do not widen the
+  production CLI or MCP surface with them yet.
 
 ## Headless and agent workflow
 

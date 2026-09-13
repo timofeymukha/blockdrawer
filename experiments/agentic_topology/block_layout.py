@@ -705,7 +705,7 @@ def split_anchor(
         offset = float(stations[min(max(index, 1), len(patch.wall) - 2)])
     else:
         offset = 0.5 * wall_length
-    offset = min(max(offset, 0.2 * wall_length), 0.8 * wall_length)
+    offset = min(max(offset, 0.1 * wall_length), 0.9 * wall_length)
     source = g2.sample_at_arclength(patch.wall, [offset])[0]
     ring_length = g2.total_length(patch.ring)
     if ring_length <= 0.0:
@@ -713,7 +713,7 @@ def split_anchor(
     local = float(
         g2.closest_on_polyline(patch.ring, np.asarray([source])).arclength[0]
     )
-    local = min(max(local, 0.15 * ring_length), 0.85 * ring_length)
+    local = min(max(local, 0.1 * ring_length), 0.9 * ring_length)
     branch, position = cell.branch_station(patch.ring_start + local)
     site = diagram.sites[cell.site]
     wall_station = (patch.wall_start + offset) % site.curve.length()
@@ -775,6 +775,7 @@ class LayoutOptions:
     ring_separation: float = 0.5
     gate_balance: float = 0.35
     corner_turn: float = math.radians(45.0)
+    hard_corner_turn: float = math.radians(70.0)
     curvature_prominence: float = 2.5
     curvature_limit: int = 6
     minimum_cuts: int = 3
@@ -812,6 +813,13 @@ def build_layout(diagram: Diagram, options: LayoutOptions | None = None) -> Layo
     )
     notes: list[str] = []
     for anchor in junction_anchors(diagram):
+        anchors.add(anchor, force=True)
+    # A wall vertex sharp enough to give the fluid more than 250 degrees must
+    # be a block corner: no patch whose wall section runs through it can be a
+    # quadrilateral at all, so it outranks the separation rule.
+    for anchor in corner_anchors(
+        diagram, cells, minimum_turn=settings.hard_corner_turn
+    ):
         anchors.add(anchor, force=True)
     for anchor in corner_anchors(
         diagram, cells, minimum_turn=settings.corner_turn

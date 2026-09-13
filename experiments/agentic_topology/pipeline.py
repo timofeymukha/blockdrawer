@@ -1,4 +1,19 @@
-"""End-to-end construction: point lists in, block topology and report out."""
+"""End-to-end construction for both domain families.
+
+Two producers write into the same general patch graph:
+
+* **external** - the exact generalized medial graph relaxes an annular layout
+  around any number of disjoint bodies, then every wall chain is peeled off
+  into a clearance-limited boundary-layer band and the core patches start at
+  the band front;
+* **internal** - a four-sided reading of a simply connected domain gives a
+  monotone guide correspondence, wall bands along the guides and a swept H-grid
+  core between the fronts.
+
+Everything after that point is shared: patch-graph validation, an independent
+coverage test, metric cell-count quantisation, boundary-layer grading, session
+emission, and quality measured on the actual sampled transfinite grid.
+"""
 
 from __future__ import annotations
 
@@ -7,12 +22,18 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-import block_complex
 import block_layout
+import external_topology
 import geometry2d as g2
+import grid_quality
+import layers as layer_module
+import patch_graph as pg
 import patch_solver
+import planar_domain as pdm
 import session_emit
 import sites as site_module
+import sizing
+import sweep as sweep_module
 import voronoi_graph
 
 
@@ -22,147 +43,345 @@ class PipelineOptions:
     farfield_scale: float = 3.0
     farfield_shape: str = "circle"
     farfield_name: str = "farfield"
-    cells: int = 10
     wall_edge_style: str = "polyLine"
     coverage_samples: int = 400
     reference_curves: bool = True
+    band_repairs: int = 2
+    evaluate_grid: bool = True
+    check_edge_crossings: bool = True
+    forced_splits: tuple = ()
     layout: block_layout.LayoutOptions = field(
         default_factory=block_layout.LayoutOptions
     )
     solver: patch_solver.SolverOptions = field(
         default_factory=patch_solver.SolverOptions
     )
+    layer: layer_module.LayerOptions = field(
+        default_factory=layer_module.LayerOptions
+    )
+    sizing: sizing.SizingOptions = field(default_factory=sizing.SizingOptions)
+    sweep: sweep_module.SweepOptions = field(
+        default_factory=sweep_module.SweepOptions
+    )
+    grid: grid_quality.GridOptions = field(default_factory=grid_quality.GridOptions)
 
 
 @dataclass
 class PipelineResult:
     options: PipelineOptions
-    sites: list
-    scale: float
-    diagram: voronoi_graph.Diagram | None
-    layout: block_layout.Layout | None
-    complex: block_complex.Complex | None
-    solve: patch_solver.SolveResult
-    reports: list
-    coverage: dict | None
-    manifold: list
-    model: object | None
-    analysis: dict
+    family: str
+    domain: pdm.PlanarDomain | None = None
+    scale: float = 1.0
+    sites: list = field(default_factory=list)
+    diagram: object | None = None
+    layout: object | None = None
+    solve: patch_solver.SolveResult = field(
+        default_factory=patch_solver.SolveResult
+    )
+    four_sided: object | None = None
+    correspondence: object | None = None
+    sweep_result: object | None = None
+    assembly: object | None = None
+    graph: pg.PatchGraph | None = None
+    metric: sizing.SizeMetric | None = None
+    counts: sizing.CountAssignment | None = None
+    problems: list = field(default_factory=list)
+    coverage: dict | None = None
+    model: object | None = None
+    identifiers: dict = field(default_factory=dict)
+    refused: list = field(default_factory=list)
+    grid: grid_quality.GridReport | None = None
+    analysis: dict = field(default_factory=dict)
     errors: list = field(default_factory=list)
+    failures: list = field(default_factory=list)
 
     @property
-    def resolved(self) -> bool:
-        return (
-            not self.errors
-            and self.solve.converged
-            and self.model is not None
-            and not self.manifold
-            and self.coverage is not None
+    def layer_blocks(self) -> set[str]:
+        if self.graph is None:
+            return set()
+        source = getattr(self.assembly, "layer_faces", None)
+        if source is None:
+            source = getattr(self.sweep_result, "layer_faces", set())
+        return {f"b{key[1]}" for key in source}
+
+    @property
+    def covered(self) -> bool:
+        return bool(
+            self.coverage
             and self.coverage["uncovered_samples"] == 0
             and self.coverage["overlapping_samples"] == 0
             and self.coverage["outside_samples"] == 0
         )
 
-
-def run(names, loops, options: PipelineOptions | None = None) -> PipelineResult:
-    """Run every stage, keeping whatever completed when one of them fails.
-
-    A construction failure is a research result, so the stages are guarded and
-    the report is built from what exists.  Nothing partial is emitted as a
-    session.
-    """
-    settings = options or PipelineOptions()
-    errors: list[dict] = []
-    sites, scale = site_module.build_sites(
-        names,
-        loops,
-        farfield_shape=settings.farfield_shape,
-        farfield_scale=settings.farfield_scale,
-        farfield_name=settings.farfield_name,
-    )
-    diagram = None
-    layout = None
-    complex_ = None
-    reports: list = []
-    coverage = None
-    manifold: list = []
-    model = None
-    model_error = None
-    solution = patch_solver.SolveResult()
-    try:
-        diagram = voronoi_graph.build_diagram(
-            sites, scale=scale, grid_width=settings.grid_width
+    @property
+    def resolved(self) -> bool:
+        return bool(
+            not self.errors
+            and not self.failures
+            and not self.problems
+            and self.model is not None
+            and self.covered
+            and (self.grid is None or self.grid.admissible)
         )
-    except Exception as error:
-        errors.append({"stage": "voronoi_graph", "error": _describe(error)})
-    if diagram is not None:
-        try:
-            layout = block_layout.build_layout(diagram, settings.layout)
-        except Exception as error:
-            errors.append({"stage": "layout", "error": _describe(error)})
-    if layout is not None:
-        try:
-            solution = patch_solver.solve(layout, settings.solver)
-            complex_ = block_complex.build_complex(
-                layout, wall_edge_style=settings.wall_edge_style
-            )
-        except Exception as error:
-            errors.append({"stage": "patch_solver", "error": _describe(error)})
-    if complex_ is not None:
-        reports = block_complex.block_reports(complex_)
-        manifold = block_complex.check_manifold(complex_)
-        coverage = block_complex.coverage_check(
-            layout, complex_, samples=settings.coverage_samples
-        )
-        covered = (
-            coverage["uncovered_samples"] == 0
-            and coverage["overlapping_samples"] == 0
-            and coverage["outside_samples"] == 0
-        )
-        if solution.converged and not manifold and covered:
-            try:
-                model = session_emit.build_model(
-                    complex_,
-                    diagram,
-                    cells=settings.cells,
-                    reference_curves=settings.reference_curves,
-                )
-            except Exception as error:  # pragma: no cover - reported, not raised
-                model_error = _describe(error)
-    analysis = build_analysis(
-        settings,
-        sites,
-        scale,
-        diagram,
-        layout,
-        complex_,
-        solution,
-        reports,
-        coverage,
-        manifold,
-        model,
-        model_error,
-        errors,
-    )
-    return PipelineResult(
-        settings,
-        sites,
-        scale,
-        diagram,
-        layout,
-        complex_,
-        solution,
-        reports,
-        coverage,
-        manifold,
-        model,
-        analysis,
-        errors,
-    )
 
 
 def _describe(error: BaseException) -> str:
     return f"{type(error).__name__}: {error}"
+
+
+# ---------------------------------------------------------------------------
+# External flow
+# ---------------------------------------------------------------------------
+
+
+def run_external(names, loops, options: PipelineOptions | None = None):
+    settings = options or PipelineOptions()
+    result = PipelineResult(settings, "external")
+    try:
+        result.domain = pdm.from_bodies(
+            names,
+            loops,
+            farfield_shape=settings.farfield_shape,
+            farfield_scale=settings.farfield_scale,
+            farfield_name=settings.farfield_name,
+        )
+        result.problems.extend(result.domain.problems())
+        result.sites, result.scale = site_module.build_sites(
+            names,
+            loops,
+            farfield_shape=settings.farfield_shape,
+            farfield_scale=settings.farfield_scale,
+            farfield_name=settings.farfield_name,
+        )
+    except Exception as error:
+        result.errors.append({"stage": "domain", "error": _describe(error)})
+        result.analysis = build_analysis(result)
+        return result
+    try:
+        result.diagram = voronoi_graph.build_diagram(
+            result.sites, scale=result.scale, grid_width=settings.grid_width
+        )
+    except Exception as error:
+        result.errors.append({"stage": "voronoi_graph", "error": _describe(error)})
+    if result.diagram is not None:
+        try:
+            result.layout = block_layout.build_layout(result.diagram, settings.layout)
+            result.solve = patch_solver.solve(result.layout, settings.solver)
+            _apply_forced_splits(result, settings)
+        except Exception as error:
+            result.errors.append({"stage": "layout", "error": _describe(error)})
+    if result.layout is not None:
+        try:
+            result.metric = _metric(result.domain, settings)
+            result.assembly = _assemble_external(result, settings)
+            result.graph = result.assembly.graph
+            result.failures.extend(result.assembly.failures)
+            if not result.solve.converged:
+                result.failures.extend(result.solve.failures)
+        except Exception as error:
+            result.errors.append({"stage": "bands", "error": _describe(error)})
+    _finish(result, settings)
+    return result
+
+
+def _apply_forced_splits(result: PipelineResult, settings: PipelineOptions) -> None:
+    """Insert the anchors an agent asked for, then relax again."""
+    applied = 0
+    for cell, order in settings.forced_splits:
+        patch = next(
+            (
+                item
+                for item in result.layout.patches
+                if item.cell == int(cell) and item.first_cut == int(order)
+            ),
+            None,
+        )
+        if patch is None:
+            result.solve.failures.append(
+                {
+                    "reason": "requested split target does not exist",
+                    "cell": int(cell),
+                    "cut": int(order),
+                }
+            )
+            continue
+        if patch_solver.split_patch(result.layout, patch, settings.solver):
+            applied += 1
+    if applied:
+        patch_solver.relax(result.layout, settings.solver)
+        result.layout.refresh()
+        result.solve.splits += applied
+        result.solve.history.append(
+            {
+                "attempt": "requested split",
+                "patches": len(result.layout.patches),
+                "applied": applied,
+            }
+        )
+
+
+def _assemble_external(result: PipelineResult, settings: PipelineOptions):
+    """Assemble bands, splitting a patch whose band block cannot be built."""
+    assembly = external_topology.build_graph(
+        result.layout,
+        result.domain,
+        result.metric,
+        options=settings.layer,
+        wall_edge_style=settings.wall_edge_style,
+    )
+    for _attempt in range(settings.band_repairs):
+        if not assembly.failures:
+            break
+        progressed = False
+        for failure in assembly.failures:
+            cell = failure.get("cell")
+            for order in failure.get("gate_orders", ()):
+                patch = next(
+                    (
+                        item
+                        for item in result.layout.patches
+                        if item.cell == cell and item.first_cut == order
+                    ),
+                    None,
+                )
+                if patch is None:
+                    continue
+                if patch_solver.split_patch(result.layout, patch, settings.solver):
+                    progressed = True
+        if not progressed:
+            break
+        patch_solver.relax(result.layout, settings.solver)
+        result.layout.refresh()
+        result.solve.splits += 1
+        result.solve.history.append(
+            {
+                "attempt": "band repair",
+                "patches": len(result.layout.patches),
+                "reason": "a boundary-layer band block was inadmissible",
+            }
+        )
+        assembly = external_topology.build_graph(
+            result.layout,
+            result.domain,
+            result.metric,
+            options=settings.layer,
+            wall_edge_style=settings.wall_edge_style,
+        )
+    return assembly
+
+
+# ---------------------------------------------------------------------------
+# Internal flow
+# ---------------------------------------------------------------------------
+
+
+def run_internal(domain: pdm.PlanarDomain, options: PipelineOptions | None = None):
+    settings = options or PipelineOptions()
+    result = PipelineResult(settings, "internal")
+    result.domain = domain
+    try:
+        result.problems.extend(domain.problems())
+        result.scale = domain.scale
+        result.metric = _metric(domain, settings)
+    except Exception as error:
+        result.errors.append({"stage": "domain", "error": _describe(error)})
+        result.analysis = build_analysis(result)
+        return result
+    four, reasons = sweep_module.detect(domain, settings.sweep)
+    result.four_sided = four
+    if four is None:
+        result.failures.append(
+            {
+                "stage": "sweep_detection",
+                "reason": "no four-sided reading of this domain",
+                "candidates": reasons,
+            }
+        )
+        result.analysis = build_analysis(result)
+        result.analysis["sweep_rejections"] = reasons
+        return result
+    try:
+        result.sweep_result = sweep_module.build(
+            domain,
+            four,
+            result.metric,
+            options=settings.sweep,
+            layer_options=settings.layer,
+        )
+        result.graph = result.sweep_result.graph
+        result.correspondence = result.sweep_result.correspondence
+        result.failures.extend(result.sweep_result.failures)
+    except Exception as error:
+        result.errors.append({"stage": "sweep", "error": _describe(error)})
+    _finish(result, settings)
+    if result.sweep_result is not None:
+        result.analysis["sweep"]["rejections"] = reasons
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Shared tail
+# ---------------------------------------------------------------------------
+
+
+def _metric(domain: pdm.PlanarDomain, settings: PipelineOptions) -> sizing.SizeMetric:
+    return sizing.SizeMetric(
+        settings.sizing,
+        domain.scale,
+        [chain.points for chain in domain.wall_chains()],
+    )
+
+
+def _finish(result: PipelineResult, settings: PipelineOptions) -> None:
+    if result.graph is not None:
+        result.problems.extend(
+            result.graph.problems(check_geometry=settings.check_edge_crossings)
+        )
+        try:
+            result.coverage = pg.coverage(
+                result.graph, result.domain, samples=settings.coverage_samples
+            )
+        except Exception as error:  # pragma: no cover - reported, not raised
+            result.errors.append({"stage": "coverage", "error": _describe(error)})
+    if (
+        result.graph is not None
+        and not result.problems
+        and not result.failures
+        and result.covered
+    ):
+        try:
+            result.counts = sizing.assign_counts(
+                result.graph, result.metric, settings.sizing
+            )
+            requests = sizing.layer_grading_requests(result.graph, result.metric)
+            model, identifiers, refused = session_emit.build_model_from_graph(
+                result.graph,
+                result.domain,
+                counts=result.counts.counts,
+                grading=requests if settings.sizing.graded_layers else (),
+                reference_curves=settings.reference_curves,
+            )
+            result.model = model
+            result.identifiers = identifiers
+            result.refused = refused
+        except Exception as error:
+            result.errors.append({"stage": "session", "error": _describe(error)})
+    if result.model is not None and settings.evaluate_grid:
+        try:
+            result.grid = grid_quality.evaluate(
+                result.model,
+                options=settings.grid,
+                layer_blocks=result.layer_blocks,
+                first_width=result.metric.first if result.metric else None,
+            )
+        except Exception as error:  # pragma: no cover - reported, not raised
+            result.errors.append({"stage": "grid_quality", "error": _describe(error)})
+    result.analysis = build_analysis(result)
+
+
+def run(names, loops, options: PipelineOptions | None = None) -> PipelineResult:
+    """Backwards-compatible entry point for the external-flow case."""
+    return run_external(names, loops, options)
 
 
 # ---------------------------------------------------------------------------
@@ -174,284 +393,244 @@ def _point(value) -> list[float]:
     return [float(value[0]), float(value[1])]
 
 
-def singularities(complex_, identifiers=None) -> list[dict]:
-    """Complex vertices whose block valence is not four."""
-    incident: dict[tuple, int] = {}
-    valences: dict[tuple, int] = {}
-    boundaries: dict[tuple, bool] = {}
-    for block in complex_.blocks:
-        for corner in block.corners:
-            incident[corner] = incident.get(corner, 0) + 1
-    for key, edge in complex_.edges.items():
-        for corner in key:
-            valences[corner] = valences.get(corner, 0) + 1
-            boundaries[corner] = boundaries.get(corner, False) or (
-                edge.boundary is not None
+def singularities(result: PipelineResult) -> list[dict]:
+    if result.graph is None:
+        return []
+    records = result.graph.singularities()
+    for record in records:
+        key = tuple(record["vertex"])
+        record["session_vertex"] = result.identifiers.get(key)
+    return records
+
+
+def build_analysis(result: PipelineResult) -> dict:
+    settings = result.options
+    domain = result.domain
+    analysis: dict = {
+        "algorithm": (
+            "explicit planar domain, clearance-limited boundary-layer fronts, "
+            + (
+                "exact generalized medial scaffold for the core"
+                if result.family == "external"
+                else "sweep/submapping core between the fronts"
             )
-    result = []
-    for key, vertex in complex_.vertices.items():
-        blocks = incident.get(key, 0)
-        valence = valences.get(key, 0)
-        boundary = boundaries.get(key, False)
-        regular = 2 if boundary else 4
-        if blocks == regular:
-            continue
-        record = {
-            "vertex": list(key),
-            "kind": vertex.kind,
-            "point": _point(vertex.point),
-            "incident_blocks": blocks,
-            "edge_valence": valence,
-            "on_boundary": boundary,
-            "regular_block_count": regular,
+            + ", metric cell counts, sampled transfinite-grid quality"
+        ),
+        "family": result.family,
+        "stage_errors": list(result.errors),
+        "failures": list(result.failures),
+        "domain": None,
+        "graph": None,
+        "sweep": None,
+        "medial": None,
+        "layers": None,
+        "sizing": None,
+        "coverage": result.coverage,
+        "singularities": singularities(result),
+        "quality": None,
+        "session": None,
+        "resolved": result.resolved,
+    }
+    if domain is not None:
+        analysis["domain"] = {
+            "name": domain.name,
+            "scale": result.scale,
+            "holes": domain.hole_count,
+            "euler_characteristic": domain.euler_characteristic,
+            "simply_connected": domain.simply_connected,
+            "signature": domain.signature(),
+            "problems": domain.problems(),
+            "chains": [
+                {
+                    "name": chain.name,
+                    "role": chain.role,
+                    "patch_type": chain.patch_type,
+                    "neighbour": chain.neighbour,
+                    "length": chain.length,
+                    "points": len(chain.points),
+                }
+                for chain in domain.chains()
+            ],
+            "minimum_wall_gaps": _wall_gaps(domain),
         }
-        if identifiers is not None:
-            record["session_vertex"] = identifiers.get(key)
-        result.append(record)
-    return result
+    if result.graph is not None:
+        analysis["graph"] = {
+            **result.graph.summary(),
+            "problems": result.problems,
+            "constraint_components": len(pg.constraint_components(result.graph)),
+        }
+    if result.metric is not None:
+        analysis["sizing"] = {
+            "metric": result.metric.described(),
+            "components": (
+                [] if result.counts is None else result.counts.components
+            ),
+            "total_cells": 0 if result.counts is None else result.counts.total_cells,
+            "budget_factor": (
+                1.0 if result.counts is None else result.counts.budget_factor
+            ),
+            "unattainable_counts": (
+                [] if result.counts is None else result.counts.unattainable
+            ),
+            "refused_grading": result.refused,
+        }
+    if result.family == "external":
+        analysis["medial"] = _medial_section(result)
+        analysis["layers"] = _layer_section(result)
+    else:
+        analysis["sweep"] = _sweep_section(result)
+        analysis["layers"] = _sweep_layer_section(result)
+    if result.grid is not None:
+        analysis["quality"] = result.grid.described()
+    if result.model is not None:
+        analysis["session"] = {
+            "topology_signature": session_emit.topology_signature(result.model),
+            "corner_quality": session_emit.quality_summary(result.model),
+            "boundaries": {
+                name: {
+                    "kind": boundary.kind,
+                    "neighbour_patch": boundary.neighbour_patch,
+                    "edges": len(result.model.boundary_edges(name)),
+                }
+                for name, boundary in sorted(result.model.boundaries.items())
+            },
+        }
+    analysis["limitations"] = LIMITATIONS
+    return analysis
 
 
-def build_analysis(
-    settings,
-    sites,
-    scale,
-    diagram,
-    layout,
-    complex_,
-    solution,
-    reports,
-    coverage,
-    manifold,
-    model,
-    model_error,
-    errors=(),
-) -> dict:
-    identifiers = (
-        {key: f"v{index}" for index, key in enumerate(complex_.vertices)}
-        if complex_ is not None
-        else {}
-    )
+LIMITATIONS = [
+    "The medial core is still one annulus per body: a cell whose ring has "
+    "several disjoint components is reported, not decomposed.",
+    "A band block's first cell follows the local band thickness, so the "
+    "first-cell width varies inside a block wherever the clearance does.",
+    "Core spokes and sweep ribs are straight; no interior guide curve is "
+    "fitted to a separatrix yet.",
+    "Cross-field separatrix production and a global quantisation solver are "
+    "not implemented; counts come from equality components only.",
+    "The wall-feature fan is implemented for three sectors; a feature that "
+    "wants more is reported rather than built.",
+]
+
+
+def _wall_gaps(domain: pdm.PlanarDomain) -> list[dict]:
+    walls = domain.wall_chains()
     gaps = []
-    walls = [site for site in sites if site.curve.kind == "wall"]
     for first in range(len(walls)):
         for second in range(first + 1, len(walls)):
             gaps.append(
                 {
-                    "curves": [walls[first].name, walls[second].name],
+                    "chains": [walls[first].name, walls[second].name],
                     "distance": g2.minimum_separation(
-                        walls[first].curve.loop(), walls[second].curve.loop()
+                        walls[first].points, walls[second].points
                     ),
                 }
             )
-    analysis: dict = {
-        "algorithm": (
-            "exact generalized Voronoi graph, annular cell decomposition, "
-            "relaxed conformal quadrilateral patches"
-        ),
-        "domain": {
-            "scale": scale,
-            "farfield_shape": settings.farfield_shape,
-            "farfield_scale": settings.farfield_scale,
-            "farfield_length": sites[-1].curve.length(),
-        },
-        "stage_errors": list(errors),
-        "raster": {
-            "width": diagram.raster.width,
-            "height": diagram.raster.height,
-            "pixel": diagram.raster.pixel,
-            "bounds": list(diagram.raster.bounds),
-            "note": (
-                "the raster only decides connectivity; junctions and branches "
-                "are recomputed analytically"
-            ),
-        }
-        if diagram is not None
-        else None,
-        "curves": [
-            {
-                "name": site.name,
-                "kind": site.curve.kind,
-                "length": site.curve.length(),
-                "point_count": len(site.curve.loop()) - 1,
-            }
-            for site in sites
-        ],
-        "minimum_gaps": gaps,
-    }
-    analysis.update(_graph_section(sites, diagram))
-    analysis.update(_layout_section(sites, layout))
-    analysis["objective"] = {
-        "terms": [
-            "inverted-cell barrier and minimum corner angle through the "
-            "scaled Jacobian",
-            "aspect-ratio penalty above a dimensionless limit",
-            "spoke direction against the wall normal into the fluid",
-            "spoke length against the local clearance",
-        ],
-        "target_scaled_jacobian": settings.solver.target_quality,
-        "accepted_scaled_jacobian": settings.solver.accept_quality,
-        "aspect_limit": settings.solver.aspect_limit,
-        "aspect_weight": settings.solver.aspect_weight,
-        "spoke_cosine_limit": settings.solver.spoke_cosine,
-        "spoke_weight": settings.solver.spoke_weight,
-        "alignment_weight": settings.solver.alignment_weight,
-    }
-    analysis["solver"] = {
-        "converged": solution.converged,
-        "worst_scaled_jacobian": solution.worst_quality,
-        "relaxation_sweeps": solution.sweeps,
-        "anchor_splits": solution.splits,
-        "candidate_graphs": solution.history,
-        "failures": solution.failures,
-    }
-    analysis.update(
-        _block_section(complex_, reports, identifiers, coverage, manifold, scale)
-    )
-    if model is not None:
-        analysis["session"] = {
-            "topology_signature": session_emit.topology_signature(model),
-            "quality": session_emit.quality_summary(model),
-            "boundaries": sorted(model.boundaries),
-            "edge_cells": settings.cells,
-        }
-    else:
-        analysis["session"] = None
-        analysis["session_error"] = model_error
-    analysis["limitations"] = [
-        "One block per patch and uniform cell counts; boundary-layer grading "
-        "is out of scope for this prototype.",
-        "Sites are complete boundary components, so a body's own medial "
-        "branches are handled by patch splitting rather than by the graph.",
-        "Spokes are straight chords between a wall gate and its ring anchor.",
-    ]
-    return analysis
+    return gaps
 
 
-def _graph_section(sites, diagram) -> dict:
+def _medial_section(result: PipelineResult) -> dict | None:
+    diagram = result.diagram
     if diagram is None:
-        return {"graph": None}
+        return None
+    sites = result.sites
     return {
-        "graph": {
-            "junction_count": len(diagram.junctions),
-            "branch_count": len(diagram.branches),
-            "junctions": [
-                {
-                    "index": junction.index,
-                    "point": _point(junction.point),
-                    "sites": [sites[index].name for index in junction.sites],
-                    "degree": junction.degree,
-                    "clearance": junction.clearance,
-                    "equidistance_residual": junction.residual,
-                    "raster_pixels": junction.pixel_count,
-                }
-                for junction in diagram.junctions
-            ],
-            "branches": [
-                {
-                    "index": branch.index,
-                    "sites": [sites[index].name for index in branch.pair],
-                    "length": branch.length,
-                    "closed": branch.closed,
-                    "ends": [list(end) if end else None for end in branch.ends],
-                    "trace_steps": branch.steps,
-                }
-                for branch in diagram.branches
-            ],
-            "notes": diagram.notes,
-        }
-    }
-
-
-def _layout_section(sites, layout) -> dict:
-    if layout is None:
-        return {"cells": None, "anchors": None}
-    return {
-        "cells": [
+        "raster_width": diagram.raster.width,
+        "raster_pixel": diagram.raster.pixel,
+        "note": (
+            "the raster only decides connectivity; junctions and branches are "
+            "recomputed analytically"
+        ),
+        "junction_count": len(diagram.junctions),
+        "branch_count": len(diagram.branches),
+        "junctions": [
             {
-                "site": sites[cell.site].name,
-                "ring_length": cell.ring_length,
-                "branches": [step.branch for step in cell.steps],
-                "cuts": len(layout.cuts[index]),
+                "index": junction.index,
+                "point": _point(junction.point),
+                "sites": [sites[index].name for index in junction.sites],
+                "degree": junction.degree,
+                "clearance": junction.clearance,
+                "equidistance_residual": junction.residual,
             }
-            for index, cell in enumerate(layout.cells)
+            for junction in diagram.junctions
         ],
-        "anchors": {
-            "accepted": [
-                {
-                    "branch": anchor.branch,
-                    "position": anchor.position,
-                    "kind": anchor.kind,
-                    "junction": anchor.junction,
-                    "identity": list(anchor.key),
-                }
-                for anchors in layout.anchors.by_branch.values()
-                for anchor in anchors
-            ],
-            "rejected": [
-                {
-                    "branch": anchor.branch,
-                    "position": anchor.position,
-                    "kind": anchor.kind,
-                    "reason": reason,
-                }
-                for anchor, reason in layout.anchors.rejected
-            ],
+        "branches": [
+            {
+                "index": branch.index,
+                "sites": [sites[index].name for index in branch.pair],
+                "length": branch.length,
+                "closed": branch.closed,
+            }
+            for branch in diagram.branches
+        ],
+        "solver": {
+            "converged": result.solve.converged,
+            "worst_corner_scaled_jacobian": result.solve.worst_quality,
+            "relaxation_sweeps": result.solve.sweeps,
+            "anchor_splits": result.solve.splits,
+            "history": result.solve.history,
+            "failures": result.solve.failures,
         },
     }
 
 
-def _block_section(complex_, reports, identifiers, coverage, manifold, scale) -> dict:
-    if complex_ is None:
-        return {
-            "blocks": None,
-            "singularities": None,
-            "quality": None,
-            "coverage": coverage,
-            "manifold_problems": manifold,
-        }
-    separation = block_complex.minimum_vertex_separation(complex_)
-    return {
-        "blocks": [
+def _layer_section(result: PipelineResult) -> dict | None:
+    assembly = result.assembly
+    if assembly is None:
+        return None
+    fronts = []
+    for cell, front in sorted(assembly.fronts.items()):
+        fronts.append(
             {
-                "index": report.patch,
-                "session_block": f"b{report.patch}",
-                "site": report.site,
-                "vertices": [
-                    identifiers[key] for key in complex_.blocks[report.patch].corners
-                ],
-                "convex": report.convex,
-                "minimum_corner_angle_degrees": math.degrees(report.minimum_angle),
-                "maximum_corner_angle_degrees": math.degrees(report.maximum_angle),
-                "scaled_jacobian": report.scaled_jacobian,
-                "aspect_ratio": report.aspect_ratio,
-                "area": report.area,
+                "chain": front.name,
+                "cell": cell,
+                "minimum_height": front.minimum_height,
+                "maximum_height": front.maximum_height,
+                "requested_height": result.metric.layer_height,
+                "global_shrink": front.shrink,
+                "notes": front.notes,
             }
-            for report in reports
-        ],
-        "singularities": singularities(complex_, identifiers),
-        "quality": {
-            "block_count": len(complex_.blocks),
-            "vertex_count": len(complex_.vertices),
-            "edge_count": len(complex_.edges),
-            "minimum_scaled_jacobian": min(
-                (report.scaled_jacobian for report in reports), default=None
-            ),
-            "minimum_corner_angle_degrees": (
-                math.degrees(min(report.minimum_angle for report in reports))
-                if reports
-                else None
-            ),
-            "maximum_corner_angle_degrees": (
-                math.degrees(max(report.maximum_angle for report in reports))
-                if reports
-                else None
-            ),
-            "maximum_aspect_ratio": max(
-                (report.aspect_ratio for report in reports), default=None
-            ),
-            "minimum_vertex_separation": separation,
-            "minimum_vertex_separation_over_scale": separation / scale,
-        },
-        "coverage": coverage,
-        "manifold_problems": manifold,
+        )
+    return {
+        "law": "height(s) = min(requested, clearance_fraction * local_feature_size(s))",
+        "clearance_fraction": result.options.layer.clearance_fraction,
+        "slope_limit": result.options.layer.slope_limit,
+        "requested_height": result.metric.layer_height if result.metric else None,
+        "fronts": fronts,
+        "sharp_feature_seams": assembly.seams,
+        "feature_fans": assembly.fans,
+        "notes": assembly.notes,
+        "failures": assembly.failures,
+    }
+
+
+def _sweep_section(result: PipelineResult) -> dict | None:
+    if result.four_sided is None:
+        return None
+    section = {"four_sided": result.four_sided.described(), "rejections": []}
+    if result.correspondence is not None:
+        section["correspondence"] = result.correspondence.described()
+    if result.sweep_result is not None:
+        section["rows"] = [
+            {"name": row.name, "role": row.role, "points": len(row.points)}
+            for row in result.sweep_result.rows
+        ]
+        section["notes"] = result.sweep_result.notes
+    return section
+
+
+def _sweep_layer_section(result: PipelineResult) -> dict | None:
+    if result.sweep_result is None:
+        return None
+    fronts = []
+    for row in result.sweep_result.rows:
+        if row.role != "front":
+            continue
+        fronts.append({"guide": row.name, "points": len(row.points)})
+    return {
+        "law": "height(s) = min(requested, clearance_fraction * local_feature_size(s))",
+        "clearance_fraction": result.options.layer.clearance_fraction,
+        "requested_height": result.metric.layer_height if result.metric else None,
+        "fronts": fronts,
+        "notes": result.sweep_result.notes,
     }

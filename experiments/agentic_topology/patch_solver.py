@@ -30,6 +30,7 @@ from block_layout import Cut, Layout, LayoutError, build_patches, split_anchor
 class SolverOptions:
     target_quality: float = math.sin(math.radians(25.0))
     accept_quality: float = math.sin(math.radians(2.0))
+    split_quality: float = math.sin(math.radians(18.0))
     aspect_limit: float = 40.0
     aspect_weight: float = 0.05
     spoke_cosine: float = math.cos(math.radians(70.0))
@@ -450,7 +451,7 @@ def solve(layout: Layout, options: SolverOptions | None = None) -> SolveResult:
                 "released_corner_gates": released,
             }
         )
-        if worst >= settings.accept_quality:
+        if worst >= settings.split_quality:
             return result
         if not _split_worst(layout, settings, result):
             return result
@@ -469,7 +470,7 @@ def _split_worst(layout: Layout, settings: SolverOptions, result: SolveResult) -
         key=lambda item: item[0],
     )
     for quality, _index, patch in ranked:
-        if quality >= settings.accept_quality:
+        if quality >= settings.split_quality:
             break
         for by_turning in (True, False):
             candidate = split_anchor(
@@ -490,8 +491,8 @@ def _split_worst(layout: Layout, settings: SolverOptions, result: SolveResult) -
                 return False
             layout.patches = build_patches(layout.diagram, layout.cells, layout.cuts)
             return True
-        result.failures.append(_failure_record(layout, patch, quality))
-        return False
+        if quality < settings.accept_quality:
+            result.failures.append(_failure_record(layout, patch, quality))
     return False
 
 
@@ -525,3 +526,27 @@ def _failure_record(layout: Layout, patch, quality: float) -> dict:
             "anchor could be inserted without crowding an existing cut"
         ),
     }
+
+
+def split_patch(layout: Layout, patch, settings: SolverOptions | None = None) -> bool:
+    """Insert one anchor inside a named patch and rebuild the cut structure.
+
+    This is the targeted form of :func:`_split_worst`: another stage - the
+    boundary-layer front, for instance - has measured that a specific patch is
+    inadmissible and asks for it to be divided.
+    """
+    _settings = settings or SolverOptions()
+    for force in (False, True):
+        for by_turning in (True, False):
+            candidate = split_anchor(
+                layout.diagram, layout.cells, patch, by_turning=by_turning
+            )
+            if candidate is None or not layout.anchors.add(candidate, force=force):
+                continue
+            try:
+                layout.cuts = layout.anchors.cuts()
+            except LayoutError:
+                return False
+            layout.patches = build_patches(layout.diagram, layout.cells, layout.cuts)
+            return True
+    return False

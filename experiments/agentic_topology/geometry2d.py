@@ -399,3 +399,129 @@ def quad_aspect_ratio(corners) -> float:
     if shortest <= 0.0:
         return math.inf
     return float(np.max(sides)) / shortest
+
+
+# ---------------------------------------------------------------------------
+# Normals, offsets and intersection tests
+# ---------------------------------------------------------------------------
+
+
+def segment_directions(poly: np.ndarray) -> np.ndarray:
+    """Unit direction of every segment; a degenerate segment reuses the last."""
+    delta = poly[1:] - poly[:-1]
+    lengths = np.linalg.norm(delta, axis=1)
+    safe = np.where(lengths > 0.0, lengths, 1.0)
+    return delta / safe[:, None]
+
+
+def vertex_normals(poly: np.ndarray, *, closed: bool) -> np.ndarray:
+    """Left-hand unit normals at every vertex of a polyline.
+
+    The normal is the normalised average of the two incident segment normals,
+    so it bisects a corner instead of jumping across it.  ``closed`` treats the
+    repeated last point as the first one.
+    """
+    directions = segment_directions(poly)
+    normals = np.column_stack((-directions[:, 1], directions[:, 0]))
+    if closed:
+        after = normals
+        before = np.roll(normals, 1, axis=0)
+        averaged = before + after
+        result = np.vstack([averaged, averaged[:1]])
+    else:
+        inner = normals[:-1] + normals[1:]
+        result = np.vstack([normals[:1], inner, normals[-1:]])
+    lengths = np.linalg.norm(result, axis=1)
+    safe = np.where(lengths > 1.0e-12, lengths, 1.0)
+    return result / safe[:, None]
+
+
+def miter_scale(poly: np.ndarray, *, closed: bool, limit: float = 4.0) -> np.ndarray:
+    """Offset length multiplier that keeps a corner offset at constant distance."""
+    directions = segment_directions(poly)
+    normals = np.column_stack((-directions[:, 1], directions[:, 0]))
+    averaged = vertex_normals(poly, closed=closed)
+    if closed:
+        reference = np.vstack([np.roll(normals, 1, axis=0), normals[:1]])
+    else:
+        reference = np.vstack([normals[:1], normals[:-1], normals[-1:]])
+    cosine = np.einsum("ij,ij->i", averaged, reference)
+    cosine = np.where(np.abs(cosine) < 1.0 / limit, 1.0 / limit, cosine)
+    return 1.0 / cosine
+
+
+def offset_polyline(
+    poly: np.ndarray, heights, *, closed: bool, limit: float = 4.0
+) -> np.ndarray:
+    """Offset a polyline to its left by a per-vertex height."""
+    values = np.asarray(heights, dtype=np.float64)
+    if values.ndim == 0:
+        values = np.full(len(poly), float(values))
+    normals = vertex_normals(poly, closed=closed)
+    scale = miter_scale(poly, closed=closed, limit=limit)
+    return poly + (values * scale)[:, None] * normals
+
+
+def _segment_crossings(first: np.ndarray, second: np.ndarray) -> np.ndarray:
+    """Boolean matrix of proper crossings between two segment sets."""
+    p = first[:-1]
+    r = first[1:] - first[:-1]
+    q = second[:-1]
+    s = second[1:] - second[:-1]
+    denominator = r[:, None, 0] * s[None, :, 1] - r[:, None, 1] * s[None, :, 0]
+    delta_x = q[None, :, 0] - p[:, None, 0]
+    delta_y = q[None, :, 1] - p[:, None, 1]
+    safe = np.where(np.abs(denominator) > 0.0, denominator, 1.0)
+    t = (delta_x * s[None, :, 1] - delta_y * s[None, :, 0]) / safe
+    u = (delta_x * r[:, None, 1] - delta_y * r[:, None, 0]) / safe
+    proper = np.abs(denominator) > 0.0
+    return proper & (t > 0.0) & (t < 1.0) & (u > 0.0) & (u < 1.0)
+
+
+def paths_cross(first: np.ndarray, second: np.ndarray) -> bool:
+    """True when two open polylines properly cross each other."""
+    if len(first) < 2 or len(second) < 2:
+        return False
+    return bool(np.any(_segment_crossings(first, second)))
+
+
+def self_intersections(poly: np.ndarray, *, closed: bool) -> list[tuple[int, int]]:
+    """Indices of properly crossing non-adjacent segment pairs."""
+    count = len(poly) - 1
+    if count < 3:
+        return []
+    crossings = _segment_crossings(poly, poly)
+    rows, columns = np.nonzero(np.triu(crossings, 1))
+    pairs = []
+    for row, column in zip(rows.tolist(), columns.tolist()):
+        if column == row + 1:
+            continue
+        if closed and row == 0 and column == count - 1:
+            continue
+        pairs.append((row, column))
+    return pairs
+
+
+def is_simple(poly: np.ndarray, *, closed: bool) -> bool:
+    return not self_intersections(poly, closed=closed)
+
+
+def resample_by_metric(poly: np.ndarray, sizes, *, minimum: int = 1) -> np.ndarray:
+    """Return arc-length stations whose spacing follows a per-vertex size."""
+    cumulative = cumulative_length(poly)
+    values = np.asarray(sizes, dtype=np.float64)
+    density = 1.0 / np.where(values > 0.0, values, 1.0)
+    average = 0.5 * (density[1:] + density[:-1])
+    counted = np.concatenate(([0.0], np.cumsum(average * segment_lengths(poly))))
+    total = float(counted[-1])
+    parts = max(int(minimum), int(round(total)))
+    targets = np.linspace(0.0, total, parts + 1)
+    return np.interp(targets, counted, cumulative)
+
+
+def metric_length(poly: np.ndarray, sizes) -> float:
+    """Length of a polyline measured in a per-vertex size metric."""
+    values = np.asarray(sizes, dtype=np.float64)
+    density = 1.0 / np.where(values > 0.0, values, 1.0)
+    average = 0.5 * (density[1:] + density[:-1])
+    return float(np.sum(average * segment_lengths(poly)))

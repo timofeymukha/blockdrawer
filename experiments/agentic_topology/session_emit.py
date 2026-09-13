@@ -26,8 +26,6 @@ from blockdrawer.domain import EdgeGeometry, Vertex, edge_key
 from blockdrawer.model import MeshModel
 from blockdrawer.session import save_session
 
-from block_complex import Complex
-
 COORDINATE_TOLERANCE = 2.0e-9
 
 
@@ -56,78 +54,6 @@ def _thin(points, first, second):
     while kept and math.dist(kept[-1], second) <= COORDINATE_TOLERANCE:
         kept.pop()
     return tuple(kept)
-
-
-def build_model(
-    complex_: Complex,
-    diagram,
-    *,
-    cells: int = 10,
-    reference_curves: bool = True,
-) -> MeshModel:
-    model = MeshModel(initialize=False)
-    identifiers: dict[tuple, str] = {}
-    for index, key in enumerate(complex_.vertices):
-        vertex = complex_.vertices[key]
-        identifier = f"v{index}"
-        identifiers[key] = identifier
-        model.vertices[identifier] = Vertex(
-            identifier, float(vertex.point[0]), float(vertex.point[1])
-        )
-    for index, block in enumerate(complex_.blocks):
-        model.blocks.append(
-            DomainBlock(
-                f"b{index}", tuple(identifiers[key] for key in block.corners)
-            )
-        )
-    model.edge_cells = {current: cells for current in model.edges()}
-    for key, edge in complex_.edges.items():
-        first = identifiers[key[0]]
-        second = identifiers[key[1]]
-        current = edge_key(first, second)
-        if current not in model.edge_cells:
-            continue
-        if edge.curve.kind == "line" or not edge.curve.points:
-            continue
-        start = (model.vertices[current[0]].x, model.vertices[current[0]].y)
-        end = (model.vertices[current[1]].x, model.vertices[current[1]].y)
-        points = edge.curve.points
-        if current != (first, second):
-            points = tuple(reversed(points))
-        if edge.curve.kind == "arc":
-            model.edge_geometry[current] = EdgeGeometry("arc", points)
-            continue
-        thinned = _thin(points, start, end)
-        if not thinned:
-            continue
-        model.edge_geometry[current] = EdgeGeometry(edge.curve.kind, thinned)
-
-    used: set[str] = {model.z_min_patch_name, model.z_max_patch_name}
-    patches: dict[str, str] = {}
-    for site in diagram.sites:
-        patches[site.name] = _patch_name(site.name, used)
-    for site in diagram.sites:
-        model.add_boundary(patches[site.name])
-        if site.curve.kind == "wall":
-            model.set_boundary_type(patches[site.name], "wall")
-    for key, edge in complex_.edges.items():
-        if edge.boundary is None:
-            continue
-        current = edge_key(identifiers[key[0]], identifiers[key[1]])
-        if model.is_boundary_edge(current):
-            model.set_edge_boundary(current, patches[edge.boundary])
-    if reference_curves:
-        for site in diagram.sites:
-            if site.curve.kind != "wall":
-                continue
-            points = site.curve.loop()[:-1]
-            model.add_geometry_curve(
-                [(float(x), float(y)) for x, y in points],
-                name=f"{site.name}_points",
-                show_points=False,
-            )
-    model.validate()
-    return model
 
 
 def write_session(model: MeshModel, path) -> Path:
@@ -217,3 +143,150 @@ def quality_summary(model: MeshModel) -> dict[str, object]:
         "maximum_block_area": max(areas) if areas else 0.0,
         "area_ratio": (max(areas) / min(areas)) if areas and min(areas) > 0 else None,
     }
+
+
+# ---------------------------------------------------------------------------
+# Emission from the general patch graph
+# ---------------------------------------------------------------------------
+
+
+def build_model_from_graph(
+    graph,
+    domain,
+    *,
+    counts,
+    grading=(),
+    reference_curves: bool = True,
+    default_cells: int = 10,
+) -> tuple[MeshModel, dict, list[dict]]:
+    """Turn a validated patch graph into an ordinary BlockDrawer session.
+
+    Returns the model, the vertex-key to session-id map, and a list of sizing
+    requests that BlockDrawer refused, so an unattainable first-cell width is
+    reported rather than silently dropped.
+    """
+    model = MeshModel(initialize=False)
+    identifiers: dict[tuple, str] = {}
+    for index, key in enumerate(graph.vertices):
+        vertex = graph.vertices[key]
+        identifier = f"v{index}"
+        identifiers[key] = identifier
+        model.vertices[identifier] = Vertex(
+            identifier, float(vertex.point[0]), float(vertex.point[1])
+        )
+    for index, face in enumerate(graph.faces):
+        model.blocks.append(
+            DomainBlock(f"b{index}", tuple(identifiers[key] for key in face.corners))
+        )
+    actual = set(model.edges())
+    model.edge_cells = {}
+    for key in actual:
+        model.edge_cells[key] = int(default_cells)
+    for key, edge in graph.edges.items():
+        current = edge_key(identifiers[key[0]], identifiers[key[1]])
+        if current not in actual:
+            continue
+        cells = counts.get(key)
+        if cells is not None:
+            model.edge_cells[current] = int(cells)
+        if edge.kind == "line" or not edge.points:
+            continue
+        start = (model.vertices[current[0]].x, model.vertices[current[0]].y)
+        end = (model.vertices[current[1]].x, model.vertices[current[1]].y)
+        points = edge.points
+        if current != (identifiers[key[0]], identifiers[key[1]]):
+            points = tuple(reversed(points))
+        if edge.kind == "arc":
+            model.edge_geometry[current] = EdgeGeometry("arc", points)
+            continue
+        thinned = _thin(points, start, end)
+        if not thinned:
+            continue
+        model.edge_geometry[current] = EdgeGeometry(edge.kind, thinned)
+
+    used: set[str] = {model.z_min_patch_name, model.z_max_patch_name}
+    patches: dict[str, str] = {}
+    chains = {chain.name: chain for chain in domain.chains()}
+    for name in sorted(chains):
+        patches[name] = _patch_name(name, used)
+    assigned: set[str] = set()
+    for key, edge in graph.edges.items():
+        if edge.boundary is None:
+            continue
+        current = edge_key(identifiers[key[0]], identifiers[key[1]])
+        if model.is_boundary_edge(current):
+            assigned.add(edge.boundary)
+    for name in sorted(assigned):
+        model.add_boundary(patches[name])
+    for name in sorted(assigned):
+        chain = chains[name]
+        if chain.role == "cyclic":
+            continue
+        if chain.patch_type != "patch":
+            model.set_boundary_type(patches[name], chain.patch_type)
+    for name in sorted(assigned):
+        chain = chains[name]
+        if chain.role != "cyclic" or chain.neighbour not in assigned:
+            continue
+        if model.boundaries[patches[name]].kind == "cyclic":
+            continue
+        model.set_boundary_type(
+            patches[name], "cyclic", neighbour_patch=patches[chain.neighbour]
+        )
+    for key, edge in graph.edges.items():
+        if edge.boundary is None:
+            continue
+        current = edge_key(identifiers[key[0]], identifiers[key[1]])
+        if model.is_boundary_edge(current):
+            model.set_edge_boundary(current, patches[edge.boundary])
+
+    refused: list[dict] = []
+    for request in grading:
+        current = edge_key(
+            identifiers[request.edge[0]], identifiers[request.edge[1]]
+        )
+        if current not in model.edge_cells:
+            continue
+        cells = model.edge_cells[current]
+        length = model.edge_length(current)
+        parameter = (
+            "start_width"
+            if current[0] == identifiers[request.wall_vertex]
+            else "end_width"
+        )
+        if cells < 2 or request.first_width >= length:
+            refused.append(
+                {
+                    "edge": list(current),
+                    "requested_first_width": float(request.first_width),
+                    "edge_length": float(length),
+                    "cells": int(cells),
+                    "reason": "the requested first cell does not fit in this edge",
+                }
+            )
+            continue
+        try:
+            model.set_edge_grading(current, parameter, float(request.first_width))
+        except Exception as error:  # pragma: no cover - reported, not raised
+            refused.append(
+                {
+                    "edge": list(current),
+                    "requested_first_width": float(request.first_width),
+                    "edge_length": float(length),
+                    "cells": int(cells),
+                    "reason": f"{type(error).__name__}: {error}",
+                }
+            )
+
+    if reference_curves:
+        for chain in domain.wall_chains():
+            points = chain.points
+            if len(points) > 2 and math.dist(points[0], points[-1]) <= 0.0:
+                points = points[:-1]
+            model.add_geometry_curve(
+                [(float(x), float(y)) for x, y in points],
+                name=f"{chain.name}_points",
+                show_points=False,
+            )
+    model.validate()
+    return model, identifiers, refused

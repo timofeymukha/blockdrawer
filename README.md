@@ -548,15 +548,23 @@ make integration-test
 
 `experiments/` holds research code that is deliberately outside the runtime
 package and outside the normal test suite. `experiments/agentic_topology/`
-builds a complete conformal quadrilateral block topology around an arbitrary
-collection of disjoint closed 2D point-list bodies and writes it as an ordinary
-BlockDrawer session. It needs NumPy and Pillow, which are not BlockDrawer
-dependencies, and it has its own self-tests:
+turns a planar fluid domain into a conformal all-quadrilateral block topology
+with explicit near-wall bands and writes it as an ordinary BlockDrawer session.
+It handles two domain families - external flow around any number of disjoint
+closed bodies, and simply connected internal flow with named wall, inlet,
+outlet, symmetry or translational-periodic boundary chains - and measures the
+result on the actual sampled transfinite grid rather than on four block corners.
+It needs NumPy and Pillow, which are not BlockDrawer dependencies, and it has
+its own self-tests:
 
 ```bash
-make research-test        # python -m unittest discover -s experiments/agentic_topology -v
-make research-30p30n      # downloads the 30P30N case and emits a session
+make research-test             # python -m unittest discover -s experiments/agentic_topology -v
+make research-periodic-hill    # classical periodic hill, an internal-flow session
+make research-30p30n           # downloads the 30P30N case and emits its analysis
 ```
+
+Its command line also offers `describe`, `candidates`, `apply` and `focus` so an
+agent can choose between screened topology moves instead of placing vertices.
 
 See [experiments/agentic_topology/README.md](experiments/agentic_topology/README.md)
 for the algorithm and its current limits.

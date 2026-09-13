@@ -124,3 +124,105 @@ def draw_legend(canvas: Canvas, title: str, rows) -> None:
         y += 18
         if y > canvas.height - 20:
             break
+
+
+ROLE_FILLS = {
+    "layer": (214, 234, 248),
+    "core": (250, 240, 220),
+    "block": (235, 235, 245),
+}
+ROLE_OUTLINE = (80, 80, 90)
+
+
+def render_result(result, width: int = 1100, *, bounds=None, title: str = None):
+    """Draw whatever a pipeline run produced, including a partial failed run."""
+    domain = result.domain
+    box = bounds or (domain.bounds() if domain is not None else (0.0, 0.0, 1.0, 1.0))
+    canvas = Canvas(box, width)
+    diagram = result.diagram
+    if diagram is not None and bounds is None:
+        canvas.paste_field(region_field(diagram))
+    graph = result.graph
+    if graph is not None:
+        for face in graph.faces:
+            canvas.polygon(
+                graph.face_outline(face),
+                ROLE_FILLS.get(face.role, ROLE_FILLS["block"]),
+                ROLE_OUTLINE,
+                1,
+            )
+        for edge in graph.edges.values():
+            if edge.role in ("front",):
+                canvas.polyline(edge.path, (20, 120, 80), 2)
+    if diagram is not None:
+        for branch in diagram.branches:
+            canvas.polyline(branch.path, BRANCH_COLOUR, 2)
+    if domain is not None:
+        for loop in domain.loops:
+            canvas.polyline(loop.points(), (15, 17, 20), 2)
+    if graph is not None:
+        for vertex in graph.vertices.values():
+            canvas.marker(vertex.point, (250, 210, 60), 2, outline=None)
+        for record in graph.singularities():
+            canvas.marker(record["point"], (150, 60, 200), 4)
+    if result.grid is not None:
+        for record in result.grid.worst_cells[:12]:
+            canvas.cross(record["point"], (190, 30, 45), 6, 2)
+    for failure in result.failures:
+        for point in failure.get("gate_points", []):
+            canvas.cross(point, (220, 120, 0), 8, 3)
+    rows = [(None, "Domain")]
+    if domain is not None:
+        for chain in domain.chains():
+            rows.append((None, f"  {chain.name}: {chain.role}"))
+    rows.extend(
+        [
+            (None, ""),
+            (ROLE_FILLS["layer"], "boundary-layer band"),
+            (ROLE_FILLS["core"], "core block"),
+            (None, "purple dot: singularity"),
+            (None, "red X:      worst sampled cell"),
+            (None, ""),
+        ]
+    )
+    if graph is not None:
+        summary = graph.summary()
+        rows.extend(
+            [
+                (None, "blocks:   %d" % summary["faces"]),
+                (None, "vertices: %d" % summary["vertices"]),
+                (None, "singularities: %d" % summary["singularity_count"]),
+            ]
+        )
+    if result.counts is not None:
+        rows.append((None, "cells:    %d" % result.counts.total_cells))
+    if result.grid is not None:
+        report = result.grid
+        rows.extend(
+            [
+                (None, "inverted cells: %d" % report.inverted_cells),
+                (
+                    None,
+                    "min scaled Jacobian: %s"
+                    % _value(report.minimum_scaled_jacobian),
+                ),
+                (
+                    None,
+                    "max non-orthogonality: %s"
+                    % _value(report.maximum_non_orthogonality),
+                ),
+                (None, "max skewness: %s" % _value(report.maximum_skewness)),
+            ]
+        )
+    rows.append((None, ""))
+    rows.append((None, "resolved" if result.resolved else "UNRESOLVED - see JSON"))
+    for error in result.errors:
+        rows.append((None, "%s: %s" % (error["stage"], error["error"][:38])))
+    for failure in result.failures[:4]:
+        rows.append((None, str(failure.get("reason", ""))[:44]))
+    draw_legend(canvas, title or f"Agentic topology ({result.family})", rows)
+    return canvas
+
+
+def _value(extreme) -> str:
+    return "-" if extreme is None else f"{extreme.value:.4g} in {extreme.block}"
