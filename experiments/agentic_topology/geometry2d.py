@@ -525,3 +525,214 @@ def metric_length(poly: np.ndarray, sizes) -> float:
     density = 1.0 / np.where(values > 0.0, values, 1.0)
     average = 0.5 * (density[1:] + density[:-1])
     return float(np.sum(average * segment_lengths(poly)))
+
+
+# ---------------------------------------------------------------------------
+# Scale-aware segment and path relations
+# ---------------------------------------------------------------------------
+#
+# ``paths_cross`` answers one question - is there a transversal intersection -
+# and answers it with strict inequalities, so it is blind to the three ways two
+# block edges can be illegally related without properly crossing: a collinear
+# partial overlap, an endpoint sitting inside another edge, and a segment that
+# has collapsed to a point.  A planar topology operation has to reject all of
+# them, so the classifier below reports which relation holds instead of a
+# boolean, and every threshold it uses is a length compared against a caller
+# supplied tolerance derived from the domain or cavity scale.
+
+DISJOINT = "disjoint"
+TOUCH = "touch"
+PROPER_CROSSING = "proper_crossing"
+T_JUNCTION = "t_junction"
+COLLINEAR_OVERLAP = "collinear_overlap"
+DEGENERATE_SEGMENT = "degenerate_segment"
+UNEXPECTED_TOUCH = "unexpected_touch"
+
+CONFLICT_KINDS = (
+    PROPER_CROSSING,
+    T_JUNCTION,
+    COLLINEAR_OVERLAP,
+    UNEXPECTED_TOUCH,
+)
+
+
+def segment_relation(p0, p1, q0, q1, *, tolerance: float) -> dict:
+    """Classify how two segments are related, to within ``tolerance``.
+
+    The result is one of ``disjoint``, ``touch`` (they meet at an endpoint of
+    both), ``proper_crossing``, ``t_junction`` (an endpoint of one lies inside
+    the other) or ``collinear_overlap``.  ``tolerance`` is a length: two
+    segments count as parallel when their supporting lines separate by less
+    than it over the shorter of the two, which makes the classification
+    invariant under translation and rotation and equivariant under a uniform
+    scale that also scales ``tolerance``.
+    """
+    first = np.asarray(p0, dtype=np.float64)
+    second = np.asarray(p1, dtype=np.float64)
+    third = np.asarray(q0, dtype=np.float64)
+    fourth = np.asarray(q1, dtype=np.float64)
+    r = second - first
+    s = fourth - third
+    length_r = float(math.hypot(float(r[0]), float(r[1])))
+    length_s = float(math.hypot(float(s[0]), float(s[1])))
+    if length_r <= tolerance or length_s <= tolerance:
+        return {"kind": DEGENERATE_SEGMENT, "point": None, "parameters": None}
+    w = third - first
+    cross = float(r[0] * s[1] - r[1] * s[0])
+    # |cross| = |r| |s| sin(angle), so the supporting lines deviate by
+    # |sin(angle)| * min(|r|, |s|) over the shorter segment.
+    if abs(cross) * min(length_r, length_s) > tolerance * length_r * length_s:
+        t = float(w[0] * s[1] - w[1] * s[0]) / cross
+        u = float(w[0] * r[1] - w[1] * r[0]) / cross
+        margin_t = tolerance / length_r
+        margin_u = tolerance / length_s
+        if (
+            t < -margin_t
+            or t > 1.0 + margin_t
+            or u < -margin_u
+            or u > 1.0 + margin_u
+        ):
+            return {"kind": DISJOINT, "point": None, "parameters": (t, u)}
+        end_first = t <= margin_t or t >= 1.0 - margin_t
+        end_second = u <= margin_u or u >= 1.0 - margin_u
+        if end_first and end_second:
+            kind = TOUCH
+        elif end_first or end_second:
+            kind = T_JUNCTION
+        else:
+            kind = PROPER_CROSSING
+        point = first + t * r
+        return {
+            "kind": kind,
+            "point": (float(point[0]), float(point[1])),
+            "parameters": (t, u),
+        }
+    offset = abs(float(w[0] * r[1] - w[1] * r[0])) / length_r
+    if offset > tolerance:
+        return {"kind": DISJOINT, "point": None, "parameters": None}
+    scale = length_r * length_r
+    start = float(np.dot(w, r)) / scale
+    finish = float(np.dot(fourth - first, r)) / scale
+    low = max(0.0, min(start, finish))
+    high = min(1.0, max(start, finish))
+    middle = first + 0.5 * (low + high) * r
+    point = (float(middle[0]), float(middle[1]))
+    if (high - low) * length_r > tolerance:
+        return {
+            "kind": COLLINEAR_OVERLAP,
+            "point": point,
+            "parameters": (low, high),
+        }
+    if high >= low - tolerance / length_r:
+        return {"kind": TOUCH, "point": point, "parameters": (low, high)}
+    return {"kind": DISJOINT, "point": None, "parameters": None}
+
+
+def _segment_boxes(poly: np.ndarray) -> np.ndarray:
+    lower = np.minimum(poly[:-1], poly[1:])
+    upper = np.maximum(poly[:-1], poly[1:])
+    return np.column_stack((lower, upper))
+
+
+def path_relations(
+    first, second, *, tolerance: float, limit: int = 64
+) -> list[dict]:
+    """Every non-disjoint segment relation between two polylines."""
+    one = np.asarray(first, dtype=np.float64)
+    other = np.asarray(second, dtype=np.float64)
+    if len(one) < 2 or len(other) < 2:
+        return []
+    boxes_one = _segment_boxes(one)
+    boxes_other = _segment_boxes(other)
+    overlap = (
+        (boxes_one[:, None, 0] <= boxes_other[None, :, 2] + tolerance)
+        & (boxes_other[None, :, 0] <= boxes_one[:, None, 2] + tolerance)
+        & (boxes_one[:, None, 1] <= boxes_other[None, :, 3] + tolerance)
+        & (boxes_other[None, :, 1] <= boxes_one[:, None, 3] + tolerance)
+    )
+    rows, columns = np.nonzero(overlap)
+    found: list[dict] = []
+    for row, column in zip(rows.tolist(), columns.tolist()):
+        relation = segment_relation(
+            one[row],
+            one[row + 1],
+            other[column],
+            other[column + 1],
+            tolerance=tolerance,
+        )
+        if relation["kind"] in (DISJOINT, DEGENERATE_SEGMENT):
+            # A repeated point inside a polyline carries no geometry and cannot
+            # cross anything; a whole edge that has collapsed is caught by the
+            # edge-length check instead.
+            continue
+        found.append({**relation, "first_segment": row, "second_segment": column})
+        if len(found) >= limit:
+            break
+    return found
+
+
+def path_conflicts(
+    first,
+    second,
+    *,
+    tolerance: float,
+    shared=(),
+    limit: int = 64,
+) -> list[dict]:
+    """Relations between two polylines that a planar block topology forbids.
+
+    Touching is legitimate only where the two paths are supposed to meet - the
+    graph vertex they have in common.  Everything else, including a contact
+    that lands on such a point but is a crossing or a T-junction rather than a
+    clean meeting, is a conflict.
+    """
+    allowed = np.asarray(shared, dtype=np.float64).reshape(-1, 2)
+    found = []
+    for relation in path_relations(
+        first, second, tolerance=tolerance, limit=limit
+    ):
+        if relation["kind"] == TOUCH:
+            point = relation["point"]
+            if point is None:
+                continue
+            if len(allowed) and float(
+                np.min(np.linalg.norm(allowed - np.asarray(point), axis=1))
+            ) <= tolerance:
+                continue
+            found.append({**relation, "kind": UNEXPECTED_TOUCH})
+            continue
+        found.append(relation)
+    return found
+
+
+def self_conflicts(poly, *, closed: bool, tolerance: float) -> list[dict]:
+    """Forbidden relations between non-adjacent segments of one polyline."""
+    points = np.asarray(poly, dtype=np.float64)
+    count = len(points) - 1
+    if count < 3:
+        return []
+    found = []
+    for row in range(count):
+        for column in range(row + 2, count):
+            if closed and row == 0 and column == count - 1:
+                continue
+            relation = segment_relation(
+                points[row],
+                points[row + 1],
+                points[column],
+                points[column + 1],
+                tolerance=tolerance,
+            )
+            if relation["kind"] in (DISJOINT, DEGENERATE_SEGMENT):
+                continue
+            found.append(
+                {**relation, "first_segment": row, "second_segment": column}
+            )
+    return found
+
+
+def path_separation(first, second) -> float:
+    """Smallest distance between two polylines, measured both ways."""
+    return minimum_separation(
+        np.asarray(first, dtype=np.float64), np.asarray(second, dtype=np.float64)
+    )

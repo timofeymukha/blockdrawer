@@ -20,11 +20,12 @@ another boundary.
 
 At a sharp convex wall feature one band block would have to span the whole
 fluid sector - a 352 degree cusp gives two 176 degree block corners no matter
-where the gates slide.  ``corner_fan`` replaces the two band blocks around such
-a feature with five, so the feature carries three incident sectors instead of
-two.  The operation is index balanced: the wall vertex loses one unit of charge
-and the three new interior vertices supply it, while the two neighbouring front
-vertices become valence five.
+where the gates slide.  A feature that wide therefore gets a *band seam* here:
+one offset point per incident wall side instead of one on the bisector.  That is
+only the starting construction; ``fan_cavity`` owns the feature afterwards and
+may replace the whole neighbourhood with something better, so nothing in this
+module judges - or abandons a chain because of - a block that touches such a
+feature.
 """
 
 from __future__ import annotations
@@ -67,17 +68,19 @@ class LayerOptions:
     repair_budget: int = 12
     hard_attempts: int = 6
     curvature_fraction: float = 0.8
+    # Fraction of the distance to the core scaffold a front may reach.
+    scaffold_fraction: float = 0.9
     miter_limit: float = 1.5
     minimum_band_cells: float = 3.0
     repair_factor: float = 0.6
     feature_steps: int = 26
-    fan_fluid_angle: float = 210.0
+    # A wall vertex whose fluid sector is at least this wide is owned by the
+    # cavity stage: the band blocks beside it are not judged here, because they
+    # may be replaced.
+    feature_fluid_angle: float = 210.0
+    # And one at least this wide gets a band seam straight away, so the cavity
+    # stage starts from a three-sector construction rather than a folded one.
     sharp_fluid_angle: float = 250.0
-    fan_sectors: int = 3
-    fan_inner: float = 0.5
-    fan_apex: float = 0.55
-    fan_enabled: bool = False
-    fan_minimum_quality: float = 0.02
 
 
 # ---------------------------------------------------------------------------
@@ -299,6 +302,7 @@ def build_front(
     station_caps=None,
     floor_height: float = 0.0,
     exempt_orders=(),
+    scaffold=None,
     site: int = 0,
     name: str = "",
 ) -> Front:
@@ -330,6 +334,20 @@ def build_front(
     cap = np.minimum(
         cap, np.maximum(options.curvature_fraction * inner, float(floor_height))
     )
+    if scaffold is not None:
+        # The core scaffold is where the core patches start.  A front that
+        # reaches past it turns the core patch inside out, and the gate-by-gate
+        # cap below cannot see that happening between two gates.  This is a
+        # guard, not a design rule: it only bites in the last tenth of the way
+        # to the scaffold, so a cove where the scaffold legitimately runs close
+        # to the wall still gets whatever band the clearance limit allows.
+        cap = np.minimum(
+            cap,
+            options.scaffold_fraction
+            * g2.distance_to_polyline(
+                np.asarray(scaffold, dtype=np.float64), augmented
+            ),
+        )
     if station_caps is not None:
         for order, value in enumerate(station_caps):
             index = gate_indices[order]
@@ -341,7 +359,12 @@ def build_front(
     # is meaningful and must not be overridden.
     sharp_mask = np.degrees(angles) >= options.sharp_fluid_angle
     sharp_mask = np.concatenate((sharp_mask, sharp_mask[:1]))
-    cap = np.where(sharp_mask, np.maximum(cap, float(floor_height)), cap)
+
+    def floored(values: np.ndarray) -> np.ndarray:
+        """A sharp vertex never loses its floor, however often it is repaired."""
+        return np.where(sharp_mask, np.maximum(values, float(floor_height)), values)
+
+    cap = floored(cap)
     arclength = g2.cumulative_length(augmented)
     floor = options.minimum_fraction * requested
     notes: list[str] = []
@@ -351,6 +374,11 @@ def build_front(
     previous_hard: list[int] | None = None
     failing: list[int] = []
     for _attempt in range(options.shrink_attempts * 4 + 1):
+        # The floor is *not* re-applied after slope limiting.  Doing so was
+        # measured: it leaves every synthetic case unchanged but spikes the
+        # offset at a cusp, which breaks the seam wedges beside it - on 30P30N
+        # the flap's seam stops being constructible and two non-convex core
+        # faces come back - and it does not remove the collapse it was aimed at.
         heights = slope_limited(
             np.maximum(cap, 0.0), arclength, options.slope_limit, closed=True
         )
@@ -367,7 +395,7 @@ def build_front(
         seams = _seam_points(augmented, sharp, heights, fluid_sign)
         if stuck or not _front_is_usable(augmented, offset, obstacles):
             shrink *= options.shrink_factor
-            cap = cap * options.shrink_factor
+            cap = floored(cap * options.shrink_factor)
             if float(np.max(cap)) < floor:
                 break
             continue
@@ -449,6 +477,7 @@ def build_front(
             )
             cap[taller] *= options.repair_factor
             repairs += 1
+        cap = floored(cap)
         if float(np.max(cap)) < floor:
             break
     raise LayerError(
@@ -611,43 +640,3 @@ def fluid_angles(loop: np.ndarray, fluid_sign: float) -> np.ndarray:
     """Fluid-side angle at every vertex of a closed boundary loop, in radians."""
     turning = g2.turning_angles(loop, closed=True)
     return math.pi + fluid_sign * turning
-
-
-def fan_sectors(fluid_angle: float, options: LayerOptions) -> int:
-    """Number of incident sectors a sharp wall feature should carry."""
-    if not options.fan_enabled:
-        return 2
-    if math.degrees(fluid_angle) < options.fan_fluid_angle:
-        return 2
-    wanted = max(2, round(math.degrees(fluid_angle) / 120.0))
-    return int(min(options.fan_sectors, wanted))
-
-
-def fan_points(
-    corner: np.ndarray,
-    towards_previous: np.ndarray,
-    towards_next: np.ndarray,
-    front_point: np.ndarray,
-    options: LayerOptions,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Interior vertices of a three-sector wall-feature fan.
-
-    The fluid sector at a convex wall vertex sweeps clockwise from the direction
-    of the following wall point to the direction of the preceding one.  Two rays
-    split it into three equal parts and carry ``m_next`` and ``m_previous``; the
-    apex sits between them on the ray towards the front vertex.
-    """
-    height = float(np.linalg.norm(front_point - corner))
-    start = math.atan2(towards_next[1], towards_next[0])
-    finish = math.atan2(towards_previous[1], towards_previous[0])
-    sweep = (start - finish) % (2.0 * math.pi)
-    first = start - sweep / 3.0
-    second = start - 2.0 * sweep / 3.0
-    inner = options.fan_inner * height
-    near_next = corner + inner * np.array([math.cos(first), math.sin(first)])
-    near_previous = corner + inner * np.array([math.cos(second), math.sin(second)])
-    direction = front_point - corner
-    length = float(np.linalg.norm(direction))
-    unit = direction / length if length > 0.0 else np.array([1.0, 0.0])
-    apex = corner + options.fan_apex * height * unit
-    return near_next, near_previous, apex

@@ -26,10 +26,19 @@ def describe(result) -> dict:
     description = {
         "family": result.family,
         "resolved": result.resolved,
+        "admissible": result.admissible,
+        "topology_valid": result.topology_valid,
+        "untangled": result.untangled,
+        "within_quality_targets": result.within_quality_targets,
         "scale": result.scale,
         "domain": None,
         "boundaries": [],
         "layer_fronts": (result.analysis.get("layers") or {}).get("fronts", []),
+        "sharp_feature_cavities": result.analysis.get("sharp_feature_cavities"),
+        "acceptance": result.analysis.get("acceptance"),
+        "quality_failures": [
+            failure.described() for failure in result.quality_failures
+        ],
         "singularities": [],
         "separatrix_graph": None,
         "count_components": [],
@@ -139,6 +148,15 @@ def compare(first, second) -> dict:
     """Before and after scores of two runs of the same case."""
     return {
         "resolved": {"before": first.resolved, "after": second.resolved},
+        "admissible": {"before": first.admissible, "after": second.admissible},
+        "topology_valid": {
+            "before": first.topology_valid,
+            "after": second.topology_valid,
+        },
+        "sharp_feature_repairs": {
+            "before": len(first.cavity.applied) if first.cavity else None,
+            "after": len(second.cavity.applied) if second.cavity else None,
+        },
         "blocks": {
             "before": len(first.graph.faces) if first.graph else None,
             "after": len(second.graph.faces) if second.graph else None,
@@ -158,6 +176,20 @@ def compare(first, second) -> dict:
     }
 
 
+def _unresolved_cavity(result):
+    """The point of the first sharp-feature cavity that was not repaired."""
+    repair = getattr(result, "cavity", None)
+    if repair is None:
+        return None
+    for record in repair.cavities:
+        if record.get("applied") or record.get("kept_existing"):
+            continue
+        cavity = record.get("cavity") or {}
+        if cavity.get("point"):
+            return cavity["point"]
+    return None
+
+
 def focus(result, *, block: str | None = None, point=None, radius: float | None = None):
     """Bounds and contents of a small diagnostic window around a bad region."""
     centre = None
@@ -166,6 +198,8 @@ def focus(result, *, block: str | None = None, point=None, radius: float | None 
     elif block is not None and result.graph is not None:
         index = int(block[1:]) if block.startswith("b") else int(block)
         centre = np.mean(result.graph.corner_points(result.graph.faces[index]), axis=0)
+    elif _unresolved_cavity(result) is not None:
+        centre = np.asarray(_unresolved_cavity(result), dtype=np.float64)
     elif result.grid is not None and result.grid.maximum_skewness is not None:
         centre = np.asarray(result.grid.maximum_skewness.point)
     elif result.failures:

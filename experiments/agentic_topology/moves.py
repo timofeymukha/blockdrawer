@@ -85,66 +85,77 @@ def index_balance(changes: dict) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def feature_fan_moves(result, *, minimum_corner: float = 135.0) -> list[Move]:
-    """Boundary vertices whose fluid sector is shared by too few blocks."""
-    graph = result.graph
-    if graph is None:
+def feature_fan_moves(result) -> list[Move]:
+    """The cavity alternatives the sharp-feature stage actually validated.
+
+    These are not proposals: every one has been constructed on a copy of the
+    graph and checked against the cavity boundary, the unaffected graph, the
+    supplied body geometry, the Euler and index budget and the cell-count
+    components.  An accepted move can be applied; a rejected one carries the
+    exact reason it cannot.
+    """
+    repair = getattr(result, "cavity", None)
+    if repair is None:
         return []
-    boundary = graph.boundary_vertices()
-    faces = graph.face_counts()
-    angles = fluid_angles(graph)
     moves: list[Move] = []
-    for key in sorted(boundary, key=str):
-        count = faces.get(key, 0)
-        total = angles.get(key, 0.0)
-        if count < 1:
-            continue
-        average = total / count
-        if average < minimum_corner:
-            continue
-        wanted = max(count + 1, int(round(total / 110.0)))
-        implemented = wanted == 3 and count == 2
-        vertex = graph.vertices[key]
-        changes = {
-            "boundary_vertex": 2 - wanted - (2 - count),
-            "new_interior_vertices": wanted,
-        }
-        changes = {
-            "wall_vertex": -(wanted - count),
-            "fan_interior_vertices": (wanted - count) + 2,
-            "neighbour_front_vertices": -2,
-        }
-        moves.append(
-            Move(
-                f"feature_fan:{_label(key)}",
-                "wall_feature_fan",
-                {
-                    "vertex": list(key),
-                    "point": [float(vertex.point[0]), float(vertex.point[1])],
-                    "fluid_angle_degrees": total,
-                    "incident_faces": count,
-                    "mean_corner_degrees": average,
-                    "wanted_sectors": wanted,
-                },
-                (
-                    f"the fluid sector at this wall feature is {total:.1f} degrees "
-                    f"shared by {count} block(s); {wanted} sectors would give "
-                    f"{total / wanted:.1f} degree corners"
+    for record in repair.cavities:
+        feature = tuple(record["feature"])
+        label = _label(feature)
+        applied = record.get("applied")
+        for candidate in record.get("candidates", []):
+            template = candidate["template"]
+            accepted = bool(candidate["accepted"])
+            identifier = f"fan_cavity:{label}:{template}"
+            changes = {
+                "wall_vertex": 2 - candidate["sectors"] - (
+                    2 - record["incident_faces"]
                 ),
-                changes,
-                index_balance(changes),
-                complexity=3,
-                implemented=implemented,
-                score=(average - 90.0) / 90.0,
-                rejection=(
-                    None
-                    if implemented
-                    else "only the three-sector contained fan is constructed in "
-                    "this iteration"
-                ),
-                option_delta={"layer.fan_enabled": True},
+                "cavity_interior_vertices": len(candidate["new_vertices"]),
+                "balance_checked_on_the_whole_graph": 0,
+            }
+            balanced = (
+                candidate.get("index_sum_before") is None
+                or candidate.get("index_sum_before")
+                == candidate.get("index_sum_after")
             )
-        )
+            moves.append(
+                Move(
+                    identifier,
+                    "wall_feature_cavity",
+                    {
+                        "vertex": list(feature),
+                        "point": record.get("cavity", {}).get("point"),
+                        "fluid_angle_degrees": record["fluid_angle_degrees"],
+                        "incident_faces": record["incident_faces"],
+                        "template": template,
+                        "sectors": candidate["sectors"],
+                        "faces": candidate["faces"],
+                        "opened_because": record.get("opened_because"),
+                        "currently_applied": identifier == applied,
+                    },
+                    (
+                        f"replace the {record['incident_faces']}-block cavity at "
+                        f"this {record['fluid_angle_degrees']:.0f} degree wall "
+                        f"feature with the {template} construction "
+                        f"({candidate['sectors']} sectors, "
+                        f"{candidate['faces']} faces)"
+                    ),
+                    changes,
+                    balanced,
+                    complexity=max(0, candidate["faces"] - record["incident_faces"]),
+                    implemented=accepted,
+                    score=float(candidate["score"] or 0.0),
+                    rejection=(
+                        None
+                        if accepted
+                        else "; ".join(
+                            str(item.get("reason")) for item in
+                            candidate["rejections"][:3]
+                        )
+                    ),
+                    option_delta={"cavity.choices": [[label, template]]},
+                )
+            )
     return moves
 
 
@@ -392,6 +403,14 @@ def apply(options, move: Move):
             forced_splits=tuple(updated.forced_splits)
             + tuple(tuple(item) for item in forced),
         )
+    choices = delta.pop("cavity.choices", None)
+    if choices:
+        inner = dataclasses.replace(
+            updated.cavity,
+            choices=tuple(updated.cavity.choices)
+            + tuple(tuple(item) for item in choices),
+        )
+        updated = dataclasses.replace(updated, cavity=inner)
     for path, value in delta.items():
         section, _, field_name = path.partition(".")
         if not field_name:

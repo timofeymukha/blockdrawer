@@ -39,6 +39,7 @@ except ImportError:  # pragma: no cover
 
 import agent_ops  # noqa: E402
 import analysis_plot  # noqa: E402
+import fan_cavity  # noqa: E402
 import layers as layer_module  # noqa: E402
 import pipeline  # noqa: E402
 import session_emit  # noqa: E402
@@ -97,7 +98,26 @@ def add_input_arguments(parser: argparse.ArgumentParser) -> None:
         "--no-layers", action="store_true", help="build the core without wall bands"
     )
     parser.add_argument(
-        "--no-fans", action="store_true", help="never propose a wall-feature fan"
+        "--no-cavity-repair",
+        "--no-fans",
+        dest="no_cavity_repair",
+        action="store_true",
+        help="leave every sharp-feature cavity exactly as the producer built it",
+    )
+    parser.add_argument(
+        "--cavity-choice",
+        action="append",
+        default=[],
+        metavar="FEATURE=TEMPLATE",
+        help="force one cavity template, for example gate_0_anchor_24=seam",
+    )
+    parser.add_argument(
+        "--allow-count-coupling",
+        action="store_true",
+        help=(
+            "permit a cavity replacement that merges a tangential and a normal "
+            "cell-count component inside a boundary layer"
+        ),
     )
     parser.add_argument(
         "--no-grid-quality",
@@ -123,6 +143,12 @@ def build_options(arguments) -> pipeline.PipelineOptions:
     for item in arguments.split:
         cell, _, cut = item.partition(":")
         forced.append((int(cell), int(cut)))
+    choices = []
+    for item in getattr(arguments, "cavity_choice", []):
+        feature, _, template = item.partition("=")
+        if not template:
+            raise SystemExit("--cavity-choice takes FEATURE=TEMPLATE")
+        choices.append((feature, template))
     return pipeline.PipelineOptions(
         grid_width=arguments.width,
         farfield_scale=arguments.farfield_scale,
@@ -136,7 +162,11 @@ def build_options(arguments) -> pipeline.PipelineOptions:
         layer=layer_module.LayerOptions(
             enabled=not arguments.no_layers,
             clearance_fraction=arguments.clearance_fraction,
-            fan_enabled=not arguments.no_fans,
+        ),
+        cavity=fan_cavity.CavityOptions(
+            enabled=not arguments.no_cavity_repair,
+            allow_count_coupling=arguments.allow_count_coupling,
+            choices=tuple(choices),
         ),
         sizing=sizing.SizingOptions(
             first_width_ratio=arguments.first_width_ratio,
@@ -174,7 +204,7 @@ def write_artifacts(result, arguments) -> list[Path]:
     if getattr(arguments, "output", None):
         canvas = analysis_plot.render_result(result, arguments.plot_width)
         written.append(canvas.save(arguments.output))
-    if result.resolved and getattr(arguments, "session", None):
+    if result.admissible and getattr(arguments, "session", None):
         destination = session_emit.write_session(result.model, arguments.session)
         reloaded = session_emit.round_trip(destination)
         analysis["session"]["path"] = str(destination)
@@ -205,8 +235,13 @@ def write_artifacts(result, arguments) -> list[Path]:
             )
     elif getattr(arguments, "session", None):
         analysis["session_not_written"] = (
-            "unresolved regions remain; no partial session is written"
+            "the topology is not a mesh - it is crossed, uncovered, or has an "
+            "inverted sampled cell - so no partial session is written"
         )
+    if result.admissible and not result.within_quality_targets:
+        analysis.setdefault("session", {})["below_quality_targets"] = [
+            failure.described() for failure in result.quality_failures
+        ]
     if getattr(arguments, "json", None):
         arguments.json.parent.mkdir(parents=True, exist_ok=True)
         arguments.json.write_text(
@@ -241,21 +276,77 @@ def command_run(arguments) -> int:
             result.grid.inverted_cells if result.grid else "-",
         )
     )
-    if not result.resolved:
+    print(
+        "topology_valid=%s untangled=%s within_quality_targets=%s admissible=%s"
+        % (
+            result.topology_valid,
+            result.untangled,
+            result.within_quality_targets,
+            result.admissible,
+        )
+    )
+    if not result.topology_valid or not result.untangled:
         for error in result.errors:
             print(f"{error['stage']} stage failed: {error['error']}", file=sys.stderr)
         for failure in result.failures:
             print(f"unresolved: {failure.get('reason', failure)}", file=sys.stderr)
         for problem in result.problems[:5]:
             print(f"graph problem: {problem}", file=sys.stderr)
+        for record in _unresolved_cavities(result):
+            print(
+                "unresolved cavity at %s: %s (needs a different %s)"
+                % (
+                    record["feature"],
+                    str(record.get("rejection"))[:160],
+                    record.get("needs") or "placement",
+                ),
+                file=sys.stderr,
+            )
         return 1
-    return 0
+    for failure in result.quality_failures:
+        described = failure.described()
+        print(
+            "below target: %s = %.4g, limit %.4g (%s) at %s"
+            % (
+                described["metric"],
+                described["observed"],
+                described["limit"],
+                described["comparison"],
+                described["block"] or "-",
+            ),
+            file=sys.stderr,
+        )
+    return 0 if result.resolved else 1
+
+
+def _unresolved_cavities(result) -> list:
+    repair = getattr(result, "cavity", None)
+    if repair is None:
+        return []
+    return [
+        record
+        for record in repair.cavities
+        if record.get("applied") is None and not record.get("kept_existing")
+    ]
 
 
 def command_describe(arguments) -> int:
     result = run_case(arguments)
     print(json.dumps(agent_ops.describe(result), indent=2, default=_encode))
     return 0 if result.resolved else 1
+
+
+def command_cavities(arguments) -> int:
+    """Every sharp-feature cavity with its validated alternatives."""
+    result = run_case(arguments)
+    report = {
+        "acceptance": (result.analysis.get("acceptance") or {}),
+        "cavities": (
+            {} if result.cavity is None else fan_cavity.described(result.cavity)
+        ),
+    }
+    print(json.dumps(report, indent=2, default=_encode))
+    return 0 if not _unresolved_cavities(result) else 1
 
 
 def command_candidates(arguments) -> int:
@@ -332,6 +423,12 @@ def build_parser() -> argparse.ArgumentParser:
     describe = sub.add_parser("describe", help="agent-facing description of a run")
     add_input_arguments(describe)
     describe.set_defaults(handler=command_describe)
+
+    cavities = sub.add_parser(
+        "cavities", help="sharp-feature cavities and their validated alternatives"
+    )
+    add_input_arguments(cavities)
+    cavities.set_defaults(handler=command_cavities)
 
     candidates = sub.add_parser("candidates", help="ranked candidate topology moves")
     add_input_arguments(candidates)

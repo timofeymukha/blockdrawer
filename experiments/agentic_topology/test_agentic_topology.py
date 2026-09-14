@@ -9,6 +9,8 @@ than milliseconds.  Run them with::
 
 from __future__ import annotations
 
+import argparse
+import dataclasses
 import math
 import sys
 import tempfile
@@ -29,6 +31,7 @@ except ImportError:  # pragma: no cover - research dependency
 import agent_ops
 import block_layout
 import external_topology
+import fan_cavity
 import geometry2d as g2
 import grid_quality
 import layers as layer_module
@@ -50,16 +53,40 @@ FAST = pipeline.PipelineOptions(
     sizing=sizing.SizingOptions(first_width_ratio=4.0e-3, core_size_ratio=6.0e-2),
 )
 QUICK_CASES = ("single_ellipse", "two_circles", "concave_and_convex", "four_bodies")
+# The cavity fixtures keep the default sizing: a deliberately narrow gap cannot
+# hold the coarse first-cell width the other quick cases use.
+CAVITY_FAST = pipeline.PipelineOptions(grid_width=420, coverage_samples=240)
 
 
-def run_case(name: str, options=None) -> pipeline.PipelineResult:
-    names, loops = cases.CASES[name]()
-    return pipeline.run_external(names, loops, options or FAST)
+# Several tests read the same run from different angles, and a run costs
+# seconds.  The cache is keyed by the case and the complete options, so a test
+# that changes an option still gets its own run; ``fresh`` opts out for the one
+# test that mutates the result it is given.
+_RUNS: dict = {}
 
 
-def run_internal(name: str, options=None) -> pipeline.PipelineResult:
-    domain = pdm.from_internal_case(cases.INTERNAL_CASES[name]())
-    return pipeline.run_internal(domain, options or FAST)
+def run_case(name: str, options=None, *, fresh: bool = False):
+    settings = options or FAST
+    key = ("external", name, repr(settings))
+    if fresh or key not in _RUNS:
+        names, loops = cases.CASES[name]()
+        result = pipeline.run_external(names, loops, settings)
+        if fresh:
+            return result
+        _RUNS[key] = result
+    return _RUNS[key]
+
+
+def run_internal(name: str, options=None, *, fresh: bool = False):
+    settings = options or FAST
+    key = ("internal", name, repr(settings))
+    if fresh or key not in _RUNS:
+        domain = pdm.from_internal_case(cases.INTERNAL_CASES[name]())
+        result = pipeline.run_internal(domain, settings)
+        if fresh:
+            return result
+        _RUNS[key] = result
+    return _RUNS[key]
 
 
 # ---------------------------------------------------------------------------
@@ -279,7 +306,7 @@ class SweepTests(unittest.TestCase):
 
     def test_periodic_hill_builds_bands_a_core_and_a_cyclic_pair(self):
         result = run_internal("periodic_hill")
-        self.assertTrue(result.resolved, result.failures or result.problems)
+        self.assertTrue(result.admissible, result.failures or result.problems)
         self.assertTrue(result.four_sided.periodic)
         self.assertTrue(
             np.allclose(np.abs(result.four_sided.translation), [9.0, 0.0])
@@ -372,7 +399,13 @@ class SweepTests(unittest.TestCase):
         for label, case in variants.items():
             with self.subTest(variant=label):
                 result = pipeline.run_internal(pdm.from_internal_case(case), FAST)
-                self.assertTrue(result.resolved, result.failures or result.problems)
+                self.assertTrue(
+                    result.admissible, result.failures or result.problems
+                )
+                self.assertEqual(
+                    result.within_quality_targets,
+                    reference.within_quality_targets,
+                )
                 self.assertEqual(
                     session_emit.topology_signature(result.model), signature
                 )
@@ -440,11 +473,11 @@ class LayerTests(unittest.TestCase):
     def test_a_sharp_tip_gets_a_seam_with_three_incident_blocks(self):
         names, loops = cases.sharp_bodies()
         result = pipeline.run_external(names, loops, FAST)
-        self.assertTrue(result.resolved, result.failures or result.problems)
+        self.assertTrue(result.admissible, result.failures or result.problems)
         seams = [
             record
             for record in result.assembly.seams
-            if record.get("applied", True)
+            if record.get("wedge_is_convex", True)
         ]
         self.assertTrue(seams, result.assembly.seams)
         graph = result.graph
@@ -581,7 +614,7 @@ class SizingTests(unittest.TestCase):
             ),
         )
         result = pipeline.run_external(names, loops, options)
-        self.assertTrue(result.resolved, result.failures or result.problems)
+        self.assertTrue(result.admissible, result.failures or result.problems)
         self.assertLessEqual(result.counts.total_cells, 700)
         self.assertLess(result.counts.budget_factor, 1.0)
 
@@ -679,14 +712,14 @@ class SessionTests(unittest.TestCase):
 
     def test_external_session_round_trip_render_and_export(self):
         result = run_case("two_circles")
-        self.assertTrue(result.resolved)
+        self.assertTrue(result.admissible)
         self._round_trip(result)
 
     def test_internal_session_round_trip_render_and_export(self):
         from blockdrawer.foam import block_mesh_dict
 
         result = run_internal("periodic_hill")
-        self.assertTrue(result.resolved, result.failures or result.problems)
+        self.assertTrue(result.admissible, result.failures or result.problems)
         reloaded = self._round_trip(result)
         text = block_mesh_dict(reloaded)
         self.assertIn("cyclic", text)
@@ -732,12 +765,22 @@ class SessionTests(unittest.TestCase):
 
 class SyntheticCaseTests(unittest.TestCase):
     def test_every_quick_case_produces_a_valid_topology(self):
+        # ``admissible`` - valid topology and no folded cell - is the claim a
+        # construction test can make.  Whether a case also meets every declared
+        # quality target is a separate, stricter statement (``resolved``) that
+        # these coarse research settings deliberately do not promise.
         for name in QUICK_CASES:
             with self.subTest(case=name):
                 result = run_case(name)
                 self.assertTrue(
-                    result.resolved,
+                    result.admissible,
                     (result.errors, result.failures, result.problems[:2]),
+                )
+                self.assertTrue(result.topology_valid)
+                self.assertTrue(result.untangled)
+                self.assertEqual(
+                    result.resolved,
+                    result.within_quality_targets,
                 )
                 self.assertEqual(result.coverage["uncovered_samples"], 0)
                 self.assertEqual(result.coverage["overlapping_samples"], 0)
@@ -757,7 +800,7 @@ class SyntheticCaseTests(unittest.TestCase):
     def test_body_counts_are_not_assumed(self):
         for name in ("single_ellipse", "two_circles", "four_bodies"):
             result = run_case(name)
-            self.assertTrue(result.resolved)
+            self.assertTrue(result.admissible)
             self.assertEqual(
                 len(result.analysis["domain"]["chains"]),
                 result.domain.hole_count + 1,
@@ -771,7 +814,7 @@ class InvarianceTests(unittest.TestCase):
 
     def _signature(self, names, loops):
         result = pipeline.run_external(names, loops, FAST)
-        self.assertTrue(result.resolved, result.failures or result.problems)
+        self.assertTrue(result.admissible, result.failures or result.problems)
         return session_emit.topology_signature(result.model), result
 
     def test_component_permutation(self):
@@ -815,7 +858,8 @@ class InvarianceTests(unittest.TestCase):
 
 class DiagnosticTests(unittest.TestCase):
     def test_coverage_sees_a_removed_block(self):
-        result = run_case("two_circles")
+        # This one mutates what it is given, so it must not share a cached run.
+        result = run_case("two_circles", fresh=True)
         result.graph.faces.pop()
         coverage = pg.coverage(result.graph, result.domain, samples=240)
         self.assertGreater(coverage["uncovered_samples"], 0)
@@ -946,3 +990,725 @@ class PeriodicHillGeometryTests(unittest.TestCase):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+
+# ---------------------------------------------------------------------------
+# Sharp-feature cavities
+# ---------------------------------------------------------------------------
+#
+# The fixture is a hand-built four-row strip of quadrilaterals whose bottom
+# wall carries a spike.  It is deliberately not a pipeline case: a cavity
+# operation has to be testable on an arbitrary patch graph, and a fixture whose
+# every coordinate is written down here cannot accidentally encode anything
+# about a particular aerofoil.
+
+CUSP_COLUMNS = (-2.0, -1.0, 0.0, 1.0, 2.0)
+CUSP_ROWS = (1.4, 2.6, 3.6)
+
+
+def cusp_rows(*, spike: float = 1.2, front: float = 1.28, ring_dip: float = 0.0):
+    """Wall, front, ring and top rows of the cusp strip."""
+    wall = [(x, spike if index == 2 else 0.0) for index, x in enumerate(CUSP_COLUMNS)]
+    layer = [
+        (x, front if index == 2 else CUSP_ROWS[0])
+        for index, x in enumerate(CUSP_COLUMNS)
+    ]
+    ring = [
+        (x, CUSP_ROWS[1] - (ring_dip if index == 2 else 0.0))
+        for index, x in enumerate(CUSP_COLUMNS)
+    ]
+    top = [(x, CUSP_ROWS[2]) for x in CUSP_COLUMNS]
+    return [wall, layer, ring, top]
+
+
+def cusp_strip(
+    *,
+    spike: float = 1.2,
+    front: float = 1.28,
+    ring_dip: float = 0.0,
+    translate=(0.0, 0.0),
+    rotate: float = 0.0,
+    scale: float = 1.0,
+    reverse: bool = False,
+):
+    """A patch graph and matching domain with one sharp wall feature.
+
+    ``reverse`` mirrors the column order, which is the graph-level equivalent
+    of handing the same geometry in the opposite direction.
+    """
+    rows = cusp_rows(spike=spike, front=front, ring_dip=ring_dip)
+    if reverse:
+        rows = [list(reversed(row)) for row in rows]
+
+    def place(point):
+        x, y = float(point[0]) * scale, float(point[1]) * scale
+        cosine, sine = math.cos(rotate), math.sin(rotate)
+        return (
+            cosine * x - sine * y + translate[0],
+            sine * x + cosine * y + translate[1],
+        )
+
+    columns = len(rows[0])
+    graph = pg.PatchGraph(euler_characteristic=1)
+    keys = []
+    for row_index, row in enumerate(rows):
+        line = []
+        for column, point in enumerate(row):
+            key = ("node", row_index, column)
+            graph.add_vertex(key, place(point))
+            line.append(key)
+        keys.append(line)
+    for row_index in range(len(rows)):
+        name = "wall" if row_index == 0 else ("top" if row_index == 3 else None)
+        role = "wall" if row_index == 0 else ("ring" if row_index >= 2 else "front")
+        for column in range(columns - 1):
+            first, second = keys[row_index][column], keys[row_index][column + 1]
+            graph.add_edge(
+                first,
+                second,
+                path=np.asarray(
+                    [graph.vertices[first].point, graph.vertices[second].point]
+                ),
+                boundary=name,
+                role=role,
+                provenance="cusp strip",
+            )
+    for row_index in range(len(rows) - 1):
+        for column in range(columns):
+            name = (
+                "inlet"
+                if column == 0
+                else ("outlet" if column == columns - 1 else None)
+            )
+            first, second = keys[row_index][column], keys[row_index + 1][column]
+            graph.add_edge(
+                first,
+                second,
+                path=np.asarray(
+                    [graph.vertices[first].point, graph.vertices[second].point]
+                ),
+                boundary=name,
+                role="layer_spoke" if row_index == 0 else "core_spoke",
+                provenance="cusp strip",
+            )
+    for row_index in range(len(rows) - 1):
+        for column in range(columns - 1):
+            graph.add_face(
+                (
+                    keys[row_index][column],
+                    keys[row_index][column + 1],
+                    keys[row_index + 1][column + 1],
+                    keys[row_index + 1][column],
+                ),
+                role="layer" if row_index == 0 else "core",
+                provenance="cusp strip",
+            )
+    points = [[place(item) for item in row] for row in rows]
+    domain = pdm.from_chains(
+        "cusp strip",
+        [
+            pdm.Chain("wall", "wall", points[0]),
+            pdm.Chain("outlet", "outlet", [row[-1] for row in points]),
+            pdm.Chain("top", "symmetry", list(reversed(points[-1]))),
+            pdm.Chain("inlet", "inlet", [row[0] for row in reversed(points)]),
+        ],
+    )
+    return graph, domain
+
+
+def cusp_cavity(graph, options=None):
+    """The cavity at the strip's spike, with its validation context."""
+    settings = options or fan_cavity.CavityOptions()
+    feature = fan_cavity.feature_corners(graph, settings)[0]["vertex"]
+    cavity, reason = fan_cavity.build_cavity(
+        graph, feature, depth=settings.growth_depth
+    )
+    if cavity is None:  # pragma: no cover - the fixture is built to have one
+        raise AssertionError(reason)
+    return cavity, fan_cavity.build_context(graph, cavity, None, settings)
+
+
+class SegmentRelationTests(unittest.TestCase):
+    """Every forbidden relation is classified, at any place and size."""
+
+    RELATIONS = {
+        "proper_crossing": (((0, 0), (1, 0)), ((0.5, -0.5), (0.5, 0.5))),
+        "near_endpoint_crossing": (((0, 0), (1, 0)), ((0.002, -0.4), (0.002, 0.4))),
+        "t_junction": (((0, 0), (1, 0)), ((0.4, 0.0), (0.4, 0.7))),
+        "collinear_overlap": (((0, 0), (1, 0)), ((0.5, 0), (1.5, 0))),
+        "touch": (((0, 0), (1, 0)), ((1, 0), (1.6, 0.8))),
+        "disjoint": (((0, 0), (1, 0)), ((2, 1), (3, 2))),
+    }
+    EXPECTED = {
+        "proper_crossing": g2.PROPER_CROSSING,
+        "near_endpoint_crossing": g2.PROPER_CROSSING,
+        "t_junction": g2.T_JUNCTION,
+        "collinear_overlap": g2.COLLINEAR_OVERLAP,
+        "touch": g2.TOUCH,
+        "disjoint": g2.DISJOINT,
+    }
+
+    @staticmethod
+    def place(points, translate, rotate, scale):
+        rotation = np.asarray(
+            [
+                [math.cos(rotate), -math.sin(rotate)],
+                [math.sin(rotate), math.cos(rotate)],
+            ]
+        )
+        array = np.asarray(points, dtype=np.float64) * scale
+        return array @ rotation.T + np.asarray(translate, dtype=np.float64)
+
+    def test_relations_survive_translation_rotation_and_scaling(self):
+        for label, (first, second) in self.RELATIONS.items():
+            for translate in ((0.0, 0.0), (-317.25, 88.5)):
+                for rotate in (0.0, 0.7, math.pi / 2, 2.9):
+                    for scale in (1.0, 1.0e-3, 1.0e4):
+                        with self.subTest(
+                            relation=label,
+                            translate=translate,
+                            rotate=rotate,
+                            scale=scale,
+                        ):
+                            a = self.place(first, translate, rotate, scale)
+                            b = self.place(second, translate, rotate, scale)
+                            found = g2.segment_relation(
+                                a[0], a[1], b[0], b[1], tolerance=1.0e-9 * scale
+                            )
+                            self.assertEqual(found["kind"], self.EXPECTED[label])
+
+    def test_a_shared_vertex_is_the_only_legitimate_contact(self):
+        square = np.asarray(
+            [[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]], dtype=np.float64
+        )
+        spoke = np.asarray([[1.0, 0.0], [2.0, 0.0]], dtype=np.float64)
+        self.assertEqual(
+            g2.path_conflicts(
+                square, spoke, tolerance=1e-9, shared=[(1.0, 0.0)]
+            ),
+            [],
+        )
+        undeclared = g2.path_conflicts(square, spoke, tolerance=1e-9)
+        self.assertTrue(undeclared)
+        self.assertEqual(undeclared[0]["kind"], g2.UNEXPECTED_TOUCH)
+
+    def test_edges_sharing_a_vertex_are_still_checked_against_each_other(self):
+        graph = pg.PatchGraph(euler_characteristic=1)
+        graph.add_vertex(("a",), (0.0, 0.0))
+        graph.add_vertex(("b",), (1.0, 0.0))
+        graph.add_vertex(("c",), (2.0, 0.0))
+        graph.add_edge(("a",), ("b",), path=[[0.0, 0.0], [1.0, 0.0]])
+        graph.add_edge(("a",), ("c",), path=[[0.0, 0.0], [2.0, 0.0]])
+        kinds = {item["kind"] for item in graph._crossing_problems()}
+        self.assertIn("overlapping_edges", kinds)
+
+
+class CavityTests(unittest.TestCase):
+    def test_the_fixture_is_a_valid_graph_with_one_sharp_feature(self):
+        graph, _domain = cusp_strip()
+        self.assertEqual(graph.problems(), [])
+        self.assertEqual(graph.euler(), 1)
+        self.assertEqual(graph.total_index(), 4)
+        features = fan_cavity.feature_corners(graph, fan_cavity.CavityOptions())
+        self.assertEqual(len(features), 1)
+        self.assertAlmostEqual(features[0]["fluid_angle"], 280.4, places=1)
+
+    def test_the_cavity_is_the_octagon_incidence_says_it_is(self):
+        graph, _domain = cusp_strip()
+        cavity, _context = cusp_cavity(graph)
+        self.assertEqual(cavity.size, 8)
+        self.assertEqual(len(cavity.faces), 4)
+        self.assertEqual(cavity.boundary[0], ("node", 0, 2))
+        self.assertEqual(cavity.interior, (("node", 1, 2),))
+        self.assertTrue(cavity.has_layer)
+
+    def test_a_candidate_that_leaves_the_cavity_is_rejected_before_mutation(self):
+        """Rejection names both entities and changes nothing."""
+        graph, _domain = cusp_strip()
+        before = graph.summary()
+        options = fan_cavity.CavityOptions()
+        cavity, context = cusp_cavity(graph, options)
+        frame = fan_cavity.build_frame(graph, cavity)
+        template = next(
+            item
+            for item in fan_cavity.templates(options, cavity.size)
+            if item.name == "band"
+        )
+        # A front vertex tucked against one wall side: the edge from it to the
+        # front vertex on the other side has to pass through the spike.
+        faces, vertices, roles = fan_cavity.resolve(
+            template, cavity, {"mid": frame.ray(0.06, 0.25)}
+        )
+        candidate = fan_cavity.Candidate(
+            "probe", "band", 2, cavity.depth, {}, new_vertices=vertices,
+            faces=faces, edge_roles=roles, face_count=len(faces),
+        )
+        rejections = fan_cavity.validate(candidate, context, options)
+        crossings = [
+            item for item in rejections if item["reason"].startswith("proper_crossing")
+        ]
+        self.assertTrue(crossings, [item["reason"] for item in rejections])
+        self.assertEqual(len(crossings[0]["entities"]), 2)
+        self.assertIsNotNone(crossings[0]["point"])
+        self.assertFalse(candidate.valid)
+        self.assertEqual(graph.summary(), before)
+
+    def test_a_detour_that_crosses_an_unaffected_edge_is_rejected(self):
+        """The check reaches past the cavity to the rest of the graph."""
+        graph, _domain = cusp_strip()
+        options = fan_cavity.CavityOptions()
+        cavity, context = cusp_cavity(graph, options)
+        frame = fan_cavity.build_frame(graph, cavity)
+        template = next(
+            item
+            for item in fan_cavity.templates(options, cavity.size)
+            if item.name == "band"
+        )
+        faces, vertices, roles = fan_cavity.resolve(
+            template, cavity, {"mid": frame.ray(0.5, 0.5)}
+        )
+        key = pg.PatchGraph.edge_key(("node", 0, 2), ("cavity", "mid", "node", 0, 2))
+        spoke = np.asarray(
+            [
+                graph.vertices[("node", 0, 2)].point,
+                # a deliberate detour out through the left neighbour's band
+                graph.vertices[("node", 0, 0)].point
+                + np.asarray([0.0, 0.7]),
+                list(vertices.values())[0],
+            ]
+        )
+        candidate = fan_cavity.Candidate(
+            "detour", "band", 2, cavity.depth, {}, new_vertices=vertices,
+            faces=faces, edge_roles=roles,
+            edge_paths={key: spoke if key[0] == ("node", 0, 2) else spoke[::-1]},
+            face_count=len(faces),
+        )
+        rejections = fan_cavity.validate(candidate, context, options)
+        reasons = {item["reason"] for item in rejections}
+        self.assertTrue(
+            any(reason.endswith("_with_graph_edge") for reason in reasons), reasons
+        )
+
+    def test_local_quality_alone_would_choose_a_crossing_candidate(self):
+        """The applied candidate is not the locally best-looking one."""
+        graph, _domain = cusp_strip()
+        options = fan_cavity.CavityOptions()
+        cavity, context = cusp_cavity(graph, options)
+        frame = fan_cavity.build_frame(graph, cavity)
+        template = next(
+            item
+            for item in fan_cavity.templates(options, cavity.size)
+            if item.name == "band"
+        )
+
+        def build(points, paths=None):
+            faces, vertices, roles = fan_cavity.resolve(template, cavity, points)
+            candidate = fan_cavity.Candidate(
+                "probe", "band", 2, cavity.depth, {}, new_vertices=vertices,
+                faces=faces, edge_roles=roles, edge_paths=paths or {},
+                face_count=len(faces),
+            )
+            placed = {
+                **{key: graph.vertices[key].point for key in cavity.boundary},
+                **vertices,
+            }
+            local = min(
+                fan_cavity.face_quality(
+                    np.asarray([placed[key] for key in corners])[::-1]
+                    if g2.polygon_area(
+                        np.asarray([placed[key] for key in corners])
+                    ) < 0.0
+                    else np.asarray([placed[key] for key in corners])
+                )
+                for corners in faces
+            )
+            fan_cavity.validate(candidate, context, options)
+            return candidate, local
+
+        # The same placement, once honestly and once with one spoke routed out
+        # through the neighbouring band.  Both have the same four faces, so a
+        # four-corner measure cannot tell them apart at all.
+        points = {"mid": frame.ray(0.5, 0.5)}
+        honest, honest_quality = build(points)
+        key = pg.PatchGraph.edge_key(("node", 0, 2), ("cavity", "mid", "node", 0, 2))
+        detour = np.asarray(
+            [
+                graph.vertices[("node", 0, 2)].point,
+                graph.vertices[("node", 0, 0)].point + np.asarray([0.0, 0.7]),
+                points["mid"],
+            ]
+        )
+        crossing, crossing_quality = build(points, {key: detour})
+        self.assertAlmostEqual(honest_quality, crossing_quality, places=12)
+        self.assertTrue(honest.valid)
+        self.assertFalse(crossing.valid)
+        # And the stage really does apply a globally valid one.
+        result = fan_cavity.repair(graph, None, options=options)
+        self.assertTrue(result.applied)
+        self.assertEqual(result.graph.problems(), [])
+
+    def test_an_accepted_cavity_preserves_euler_and_index(self):
+        """The replacement is a valid planar topology and a valid session."""
+        graph, domain = cusp_strip()
+        options = fan_cavity.CavityOptions()
+        result = fan_cavity.repair(graph, domain, options=options)
+        self.assertEqual(len(result.applied), 1)
+        after = result.graph
+        self.assertEqual(after.problems(), [])
+        self.assertEqual(after.euler(), graph.euler())
+        self.assertEqual(after.total_index(), graph.total_index())
+        self.assertGreater(len(after.faces), len(graph.faces))
+        record = result.applied[0]
+        self.assertEqual(record["index_sum_before"], record["index_sum_after"])
+        metric = sizing.SizeMetric(
+            sizing.SizingOptions(), domain.scale,
+            [chain.points for chain in domain.wall_chains()],
+        )
+        counts = sizing.assign_counts(after, metric, sizing.SizingOptions())
+        model, _identifiers, _refused = session_emit.build_model_from_graph(
+            after, domain, counts=counts.counts, reference_curves=False
+        )
+        model.validate()
+        self.assertEqual(len(model.blocks), len(after.faces))
+
+    def test_rejection_is_atomic_and_the_stage_is_deterministic(self):
+        """Two runs agree, and a refused cavity leaves the graph alone."""
+        first, _domain = cusp_strip()
+        second, _other = cusp_strip()
+        options = fan_cavity.CavityOptions()
+        one = fan_cavity.repair(first, None, options=options)
+        two = fan_cavity.repair(second, None, options=options)
+        self.assertEqual(one.graph.summary(), two.graph.summary())
+        self.assertEqual(
+            [record["applied"] for record in one.cavities],
+            [record["applied"] for record in two.cavities],
+        )
+        # Only the copy is ever written to.
+        self.assertEqual(len(first.faces), 12)
+        # A cavity with no admissible alternative changes nothing at all.
+        blocked = fan_cavity.CavityOptions(
+            choices=(("node_0_2", "through_fan3"),), minimum_quality=0.9
+        )
+        graph, _ = cusp_strip()
+        before = graph.summary()
+        refused = fan_cavity.repair(graph, None, options=blocked)
+        self.assertEqual(refused.applied, [])
+        self.assertEqual(refused.graph.summary(), before)
+        self.assertTrue(refused.cavities[0]["candidates"])
+
+    def test_two_nearby_features_cannot_consume_the_same_faces(self):
+        """The second cavity is refused, and the result is still valid."""
+        result = run_case("narrow_gap_tip", CAVITY_FAST)
+        records = result.cavity.cavities
+        self.assertGreaterEqual(len(records), 2)
+        applied = [item for item in records if item.get("applied")]
+        self.assertEqual(len(applied), 1)
+        # Every other feature in reach of the one that was rewritten is
+        # refused, and says which of the two reasons refused it.
+        refused = [item for item in records if not item.get("applied")]
+        self.assertTrue(refused)
+        for item in refused:
+            self.assertTrue(item.get("rejection"))
+            self.assertTrue(
+                "already rewritten" in item["rejection"]
+                or "removed the reason" in item["rejection"]
+                or "improves on the construction" in item["rejection"],
+                item["rejection"],
+            )
+        self.assertEqual(result.problems, [])
+        self.assertTrue(result.topology_valid)
+
+    def test_the_cavity_stage_repairs_what_it_is_there_for(self):
+        """Without it the narrow-gap fixture is not a valid topology."""
+        names, loops = cases.narrow_gap_tip()
+        without = pipeline.run_external(
+            names,
+            loops,
+            dataclasses.replace(
+                CAVITY_FAST, cavity=fan_cavity.CavityOptions(enabled=False)
+            ),
+        )
+        self.assertFalse(without.topology_valid)
+        self.assertTrue(
+            any(item["kind"] == "non_convex_face" for item in without.problems)
+        )
+        with_stage = run_case("narrow_gap_tip", CAVITY_FAST)
+        self.assertTrue(with_stage.topology_valid)
+        self.assertTrue(with_stage.untangled)
+
+    def test_a_candidate_is_equivalent_under_rigid_motion_and_scaling(self):
+        """Same template, same parameters, same score."""
+        reference, _domain = cusp_strip()
+        options = fan_cavity.CavityOptions()
+        base = fan_cavity.repair(reference, None, options=options)
+        variants = {
+            "translated": {"translate": (13.0, -4.0)},
+            "rotated": {"rotate": math.radians(23.0)},
+            "scaled": {"scale": 250.0},
+            "reversed": {"reverse": True},
+            "all_of_them": {
+                "translate": (-9.0, 6.5),
+                "rotate": math.radians(-71.0),
+                "scale": 0.004,
+                "reverse": True,
+            },
+        }
+        expected = base.cavities[0]
+        for label, kwargs in variants.items():
+            with self.subTest(variant=label):
+                graph, _other = cusp_strip(**kwargs)
+                result = fan_cavity.repair(graph, None, options=options)
+                record = result.cavities[0]
+                self.assertEqual(
+                    record["applied_template"], expected["applied_template"]
+                )
+                self.assertEqual(
+                    len(result.graph.faces), len(base.graph.faces)
+                )
+                chosen = next(
+                    item
+                    for item in record["candidates"]
+                    if item["template"] == record["applied_template"]
+                )
+                reference_choice = next(
+                    item
+                    for item in expected["candidates"]
+                    if item["template"] == expected["applied_template"]
+                )
+                self.assertAlmostEqual(
+                    chosen["score"], reference_choice["score"], places=6
+                )
+                for name, value in reference_choice["parameters"].items():
+                    self.assertAlmostEqual(
+                        chosen["parameters"][name], value, places=6
+                    )
+
+    def test_a_fan_that_merges_the_count_components_is_refused_in_a_band(self):
+        """The structural reason a contained fan is not a boundary layer."""
+        graph, _domain = cusp_strip()
+        options = fan_cavity.CavityOptions(choices=(("node_0_2", "fan3"),))
+        result = fan_cavity.repair(graph, None, options=options)
+        record = result.cavities[0]
+        self.assertIsNone(record["applied"])
+        reasons = {
+            item.get("reason")
+            for candidate in record["candidates"]
+            for item in candidate["rejections"]
+        }
+        self.assertIn("count_component_coupling", reasons)
+        allowed = fan_cavity.CavityOptions(
+            choices=(("node_0_2", "fan3"),), allow_count_coupling=True
+        )
+        other, _ = cusp_strip()
+        permitted = fan_cavity.repair(other, None, options=allowed)
+        fan = permitted.cavities[0]["candidates"][0]
+        self.assertEqual(fan["template"], "fan3")
+        self.assertTrue(fan["accepted"])
+        self.assertEqual(fan["rejections"], [])
+
+    def test_a_tangled_cavity_is_reported_rather_than_filled(self):
+        graph, _domain = cusp_strip(ring_dip=2.0)
+        cavity, reason = fan_cavity.build_cavity(
+            graph, ("node", 0, 2), depth=2
+        )
+        self.assertIsNone(cavity)
+        self.assertIn("not simple", reason)
+
+
+# ---------------------------------------------------------------------------
+# Truthful acceptance
+# ---------------------------------------------------------------------------
+
+
+class AcceptanceTests(unittest.TestCase):
+    """What the report claims is what was measured."""
+
+    def sample_report(self, **limits):
+        result = run_case("two_circles")
+        return grid_quality.evaluate(
+            result.model,
+            options=grid_quality.GridOptions(**limits),
+            layer_blocks=result.layer_blocks,
+            first_width=result.metric.first,
+        ), result
+
+    def test_each_declared_limit_fails_on_its_own(self):
+        result = run_case("two_circles")
+        loose = dict(
+            max_non_orthogonality=None,
+            max_skewness=None,
+            max_aspect_ratio=None,
+            max_interface_ratio=None,
+            max_wall_misalignment=None,
+            max_first_width_error=None,
+        )
+
+        def report(**overrides):
+            return grid_quality.evaluate(
+                result.model,
+                options=grid_quality.GridOptions(**{**loose, **overrides}),
+                layer_blocks=result.layer_blocks,
+                first_width=result.metric.first,
+            )
+
+        everything_off = report()
+        self.assertTrue(everything_off.within_quality_targets)
+        self.assertEqual(everything_off.quality_failures, [])
+        self.assertEqual(
+            everything_off.limits.described()["max_skewness"], "disabled"
+        )
+        observed = {
+            "max_non_orthogonality": (
+                "maximum_non_orthogonality_degrees",
+                everything_off.maximum_non_orthogonality.value,
+            ),
+            "max_skewness": (
+                "maximum_equiangle_skewness",
+                everything_off.maximum_skewness.value,
+            ),
+            "max_aspect_ratio": (
+                "maximum_aspect_ratio_unintended",
+                everything_off.maximum_aspect_ratio.value,
+            ),
+            "max_wall_misalignment": (
+                "maximum_wall_misalignment_degrees",
+                everything_off.maximum_wall_misalignment.value,
+            ),
+            "max_first_width_error": (
+                "maximum_first_cell_width_error",
+                everything_off.maximum_first_width_error.value,
+            ),
+            "max_interface_ratio": (
+                "maximum_interface_size_ratio",
+                float(everything_off.interface["maximum_size_ratio"]),
+            ),
+        }
+        for field_name, (metric, value) in observed.items():
+            with self.subTest(limit=field_name):
+                limit = 0.5 * value if value > 0.0 else -1.0
+                only = report(**{field_name: limit})
+                self.assertFalse(only.within_quality_targets)
+                self.assertEqual(len(only.quality_failures), 1)
+                failure = only.quality_failures[0].described()
+                self.assertEqual(failure["metric"], metric)
+                self.assertAlmostEqual(failure["observed"], value, places=9)
+                self.assertAlmostEqual(failure["limit"], limit, places=9)
+                self.assertEqual(failure["comparison"], "at_most")
+                self.assertGreater(failure["severity"], 0.0)
+                # Passing it is equally decisive.
+                generous = report(**{field_name: 4.0 * max(value, 1.0)})
+                self.assertTrue(generous.within_quality_targets)
+
+    def test_admissible_is_topology_and_tangling_only(self):
+        report, result = self.sample_report(max_skewness=-1.0)
+        self.assertFalse(report.within_quality_targets)
+        self.assertTrue(report.untangled)
+        self.assertTrue(report.admissible)
+        described = report.described()
+        self.assertTrue(described["admissible"])
+        self.assertFalse(described["within_quality_targets"])
+        self.assertEqual(described["limits"]["max_skewness"], -1.0)
+        invalid = grid_quality.evaluate(
+            result.model,
+            layer_blocks=result.layer_blocks,
+            topology_valid=False,
+        )
+        self.assertFalse(invalid.admissible)
+        self.assertTrue(invalid.untangled)
+
+    def test_the_periodic_hill_states_the_targets_it_misses(self):
+        """Valid and untangled, and explicit about the rest."""
+        result = run_internal("periodic_hill")
+        self.assertTrue(result.topology_valid)
+        self.assertTrue(result.untangled)
+        self.assertTrue(result.admissible)
+        self.assertEqual(result.grid.inverted_cells, 0)
+        self.assertFalse(result.within_quality_targets)
+        self.assertFalse(result.resolved)
+        missed = {
+            failure.described()["metric"] for failure in result.quality_failures
+        }
+        # The two the README records; the coarse research sizing used here can
+        # add more, and every one of them has to be a real overshoot.
+        self.assertLessEqual(
+            {"maximum_interface_size_ratio", "maximum_first_cell_width_error"},
+            missed,
+        )
+        self.assertNotIn("maximum_equiangle_skewness", missed)
+        self.assertNotIn("maximum_non_orthogonality_degrees", missed)
+        for failure in result.quality_failures:
+            described = failure.described()
+            self.assertGreater(described["observed"], described["limit"])
+        self.assertEqual(
+            result.analysis["acceptance"]["within_quality_targets"], False
+        )
+        self.assertEqual(result.analysis["acceptance"]["admissible"], True)
+
+    def test_a_below_target_candidate_is_still_written_out(self):
+        """The documented session and exit policy, both ways round."""
+        import research_cli
+
+        result = run_internal("periodic_hill")
+        self.assertTrue(result.admissible)
+        self.assertFalse(result.resolved)
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            arguments = argparse.Namespace(
+                session=root / "nested" / "session.json",
+                json=root / "nested" / "analysis.json",
+                output=None,
+                session_render=None,
+                block_mesh_dict=root / "nested" / "blockMeshDict",
+                plot_width=400,
+            )
+            written = research_cli.write_artifacts(result, arguments)
+            self.assertIn(arguments.session, written)
+            self.assertIn(arguments.block_mesh_dict, written)
+            self.assertTrue(arguments.session.exists())
+            self.assertNotIn("session_not_written", result.analysis)
+            below = result.analysis["session"]["below_quality_targets"]
+            self.assertTrue(below)
+            self.assertTrue(all(item["observed"] > item["limit"] for item in below))
+
+        broken = run_internal("periodic_hill", fresh=True)
+        broken.problems.append({"kind": "crossing_edges", "edges": []})
+        self.assertFalse(broken.topology_valid)
+        self.assertFalse(broken.admissible)
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            arguments = argparse.Namespace(
+                session=root / "session.json",
+                json=None,
+                output=None,
+                session_render=None,
+                block_mesh_dict=None,
+                plot_width=400,
+            )
+            written = research_cli.write_artifacts(broken, arguments)
+            self.assertEqual(written, [])
+            self.assertFalse((root / "session.json").exists())
+            self.assertIn("session_not_written", broken.analysis)
+
+    def test_the_cavity_stage_is_visible_to_an_agent(self):
+        """Candidates and their rejections reach the move vocabulary."""
+        result = run_case("narrow_gap_tip", CAVITY_FAST)
+        report = agent_ops.candidate_report(result)
+        cavity_moves = [
+            item
+            for item in report["candidates"]
+            if item["kind"] == "wall_feature_cavity"
+        ]
+        self.assertTrue(cavity_moves)
+        self.assertTrue(any(item["implemented"] for item in cavity_moves))
+        refused = [item for item in cavity_moves if not item["implemented"]]
+        self.assertTrue(all(item["rejection"] for item in refused))
+        chosen = next(item for item in cavity_moves if item["implemented"])
+        self.assertIn("cavity.choices", chosen["option_delta"])
+        move = agent_ops.find_move(result, chosen["id"])
+        options = move_module.apply(result.options, move)
+        self.assertTrue(options.cavity.choices)
+        described = result.analysis["sharp_feature_cavities"]
+        self.assertTrue(described["cavities"])
+        for record in described["cavities"]:
+            self.assertIn("opened_because", record)
+            self.assertIn("fluid_angle_degrees", record)

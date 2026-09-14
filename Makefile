@@ -1,4 +1,5 @@
-.PHONY: run test integration-test check research-test research-30p30n \n        research-periodic-hill
+.PHONY: run test integration-test check research-test research-30p30n \
+        research-periodic-hill research-cases
 
 PYTHON ?= python3
 OPENFOAM_IMAGE ?= /tmp/timofey/code/openfoam-apptainer/openfoam-2606.sif
@@ -27,6 +28,17 @@ research-periodic-hill:
 		--session $(RESEARCH_OUTPUT)/periodic-hill-session.json \
 		--session-render $(RESEARCH_OUTPUT)/periodic-hill-session.png \
 		--block-mesh-dict $(RESEARCH_OUTPUT)/periodic-hill-blockMeshDict
+
+# Every synthetic fixture, including the sharp-feature cavity regression
+# case.  A case that cannot be built still writes its report.
+research-cases:
+	for case in single_ellipse two_circles three_rotated_ellipses \
+	            concave_and_convex four_bodies sharp_bodies \
+	            narrow_gap_tip straight_channel periodic_hill; do \
+	    $(PYTHON) $(RESEARCH)/research_cli.py run --case $$case \
+	        --json $(RESEARCH_OUTPUT)/$$case.json \
+	        --output $(RESEARCH_OUTPUT)/$$case.png || true; \
+	done
 
 research-30p30n:
 	$(PYTHON) $(RESEARCH)/fetch_30p30n.py

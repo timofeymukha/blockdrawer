@@ -24,6 +24,7 @@ import numpy as np
 
 import block_layout
 import external_topology
+import fan_cavity
 import geometry2d as g2
 import grid_quality
 import layers as layer_module
@@ -63,6 +64,9 @@ class PipelineOptions:
     sweep: sweep_module.SweepOptions = field(
         default_factory=sweep_module.SweepOptions
     )
+    cavity: fan_cavity.CavityOptions = field(
+        default_factory=fan_cavity.CavityOptions
+    )
     grid: grid_quality.GridOptions = field(default_factory=grid_quality.GridOptions)
 
 
@@ -82,6 +86,7 @@ class PipelineResult:
     correspondence: object | None = None
     sweep_result: object | None = None
     assembly: object | None = None
+    cavity: object | None = None
     graph: pg.PatchGraph | None = None
     metric: sizing.SizeMetric | None = None
     counts: sizing.CountAssignment | None = None
@@ -97,12 +102,18 @@ class PipelineResult:
 
     @property
     def layer_blocks(self) -> set[str]:
+        """Session block ids of the deliberately anisotropic near-wall blocks.
+
+        Derived from the face order rather than from a stored face key, because
+        the cavity stage removes and appends faces.
+        """
         if self.graph is None:
             return set()
-        source = getattr(self.assembly, "layer_faces", None)
-        if source is None:
-            source = getattr(self.sweep_result, "layer_faces", set())
-        return {f"b{key[1]}" for key in source}
+        return {
+            f"b{index}"
+            for index, face in enumerate(self.graph.faces)
+            if face.role == "layer"
+        }
 
     @property
     def covered(self) -> bool:
@@ -114,15 +125,54 @@ class PipelineResult:
         )
 
     @property
-    def resolved(self) -> bool:
+    def topology_valid(self) -> bool:
+        """The patch graph is planar, covers the fluid, and became a session.
+
+        This is the weakest useful statement: incidence and boundary cycles are
+        sound, no edge crosses another, the faces tile the domain exactly, the
+        periodic correspondence is reciprocal, and ``MeshModel.validate()``
+        accepted the result.  It says nothing about quality.
+        """
         return bool(
             not self.errors
             and not self.failures
             and not self.problems
             and self.model is not None
             and self.covered
-            and (self.grid is None or self.grid.admissible)
         )
+
+    @property
+    def untangled(self) -> bool:
+        """No sampled transfinite cell is inverted."""
+        if not self.topology_valid:
+            return False
+        return self.grid is None or self.grid.untangled
+
+    @property
+    def within_quality_targets(self) -> bool:
+        """Every enabled limit in ``options.grid`` is met."""
+        if self.grid is None:
+            return self.topology_valid
+        return self.grid.within_quality_targets
+
+    @property
+    def admissible(self) -> bool:
+        """Valid topology and no folded cell: a session may be written.
+
+        Deliberately weaker than ``resolved``.  A research candidate that is a
+        real mesh but misses a declared quality target is still worth writing
+        out and looking at; one that is tangled, crossed or uncovered is not.
+        """
+        return self.topology_valid and self.untangled
+
+    @property
+    def resolved(self) -> bool:
+        """Admissible *and* within every declared quality target."""
+        return self.admissible and self.within_quality_targets
+
+    @property
+    def quality_failures(self) -> list:
+        return [] if self.grid is None else list(self.grid.quality_failures)
 
 
 def _describe(error: BaseException) -> str:
@@ -334,6 +384,17 @@ def _metric(domain: pdm.PlanarDomain, settings: PipelineOptions) -> sizing.SizeM
 
 def _finish(result: PipelineResult, settings: PipelineOptions) -> None:
     if result.graph is not None:
+        # Sharp wall features are repaired the same way whichever producer
+        # wrote the graph: the cavity stage only reads incidence, provenance
+        # and geometry.
+        try:
+            repair = fan_cavity.repair(
+                result.graph, result.domain, options=settings.cavity
+            )
+            result.cavity = repair
+            result.graph = repair.graph
+        except Exception as error:  # pragma: no cover - reported, not raised
+            result.errors.append({"stage": "fan_cavity", "error": _describe(error)})
         result.problems.extend(
             result.graph.problems(check_geometry=settings.check_edge_crossings)
         )
@@ -373,6 +434,7 @@ def _finish(result: PipelineResult, settings: PipelineOptions) -> None:
                 options=settings.grid,
                 layer_blocks=result.layer_blocks,
                 first_width=result.metric.first if result.metric else None,
+                topology_valid=result.topology_valid,
             )
         except Exception as error:  # pragma: no cover - reported, not raised
             result.errors.append({"stage": "grid_quality", "error": _describe(error)})
@@ -429,6 +491,17 @@ def build_analysis(result: PipelineResult) -> dict:
         "singularities": singularities(result),
         "quality": None,
         "session": None,
+        "sharp_feature_cavities": (
+            None if result.cavity is None else fan_cavity.described(result.cavity)
+        ),
+        "acceptance": {
+            "topology_valid": result.topology_valid,
+            "untangled": result.untangled,
+            "within_quality_targets": result.within_quality_targets,
+            "admissible": result.admissible,
+            "resolved": result.resolved,
+            "definitions": ACCEPTANCE_TERMS,
+        },
         "resolved": result.resolved,
     }
     if domain is not None:
@@ -499,7 +572,43 @@ def build_analysis(result: PipelineResult) -> dict:
     return analysis
 
 
+ACCEPTANCE_TERMS = {
+    "topology_valid": (
+        "patch-graph incidence, planarity, domain coverage and periodic "
+        "compatibility all hold and MeshModel.validate() accepted the session"
+    ),
+    "untangled": "no sampled transfinite cell is inverted",
+    "within_quality_targets": (
+        "every enabled limit in the GridOptions the report carries is met"
+    ),
+    "admissible": (
+        "topology_valid and untangled: a real mesh, so a session is written "
+        "for inspection even when it misses a quality target"
+    ),
+    "resolved": "admissible and within_quality_targets",
+}
+
+
+# Emitted into every JSON report.  Keep this in step with the "Remaining
+# limits" section of the research README; it is the same list, shorter.
 LIMITATIONS = [
+    "The layer front and the medial scaffold are not reconciled: a front is "
+    "capped at a third of the gate-to-ring distance at each gate but at nine "
+    "tenths of the distance to the ring between gates, so a curved front can "
+    "bulge past a straight core spoke. Tightening the interior cap was "
+    "measured and is worse.",
+    "A band can still collapse onto its own wall at a sharp feature, because "
+    "the neighbouring stations are slope-limited down from the floor and a "
+    "cusp's stations are very close together in arc length.",
+    "The through-cut cavity template is constructed for three sectors only. "
+    "More sectors need a transition strip between the sector chain and the "
+    "core boundary, which this stage reports rather than builds.",
+    "A fan that stops at the layer front merges the wall-tangential and "
+    "wall-normal cell-count components of its whole chain, so it is refused "
+    "inside a boundary-layer band rather than silently degrading the grading.",
+    "A cavity replacement straightens the interior front edges of the two band "
+    "intervals beside the feature it repairs; the supplied wall point list is "
+    "untouched because it lies on the cavity boundary.",
     "The medial core is still one annulus per body: a cell whose ring has "
     "several disjoint components is reported, not decomposed.",
     "A band block's first cell follows the local band thickness, so the "
@@ -507,9 +616,8 @@ LIMITATIONS = [
     "Core spokes and sweep ribs are straight; no interior guide curve is "
     "fitted to a separatrix yet.",
     "Cross-field separatrix production and a global quantisation solver are "
-    "not implemented; counts come from equality components only.",
-    "The wall-feature fan is implemented for three sectors; a feature that "
-    "wants more is reported rather than built.",
+    "not implemented; counts come from equality components only, which is why "
+    "neighbouring components can disagree at an interface.",
 ]
 
 
@@ -598,7 +706,20 @@ def _layer_section(result: PipelineResult) -> dict | None:
         "requested_height": result.metric.layer_height if result.metric else None,
         "fronts": fronts,
         "sharp_feature_seams": assembly.seams,
-        "feature_fans": assembly.fans,
+        "sharp_feature_repairs": (
+            []
+            if result.cavity is None
+            else [
+                {
+                    "feature": record["feature"],
+                    "template": record.get("applied_template"),
+                    "fluid_angle_degrees": record["fluid_angle_degrees"],
+                    "replaced_faces": record.get("replaced_faces"),
+                    "new_faces": record.get("new_faces"),
+                }
+                for record in result.cavity.applied
+            ]
+        ),
         "notes": assembly.notes,
         "failures": assembly.failures,
     }

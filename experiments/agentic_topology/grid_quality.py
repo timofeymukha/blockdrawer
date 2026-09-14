@@ -22,17 +22,98 @@ from blockdrawer import quality as bd_quality
 from blockdrawer.domain import edge_key
 
 
+# Every declared limit is an upper bound on a measured quantity.  ``None``
+# disables one deliberately: it is then reported as disabled, contributes no
+# failure, and is never silently replaced by a huge magic number.
+LIMIT_FIELDS = (
+    ("max_non_orthogonality", "maximum_non_orthogonality_degrees"),
+    ("max_skewness", "maximum_equiangle_skewness"),
+    ("max_aspect_ratio", "maximum_aspect_ratio_unintended"),
+    ("max_interface_ratio", "maximum_interface_size_ratio"),
+    ("max_wall_misalignment", "maximum_wall_misalignment_degrees"),
+    ("max_first_width_error", "maximum_first_cell_width_error"),
+)
+
+
 @dataclass(frozen=True)
 class GridOptions:
-    """Acceptance limits; all are dimensionless or in degrees."""
+    """Acceptance limits; all are dimensionless or in degrees.
 
-    max_non_orthogonality: float = 70.0
-    max_skewness: float = 0.85
-    max_aspect_ratio: float = 100.0
-    max_interface_ratio: float = 2.5
-    max_wall_misalignment: float = 25.0
-    max_first_width_error: float = 0.25
+    ``None`` disables a limit.  A disabled limit is recorded as such in the
+    report so a reader can tell "this was not checked" from "this passed".
+    """
+
+    max_non_orthogonality: float | None = 70.0
+    max_skewness: float | None = 0.85
+    max_aspect_ratio: float | None = 100.0
+    max_interface_ratio: float | None = 2.5
+    max_wall_misalignment: float | None = 25.0
+    max_first_width_error: float | None = 0.25
     node_budget: int = 4_000_000
+
+    def limits(self) -> "GridLimits":
+        return GridLimits(
+            **{name: getattr(self, name) for name, _key in LIMIT_FIELDS}
+        )
+
+
+@dataclass(frozen=True)
+class GridLimits:
+    """An immutable copy of the limits a report was actually judged against.
+
+    A report carries this so it can never be compared against different
+    defaults later; ``GridReport.within_quality_targets`` means "within *these*
+    limits" and nothing else.
+    """
+
+    max_non_orthogonality: float | None = None
+    max_skewness: float | None = None
+    max_aspect_ratio: float | None = None
+    max_interface_ratio: float | None = None
+    max_wall_misalignment: float | None = None
+    max_first_width_error: float | None = None
+
+    def described(self) -> dict:
+        return {
+            name: ("disabled" if getattr(self, name) is None else getattr(self, name))
+            for name, _key in LIMIT_FIELDS
+        }
+
+
+@dataclass(frozen=True)
+class QualityFailure:
+    """One declared limit that the measured grid does not meet.
+
+    ``severity`` is the fractional overshoot ``observed / limit - 1`` so
+    failures of different metrics can be ordered against each other; a limit of
+    zero reports the observed value itself.
+    """
+
+    metric: str
+    observed: float
+    limit: float
+    comparison: str = "at_most"
+    block: str | None = None
+    logical_index: list | None = None
+    point: list | None = None
+
+    @property
+    def severity(self) -> float:
+        if self.limit > 0.0:
+            return float(self.observed / self.limit - 1.0)
+        return float(self.observed)
+
+    def described(self) -> dict:
+        return {
+            "metric": self.metric,
+            "observed": float(self.observed),
+            "limit": float(self.limit),
+            "comparison": self.comparison,
+            "severity": self.severity,
+            "block": self.block,
+            "logical_index": self.logical_index,
+            "point": self.point,
+        }
 
 
 @dataclass
@@ -68,10 +149,33 @@ class GridReport:
     interface: dict = field(default_factory=dict)
     corner_quality: dict = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
+    limits: GridLimits = field(default_factory=GridLimits)
+    quality_failures: list[QualityFailure] = field(default_factory=list)
+    topology_valid: bool = True
+
+    @property
+    def untangled(self) -> bool:
+        """No sampled cell is inverted and the worst one still has area."""
+        if self.inverted_cells:
+            return False
+        extreme = self.minimum_scaled_jacobian
+        return extreme is None or extreme.value > 0.0
+
+    @property
+    def within_quality_targets(self) -> bool:
+        """Every *enabled* declared limit in ``self.limits`` is met."""
+        return not self.quality_failures
 
     @property
     def admissible(self) -> bool:
-        return self.inverted_cells == 0
+        """The grid is a real mesh: valid topology and no folded cell.
+
+        Admissible deliberately does **not** mean good.  It is the condition
+        under which a session may be written for inspection; meeting the
+        declared quality targets is the separate, stricter
+        ``within_quality_targets``.
+        """
+        return self.topology_valid and self.untangled
 
     def described(self) -> dict:
         def value(extreme):
@@ -80,7 +184,17 @@ class GridReport:
         return {
             "sampled_cells": self.sampled_cells,
             "inverted_cells": self.inverted_cells,
+            "topology_valid": self.topology_valid,
+            "untangled": self.untangled,
+            "within_quality_targets": self.within_quality_targets,
             "admissible": self.admissible,
+            "limits": self.limits.described(),
+            "quality_failures": [
+                failure.described()
+                for failure in sorted(
+                    self.quality_failures, key=lambda item: -item.severity
+                )
+            ],
             "minimum_scaled_jacobian": value(self.minimum_scaled_jacobian),
             "minimum_angle_degrees": value(self.minimum_angle),
             "maximum_angle_degrees": value(self.maximum_angle),
@@ -209,8 +323,14 @@ def evaluate(
     options: GridOptions | None = None,
     layer_blocks: set[str] | None = None,
     first_width: float | None = None,
+    topology_valid: bool = True,
 ) -> GridReport:
-    """Measure every sampled cell of every block."""
+    """Measure every sampled cell of every block.
+
+    ``topology_valid`` is supplied by the caller because this module only sees
+    a ``MeshModel``: whether the patch graph it came from was planar, covered
+    the domain and had compatible periodic patches is known one level up.
+    """
     limits = options or GridOptions()
     layers = layer_blocks or set()
     total_nodes = 0
@@ -309,11 +429,7 @@ def evaluate(
                     wall[usable][None, :],
                     largest=True,
                 )
-        rows, columns = np.nonzero(
-            (metrics["non_orthogonality"] > limits.max_non_orthogonality)
-            | (metrics["skewness"] > limits.max_skewness)
-            | bad
-        )
+        rows, columns = np.nonzero(_worst_mask(metrics, limits) | bad)
         for row, column in list(zip(rows.tolist(), columns.tolist()))[:4]:
             worst_records.append(
                 (
@@ -370,10 +486,72 @@ def evaluate(
         },
         summary,
         warnings,
+        limits.limits(),
+        [],
+        bool(topology_valid),
     )
+    report.quality_failures = _quality_failures(report, limits)
     if inverted:
         report.warnings.append(f"{inverted} sampled cells are inverted")
     return report
+
+
+def _worst_mask(metrics: dict, limits: GridOptions) -> np.ndarray:
+    """Cells that already breach an enabled limit, for the worst-cell list."""
+    mask = np.zeros(metrics["skewness"].shape, dtype=bool)
+    if limits.max_non_orthogonality is not None:
+        mask |= metrics["non_orthogonality"] > limits.max_non_orthogonality
+    if limits.max_skewness is not None:
+        mask |= metrics["skewness"] > limits.max_skewness
+    return mask
+
+
+def _quality_failures(report: GridReport, limits: GridOptions):
+    """One record per enabled limit the measured grid does not meet."""
+    observed: dict[str, CellExtreme | None] = {
+        "max_non_orthogonality": report.maximum_non_orthogonality,
+        "max_skewness": report.maximum_skewness,
+        "max_aspect_ratio": report.maximum_aspect_ratio,
+        "max_wall_misalignment": report.maximum_wall_misalignment,
+        "max_first_width_error": report.maximum_first_width_error,
+    }
+    failures: list[QualityFailure] = []
+    for name, key in LIMIT_FIELDS:
+        limit = getattr(limits, name)
+        if limit is None:
+            continue
+        if name == "max_interface_ratio":
+            value = report.interface.get("maximum_size_ratio")
+            if value is None or float(value) <= limit:
+                continue
+            worst = (report.interface.get("worst") or [{}])[0]
+            failures.append(
+                QualityFailure(
+                    key,
+                    float(value),
+                    float(limit),
+                    "at_most",
+                    block=", ".join(worst.get("blocks", [])) or None,
+                    point=None,
+                    logical_index=None,
+                )
+            )
+            continue
+        extreme = observed.get(name)
+        if extreme is None or extreme.value <= limit:
+            continue
+        failures.append(
+            QualityFailure(
+                key,
+                float(extreme.value),
+                float(limit),
+                "at_most",
+                block=extreme.block,
+                logical_index=[int(extreme.index[0]), int(extreme.index[1])],
+                point=[float(extreme.point[0]), float(extreme.point[1])],
+            )
+        )
+    return failures
 
 
 def compare(reference: dict, candidate: dict) -> dict:
@@ -402,5 +580,18 @@ def compare(reference: dict, candidate: dict) -> dict:
     result["warning_count"] = {
         "baseline": (reference.get("block_corner_quality") or {}).get("warning_count"),
         "candidate": (candidate.get("block_corner_quality") or {}).get("warning_count"),
+    }
+    for flag in ("untangled", "within_quality_targets", "admissible"):
+        result[flag] = {
+            "baseline": reference.get(flag),
+            "candidate": candidate.get(flag),
+        }
+    result["quality_failures"] = {
+        "baseline": [
+            item.get("metric") for item in reference.get("quality_failures", [])
+        ],
+        "candidate": [
+            item.get("metric") for item in candidate.get("quality_failures", [])
+        ],
     }
     return result

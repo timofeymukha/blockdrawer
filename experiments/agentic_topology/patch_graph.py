@@ -23,6 +23,13 @@ import geometry2d as g2
 
 VertexKey = tuple
 
+# Two points closer than this fraction of the graph diagonal are the same
+# point.  Everything geometric here is compared against a length derived
+# from it, never against a bare epsilon.
+TOUCH_RATIO = 1.0e-9
+# An edge shorter than this fraction of the graph diagonal has collapsed.
+DEGENERATE_RATIO = 1.0e-7
+
 
 class GraphError(RuntimeError):
     """Raised when a patch graph is asked for something structurally impossible."""
@@ -102,6 +109,9 @@ class PatchGraph:
     faces: list[PGFace] = field(default_factory=list)
     periodic_vertices: dict[VertexKey, VertexKey] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
+    # Face keys must stay unique for the lifetime of a graph, including
+    # across removals, so a counter issues them instead of the face count.
+    face_counter: int = 0
 
     # -- construction ------------------------------------------------------
 
@@ -162,14 +172,90 @@ class PatchGraph:
         points = np.asarray([self.vertices[item].point for item in ordered])
         if g2.polygon_area(points) < 0.0:
             ordered = tuple(reversed(ordered))
-        face = PGFace(
-            key if key is not None else ("face", len(self.faces)),
-            ordered,
-            role,
-            provenance,
-        )
+        if key is None:
+            key = ("face", self.face_counter)
+            self.face_counter += 1
+        face = PGFace(key, ordered, role, provenance)
         self.faces.append(face)
         return face
+
+    # -- scale, copying and surgery ---------------------------------------
+
+    def scale(self) -> float:
+        """Diagonal of the vertex bounding box; the natural length unit here."""
+        if not self.vertices:
+            return 1.0
+        points = np.asarray([vertex.point for vertex in self.vertices.values()])
+        span = np.max(points, axis=0) - np.min(points, axis=0)
+        value = float(math.hypot(float(span[0]), float(span[1])))
+        return value if value > 0.0 else 1.0
+
+    def tolerance(self, ratio: float = TOUCH_RATIO) -> float:
+        """Length below which two points count as the same point."""
+        return float(ratio) * self.scale()
+
+    def copy(self) -> "PatchGraph":
+        """An independent graph; mutating the copy cannot touch the original."""
+        clone = PatchGraph(euler_characteristic=self.euler_characteristic)
+        for key, vertex in self.vertices.items():
+            clone.vertices[key] = PGVertex(
+                key, vertex.point.copy(), vertex.constraint, vertex.provenance
+            )
+        for key, edge in self.edges.items():
+            clone.edges[key] = PGEdge(
+                key,
+                edge.kind,
+                tuple(edge.points),
+                edge.path.copy(),
+                edge.boundary,
+                edge.role,
+                edge.provenance,
+            )
+        clone.faces = [
+            PGFace(face.key, face.corners, face.role, face.provenance)
+            for face in self.faces
+        ]
+        clone.periodic_vertices = dict(self.periodic_vertices)
+        clone.notes = list(self.notes)
+        clone.face_counter = self.face_counter
+        return clone
+
+    def remove_faces(self, keys) -> list[PGFace]:
+        """Drop faces by key and return them, leaving edges and vertices alone."""
+        wanted = {tuple(key) for key in keys}
+        removed = [face for face in self.faces if tuple(face.key) in wanted]
+        self.faces = [face for face in self.faces if tuple(face.key) not in wanted]
+        return removed
+
+    def unused_entities(self, *, keep_edges=(), keep_vertices=()):
+        """Edges and vertices no remaining face refers to."""
+        protected_edges = {tuple(key) for key in keep_edges}
+        protected_vertices = set(keep_vertices)
+        live_edges: set[tuple] = set()
+        live_vertices: set = set()
+        for face in self.faces:
+            live_vertices.update(face.corners)
+            live_edges.update(self.face_edges(face))
+        edges = [
+            key
+            for key in self.edges
+            if key not in live_edges and key not in protected_edges
+        ]
+        vertices = [
+            key
+            for key in self.vertices
+            if key not in live_vertices and key not in protected_vertices
+        ]
+        return edges, vertices
+
+    def discard(self, edges=(), vertices=()) -> None:
+        for key in edges:
+            self.edges.pop(tuple(key), None)
+        for key in vertices:
+            self.vertices.pop(key, None)
+            partner = self.periodic_vertices.pop(key, None)
+            if partner is not None:
+                self.periodic_vertices.pop(partner, None)
 
     # -- queries -----------------------------------------------------------
 
@@ -275,7 +361,12 @@ class PatchGraph:
 
     # -- validation --------------------------------------------------------
 
-    def problems(self, *, check_geometry: bool = True) -> list[dict]:
+    def problems(
+        self,
+        *,
+        check_geometry: bool = True,
+        tolerance_ratio: float = TOUCH_RATIO,
+    ) -> list[dict]:
         found: list[dict] = []
         incidence: dict[tuple, list[int]] = {}
         for index, face in enumerate(self.faces):
@@ -371,8 +462,9 @@ class PatchGraph:
             )
         found.extend(self._boundary_cycle_problems(incidence))
         found.extend(self._periodic_problems())
+        found.extend(self._degenerate_edge_problems(tolerance_ratio))
         if check_geometry:
-            found.extend(self._crossing_problems())
+            found.extend(self._crossing_problems(tolerance_ratio))
         return found
 
     def _boundary_cycle_problems(self, incidence) -> list[dict]:
@@ -414,7 +506,40 @@ class PatchGraph:
                 )
         return found
 
-    def _crossing_problems(self) -> list[dict]:
+    CONFLICT_PROBLEM_KINDS = {
+        g2.PROPER_CROSSING: "crossing_edges",
+        g2.T_JUNCTION: "t_junction_edges",
+        g2.COLLINEAR_OVERLAP: "overlapping_edges",
+        g2.UNEXPECTED_TOUCH: "touching_edges",
+        g2.DEGENERATE_SEGMENT: "degenerate_edge_segment",
+    }
+
+    def _degenerate_edge_problems(self, ratio: float) -> list[dict]:
+        limit = DEGENERATE_RATIO * self.scale()
+        found = []
+        for key, edge in sorted(self.edges.items(), key=str):
+            if edge.length > limit:
+                continue
+            found.append(
+                {
+                    "kind": "degenerate_edge",
+                    "edge": [list(key[0]), list(key[1])],
+                    "length": float(edge.length),
+                    "limit": float(limit),
+                    "role": edge.role,
+                }
+            )
+        return found
+
+    def _crossing_problems(self, ratio: float = TOUCH_RATIO) -> list[dict]:
+        """Every forbidden geometric relation between two distinct edges.
+
+        Edges that share a vertex are *not* skipped: two edges leaving the same
+        vertex can still overlap, and an edge can still pass through a vertex
+        another edge merely ends at.  Their shared vertices are declared as the
+        only points where touching is legitimate instead.
+        """
+        tolerance = self.tolerance(ratio)
         keys = list(self.edges)
         boxes = []
         for key in keys:
@@ -430,26 +555,54 @@ class PatchGraph:
         found = []
         for first in range(len(keys)):
             for second in range(first + 1, len(keys)):
-                if set(keys[first]) & set(keys[second]):
-                    continue
                 a = boxes[first]
                 b = boxes[second]
-                if a[2] < b[0] or b[2] < a[0] or a[3] < b[1] or b[3] < a[1]:
-                    continue
-                if g2.paths_cross(
-                    self.edges[keys[first]].path, self.edges[keys[second]].path
+                if (
+                    a[2] + tolerance < b[0]
+                    or b[2] + tolerance < a[0]
+                    or a[3] + tolerance < b[1]
+                    or b[3] + tolerance < a[1]
                 ):
+                    continue
+                shared = [
+                    self.vertices[key].point
+                    for key in set(keys[first]) & set(keys[second])
+                    if key in self.vertices
+                ]
+                conflicts = g2.path_conflicts(
+                    self.edges[keys[first]].path,
+                    self.edges[keys[second]].path,
+                    tolerance=tolerance,
+                    shared=shared,
+                    limit=1,
+                )
+                for conflict in conflicts:
                     found.append(
                         {
-                            "kind": "crossing_edges",
+                            "kind": self.CONFLICT_PROBLEM_KINDS.get(
+                                conflict["kind"], "edge_conflict"
+                            ),
+                            "relation": conflict["kind"],
                             "edges": [
                                 [list(keys[first][0]), list(keys[first][1])],
                                 [list(keys[second][0]), list(keys[second][1])],
                             ],
+                            "roles": [
+                                self.edges[keys[first]].role,
+                                self.edges[keys[second]].role,
+                            ],
+                            "point": (
+                                None
+                                if conflict.get("point") is None
+                                else [
+                                    float(conflict["point"][0]),
+                                    float(conflict["point"][1]),
+                                ]
+                            ),
                         }
                     )
-                    if len(found) >= 12:
-                        return found
+                if len(found) >= 12:
+                    return found
         return found
 
     def require_valid(self) -> "PatchGraph":

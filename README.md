@@ -560,11 +560,19 @@ its own self-tests:
 ```bash
 make research-test             # python -m unittest discover -s experiments/agentic_topology -v
 make research-periodic-hill    # classical periodic hill, an internal-flow session
+make research-cases            # every synthetic fixture, with its report
 make research-30p30n           # downloads the 30P30N case and emits its analysis
 ```
 
-Its command line also offers `describe`, `candidates`, `apply` and `focus` so an
-agent can choose between screened topology moves instead of placing vertices.
+Acceptance is reported in separate terms rather than one word: whether the
+topology is valid, whether the sampled grid is untangled, and whether every
+declared quality limit is met. A result that is a real mesh but misses a target
+is still written out, with each miss naming the metric, the observed value and
+the limit; a crossed or tangled one is not written at all.
+
+Its command line also offers `describe`, `cavities`, `candidates`, `apply` and
+`focus` so an agent can choose between validated topology alternatives instead
+of placing vertices.
 
 See [experiments/agentic_topology/README.md](experiments/agentic_topology/README.md)
 for the algorithm and its current limits.

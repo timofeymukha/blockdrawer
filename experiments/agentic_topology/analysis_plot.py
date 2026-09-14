@@ -171,6 +171,19 @@ def render_result(result, width: int = 1100, *, bounds=None, title: str = None):
     for failure in result.failures:
         for point in failure.get("gate_points", []):
             canvas.cross(point, (220, 120, 0), 8, 3)
+    repair = getattr(result, "cavity", None)
+    if repair is not None:
+        for record in repair.cavities:
+            cavity = record.get("cavity") or {}
+            point = cavity.get("point")
+            if point is None:
+                continue
+            if record.get("applied"):
+                canvas.marker(point, (40, 160, 90), 6)
+            elif record.get("kept_existing"):
+                canvas.marker(point, (120, 140, 170), 5)
+            else:
+                canvas.cross(point, (200, 40, 120), 9, 3)
     rows = [(None, "Domain")]
     if domain is not None:
         for chain in domain.chains():
@@ -180,8 +193,11 @@ def render_result(result, width: int = 1100, *, bounds=None, title: str = None):
             (None, ""),
             (ROLE_FILLS["layer"], "boundary-layer band"),
             (ROLE_FILLS["core"], "core block"),
-            (None, "purple dot: singularity"),
-            (None, "red X:      worst sampled cell"),
+            (None, "purple dot:  singularity"),
+            (None, "red X:       worst sampled cell"),
+            (None, "green dot:   cavity replaced"),
+            (None, "grey dot:    cavity kept as it was"),
+            (None, "magenta X:   cavity unresolved"),
             (None, ""),
         ]
     )
@@ -215,7 +231,22 @@ def render_result(result, width: int = 1100, *, bounds=None, title: str = None):
             ]
         )
     rows.append((None, ""))
-    rows.append((None, "resolved" if result.resolved else "UNRESOLVED - see JSON"))
+    rows.extend(
+        [
+            (None, "topology valid: %s" % result.topology_valid),
+            (None, "untangled:      %s" % result.untangled),
+            (None, "within targets: %s" % result.within_quality_targets),
+        ]
+    )
+    for failure in result.quality_failures[:4]:
+        described = failure.described()
+        rows.append(
+            (
+                None,
+                "  %s %.3g > %.3g"
+                % (described["metric"][:26], described["observed"], described["limit"]),
+            )
+        )
     for error in result.errors:
         rows.append((None, "%s: %s" % (error["stage"], error["error"][:38])))
     for failure in result.failures[:4]:

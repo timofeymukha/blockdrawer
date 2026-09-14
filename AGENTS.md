@@ -36,11 +36,12 @@ them in the canvas widgets.
 - Supplied OpenFOAM 2606 integration check: `make integration-test`
 - For another installation, set `BLOCKMESH_COMMAND` to a command prefix that can
   accept `-case <path>`, then run the test suite.
-- Research prototypes: `make research-test`, `make research-periodic-hill` and
-  `make research-30p30n`. These live in `experiments/`, need NumPy and Pillow,
-  and are excluded from the normal suite; see
+- Research prototypes: `make research-test`, `make research-periodic-hill`,
+  `make research-cases` and `make research-30p30n`. These live in
+  `experiments/`, need NumPy and Pillow, and are excluded from the normal suite; see
   `experiments/agentic_topology/README.md`. The research command line is
-  `python experiments/agentic_topology/research_cli.py {run,describe,candidates,apply,focus}`.
+  `python experiments/agentic_topology/research_cli.py
+  {run,describe,cavities,candidates,apply,focus}`.
 
 ## Architecture
 
@@ -211,7 +212,13 @@ them in the canvas widgets.
   through BlockDrawer's own opposite-edge equality components, and quality is
   measured on every sampled cell of the transfinite grid by reusing
   `blockdrawer.preview`'s interpolation - block-corner measures are only early
-  filters. It may use NumPy and Pillow and keeps its own self-tests beside it.
+  filters. A sharp wall feature owns a *cavity* whose replacement is built on a
+  copy of the graph and validated against the whole embedding - coverage,
+  convexity, planarity, Euler and index balance and the cell-count components -
+  before anything is committed, so a rejected alternative leaves the topology
+  untouched and carries its exact reason. Acceptance separates a valid topology,
+  an untangled sampled grid and meeting the declared quality limits, and the
+  report carries the limits it was judged against. It may use NumPy and Pillow and keeps its own self-tests beside it.
   It imports BlockDrawer but nothing in `blockdrawer/` may import it, and none
   of its numerical code belongs in the package until it earns its way in. Its
   experimental agent operations stay in `research_cli.py`; do not widen the

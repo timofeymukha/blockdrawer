@@ -106,6 +106,27 @@ def sharp_bodies():
     )
 
 
+def narrow_gap_tip():
+    """A sharp tip aimed into a narrow gap beside a second body.
+
+    The regression fixture for the sharp-feature cavity stage.  The tip's fluid
+    sector is about 315 degrees, and the medial scaffold bends hard around the
+    gap, so the front vertex a plain band puts in front of the tip makes two
+    non-convex blocks.  Judging a replacement by its own five faces is not
+    enough here: the room the tip has is set by the neighbouring body's front
+    and by the medial ring, both of which lie outside the two blocks being
+    replaced.  Built without the cavity stage the topology has two non-convex
+    faces; with it the feature carries a valid three-sector seam.
+    """
+    return (
+        ["wedge", "blocker"],
+        [
+            teardrop((-0.55, 0.0), 0.30, tip_ratio=2.6),
+            circle((0.70, 0.0), 0.36, 160),
+        ],
+    )
+
+
 def _place(local: np.ndarray, center, angle: float) -> np.ndarray:
     rotation = np.asarray(
         [
@@ -355,6 +376,7 @@ CASES = {
     "concave_and_convex": concave_and_convex,
     "four_bodies": four_bodies,
     "sharp_bodies": sharp_bodies,
+    "narrow_gap_tip": narrow_gap_tip,
 }
 
 

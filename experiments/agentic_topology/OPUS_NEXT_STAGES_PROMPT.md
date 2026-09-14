@@ -1,317 +1,324 @@
-# Opus implementation prompt: globally valid feature fans and truthful acceptance
+# Opus execution prompt: medial core-spoke guides and front compatibility
 
 You are continuing the BlockDrawer agentic-topology research prototype from
-commit `1a0b0ab` (`Expand agentic topology construction prototype`). Work in the
-existing repository and modify the code; do not merely write a design or another
-literature review.
+the repository's current committed tree. This is an implementation task: write
+executable code and tests, run the acceptance cases, and report measurements.
+Do not merely return another design or status report. Do not commit or push
+unless the user explicitly asks.
 
-Read `AGENTS.md` completely before changing anything. Then read:
+Read `AGENTS.md` completely before changing code. Then read:
 
 - `references/topology_state_of_the_art.md`
 - `experiments/agentic_topology/README.md`
-- every module and test under `experiments/agentic_topology/`
-- especially `external_topology.py`, `layers.py`, `patch_graph.py`,
-  `grid_quality.py`, `moves.py`, `pipeline.py`, and `research_cli.py`
-- the relevant production contracts in `blockdrawer/preview.py`,
-  `blockdrawer/quality.py`, `blockdrawer/model.py`, and `blockdrawer/foam.py`
+- every current module and test under `experiments/agentic_topology/`
+- especially `external_topology.py`, `layers.py`, `block_layout.py`,
+  `colored_medial_axis.py`, `voronoi_graph.py`, `sites.py`, `geometry2d.py`,
+  `patch_graph.py`, `fan_cavity.py`, `pipeline.py`, `sizing.py`,
+  `grid_quality.py`, `session_emit.py`, and `research_cli.py`
+- the production contracts in `blockdrawer/model.py`,
+  `blockdrawer/preview.py`, and `blockdrawer/foam.py`
 
-Preserve the working periodic-hill path, the generalized medial/Voronoi
-relationships, exact input curves, BlockDrawer session compatibility, and the
-existing diagnostics. Do not commit or push unless the user explicitly asks.
+Keep the research implementation outside the production package and preserve
+the standard-library-only production runtime.
 
-## Where the prototype actually stands
+## Verified starting point
 
-The production suite passes: 410 tests, with 32 expected skips. The research
-suite passes: 57 tests.
+The current implementation has 77 passing research tests and 410 passing
+production tests, with 32 expected OpenFOAM skips.
 
-The classical periodic-hill run is executable and deterministic:
+The periodic-hill case is topology-valid and untangled:
 
 - 48 blocks and 13,288 cells;
 - zero sampled inverted cells;
-- valid BlockDrawer session, rendering, and `blockMeshDict`;
-- reciprocal translational periodic patches;
-- minimum sampled scaled Jacobian about 0.525;
-- maximum sampled non-orthogonality about 58.3 degrees;
-- maximum interface size ratio about 3.48;
-- maximum first-cell-width relative error about 0.387.
+- valid round-tripped BlockDrawer session, render, and `blockMeshDict`;
+- minimum scaled Jacobian about 0.525;
+- maximum non-orthogonality about 58.3 degrees;
+- interface size ratio about 3.479, missing its 2.5 target;
+- first-cell-width error about 0.387, missing its 0.25 target.
 
-The last two values exceed the declared `GridOptions` defaults of 2.5 and 0.25.
-Nevertheless, `GridReport.admissible` currently checks only
-`inverted_cells == 0`. Therefore the code and documentation overstate what the
-periodic hill passes. Fix this rather than weakening thresholds or hiding the
-metrics.
+Do not change the quality limits to make this case green. Preserve the current
+distinction between `topology_valid`, `untangled`, `admissible`, and `resolved`.
 
-For 30P30N, the original second-stage result had 101 blocks and stopped on four
-non-convex patch faces. The latest generic fan integration in
-`external_topology.py` now proposes and applies three locally convex
-sharp-feature fans and removes those four non-convex failures. It produces 107
-candidate blocks, but patch-graph validation now correctly stops on ten edge
-crossings around the inserted fans. No session is emitted.
+For 30P30N, all three elements now retain boundary-layer bands and all four
+sharp features receive valid seam/cavity treatment. The candidate graph has
+115 faces and no non-convex feature faces, but it is still invalid because of
+exactly two localized relations:
 
-The crossings are localized: fan spokes or the modified adjacent core edges
-cross nearby front, ring, core, or neighboring gate-to-ring edges. The current
-fan search scores only its five local faces and two neighboring core corners.
-It does not test the candidate against the full embedded cavity or patch graph.
-This is the primary task.
+1. A wall path and its front path make an `unexpected_touch` near
+   `(0.6456861757, 0.0263163304)`:
+
+   ```text
+   wall:
+     (gate, 0, anchor, 5) -- (gate, 0, anchor, 15)
+   front:
+     (front, 0, anchor, 5) -- (front, 0, anchor, 15, out)
+   ```
+
+2. A straight core spoke crosses the neighboring curved front near
+   `(0.8019631213, 0.0221454729)`:
+
+   ```text
+   core_spoke:
+     (front, 1, anchor, 24) -- (ring, anchor, 24)
+   front:
+     (front, 1, anchor, 14) -- (front, 1, anchor, 24)
+   ```
+
+No current 30P30N session or sampled grid exists. Any existing
+`output/30p30n-session.json` is a stale older baseline and must not be treated
+as a result of the current run.
+
+The previous response proposed giving the core spoke an interior guide curve
+that follows the medial construction rather than connecting its endpoints with
+an unconstrained straight chord. That is a promising and general hypothesis
+for the second conflict, but it has not been implemented and does not by itself
+resolve the separate wall/front touch.
+
+Two simple front changes have already been measured as worse and must not be
+repeated:
+
+- globally tightening the interior scaffold cap increases the 30P30N problem
+  count and creates inverted cells in a generic synthetic fixture;
+- restoring the sharp-height floor after slope limiting does not remove the
+  touch and breaks the flap seam.
 
 ## Objective
 
-Turn sharp-feature fan insertion into a geometry-generic, globally valid planar
-topology operation. A candidate must be rejected or repaired before insertion
-if any of its new or modified paths cross existing graph geometry, leave its
-local cavity, reverse a boundary/front segment, overlap an edge, create an
-uncovered wedge, or make any affected face non-convex.
+Implement a geometry-generic guided core-spoke construction, integrate its
+curved paths through `PatchGraph`, BlockDrawer session emission, validation,
+sizing, and sampled-grid evaluation, and independently repair or precisely
+classify the remaining wall/front contact.
 
-Then make grid acceptance faithfully enforce the declared limits and expose
-structured failures. Keep the periodic-hill result usable as a generated
-candidate even if it is classified as below target quality. If the fan work is
-completed robustly and time remains, implement the next most useful general
-discrete move needed by the resulting worst region; do not add permissive
-stubs.
+The 30P30N geometry is an integration fixture, not the product. No branch may
+inspect case names, element names (`slat`, `main`, `flap`), known coordinates,
+body count, chord direction, fixed gate/anchor indices, or horizontal flow
+direction.
 
-The 30P30N geometry is a test fixture, not the product. No branch may inspect
-case names, element names (`slat`, `main`, `flap`), coordinates, the number of
-bodies, chord direction, or known gate indices to select topology.
+## 1. Derive a core-spoke guide from medial geometry
 
-## 1. Build a real fan-cavity operation
+Do not draw an arbitrary spline around the reported intersection. A spoke is a
+coordinate line connecting one layer front to the corresponding medial/ring
+anchor. Derive candidate paths from the distance geometry that created that
+anchor.
 
-Do not patch the current ten intersections one at a time. Define the local
-topological cavity owned by a sharp wall feature and construct the replacement
-inside that cavity.
+The preferred construction to investigate is a characteristic of the distance
+field for the owning site:
 
-At minimum:
+1. Start at the ring/medial anchor.
+2. Use the owning site's closest-point/distance gradient already available in
+   `sites.py` and the medial diagram.
+3. Trace adaptively toward the wall while the nearest feature is well-defined.
+4. Locate the first exact intersection with the layer front.
+5. Use that intersection as the front endpoint of the spoke.
 
-1. Identify the ordered boundary of the affected cavity from patch-graph
-   incidence and provenance, not from case-specific labels.
-2. Include the wall feature, the two adjacent wall/front intervals, their core
-   connections, and every neighboring face or edge whose embedding can be
-   changed by the fan.
-3. Remove the old seam/band/core pieces conceptually, build the complete
-   replacement on a copy, and validate the cavity before committing it.
-4. Check all new and modified paths against:
-   - the cavity boundary;
-   - unaffected global graph edges;
-   - one another;
-   - original solid-body and outer-boundary geometry.
-5. Permit only intended shared endpoints and shared complete edges. Reject
-   proper crossings, collinear partial overlap, T-junctions, near-zero edges,
-   duplicate edges, and paths that leave the fluid region.
-6. Verify ordered face incidence, positive orientation, strict convexity where
-   required by `MeshModel`, Euler/index preservation, and complete cavity
-   coverage without a hole or overlap.
-7. Apply the replacement atomically. A rejected candidate must leave the graph
-   byte-for-byte/topology-signature equivalent to its prior state.
+For a smooth region this should reduce to the normal characteristic. Where the
+closest feature changes, it may become a piecewise-smooth guide. Step size and
+termination tolerances must derive from local clearance, path length, and
+domain scale.
 
-Reuse and improve the robust segment/path predicates in `geometry2d.py` and
-`patch_graph.py`. Tolerances must be derived from domain/cavity scale and
-floating-point precision. Do not fix crossings by allowing a large epsilon or
-by disabling graph validation.
+If the characteristic meets the intended front interval away from its existing
+vertex, do not pretend it met the old endpoint. Insert a stable front vertex
+and split the adjacent front/core edge and faces conformally. If it meets the
+wrong interval, leaves the owning medial cell, reaches a singular projection,
+or cannot reach the front monotonically, reject it with a structured reason.
 
-The present fan has three sectors and five faces, but do not hard-code the
-assumption that the same connection pattern works at every sharp feature.
-Generate a compact deterministic set of cavity-compatible alternatives, such
-as different sector counts, fan reach, attachment edge/vertex, or a short
-C-grid-style cut into the residual core. Rank only candidates that pass exact
-topological and geometric validation.
+You may also enumerate a small number of mathematically defined alternatives,
+such as a constrained Hermite guide using front-normal and ring-normal tangent
+conditions, or a visibility/geodesic path inside the residual polygon. These
+must be documented as alternatives and subjected to the same hard validation;
+they may not be coordinate-tuned escape paths.
 
-The geometric search may still optimize intrinsic continuous quantities such
-as distance along a feature-to-medial guide, normalized inner radius, apex
-position, and attachment parameters. Its objective must include at least:
+## 2. Treat the guided spoke as real edge geometry
 
-- the minimum signed/scaled Jacobian of every affected face;
-- clearance from nonincident graph and physical-boundary edges;
-- edge length and angle regularity;
-- the quality of adjacent retained core faces;
-- a modest complexity penalty;
-- sampled transfinite-grid quality when a provisional model can be built.
+`PatchGraph.PGEdge` already carries `kind`, `path`, and interpolation points,
+and `session_emit.py` already forwards supported curved edge types to
+BlockDrawer. Use that path consistently rather than keeping one geometry for
+validation and another for export.
 
-Intersection and validity constraints are hard constraints, never soft
-penalties. Prefer a precise unresolved cavity with candidate rejection reasons
-to a crossed graph or a fabricated session.
+Requirements:
 
-## 2. Make fan diagnostics useful to an agent
+- exact endpoint agreement and canonical orientation;
+- deterministic simplification that retains all geometrically necessary
+  points;
+- the same shared path for both incident faces;
+- no proper crossing, unexpected touch, overlap, T-junction, or collapsed
+  segment with any graph or physical-boundary path;
+- the complete path remains inside the union of the intended adjacent core
+  regions;
+- face outlines and domain coverage use the curved path;
+- metric length, cell sizing, and grading use its actual length;
+- session round-trip preserves the curve direction and points;
+- BlockDrawer preview and research grid evaluation see the same edge curve.
 
-For each sharp-feature cavity, emit stable structured JSON containing:
+Changing a straight chord into a curve can make corner-only quadrilaterals look
+valid while folding their transfinite interiors. Therefore every accepted
+guide must be checked with the actual sampled edge-weighted transfinite grid.
+No inverted sampled cell is admissible.
 
-- the feature/cavity identity and geometric scale;
-- ordered cavity boundary entities;
-- discrete alternative type and sector count;
-- continuous parameters and score components;
-- whether it was accepted;
-- every rejection reason, with both conflicting entity IDs for crossings;
-- minimum affected-face quality and its face;
-- Euler/index balance before and after;
-- whether the failure needs a different continuous placement or a different
-  topology.
+The guide should normally improve alignment and avoid an obstruction without
+hugging another edge. Include a scale-normalized clearance term and a modest
+curvature/complexity penalty in candidate ranking, but keep intersection,
+coverage, incidence, and inversion as hard constraints.
 
-Render accepted fans and rejected candidates distinctly in focused diagnostic
-plots. Keep generated images and JSON under the ignored research output
-directory. Do not make an agent infer topology from a generic `crossing_edges`
-list when the constructor already knows which candidate caused it.
+## 3. Preserve topology when the guide hits inside a front edge
 
-Expose candidate enumeration and atomic application through the existing
-research operation vocabulary where practical. The agent should select among a
-small number of validated alternatives, not place individual vertices.
+An interior front intersection is a topological event. Implement it atomically:
 
-## 3. Enforce truthful quality acceptance
+- split the front edge at the traced station;
+- add the corresponding spoke endpoint identity;
+- split or rebuild the affected core face or local residual polygon into valid
+  quadrilaterals;
+- split the wall-layer interval too only when conformity requires it;
+- preserve boundary identity and the supplied wall point list;
+- preserve Euler characteristic and total discrete index;
+- do not merge wall-tangential and wall-normal cell-count components;
+- reject an odd or otherwise unquadrangulable residual region explicitly.
 
-Refactor `GridReport` so acceptance evaluates the `GridOptions` that define the
-limits. The report must distinguish at least:
+Build and validate the complete candidate on a graph copy before applying it.
+A rejected candidate must leave the graph topology signature unchanged.
 
-- `topology_valid`: incidence, planarity, periodic compatibility, and valid
-  BlockDrawer model/session construction;
-- `untangled`: no inverted sampled cell and positive minimum signed Jacobian;
-- `within_quality_targets`: every enabled declared limit passes;
-- `admissible`: document this term precisely and compute it consistently;
-- `quality_failures`: structured records giving metric, observed value, limit,
-  comparison direction, block/edge/location where available, and severity.
+Expose guide alternatives through the research candidate vocabulary with a
+stable ID, affected entities, method, stations, score components, and all
+rejection reasons. An agent should choose among validated guide/topology
+alternatives, not place control points manually.
 
-Pass the options used for evaluation into the report or store an immutable
-copy of their relevant limits. Do not let a report silently compare against
-different defaults later. Define clear semantics for a deliberately disabled
-limit rather than using magic huge values.
+## 4. Resolve the independent wall/front contact
 
-Pipeline resolution and artifact policy must distinguish topology failure from
-quality-target failure. A topologically valid, untangled research candidate
-may still be written to a session for inspection while returning a nonzero
-acceptance status and saying exactly which targets it misses. A crossed,
-overlapping, non-convex, or inverted topology must not be written as a valid
-session.
+The wall/front `unexpected_touch` is not a core-spoke problem. Diagnose its
+actual cause from the continuous paths: distinguish at least offset collapse,
+slope-limiter propagation, polyline flattening, seam endpoint replacement, and
+an interval that has no positive-clearance offset.
 
-Update the CLI exit status, JSON schema, text summary, README claims, and tests
-accordingly. Keep backward-compatible fields where inexpensive; add fields
-rather than casually renaming existing JSON keys.
+Add an interval-level front validity check before graph assembly. It must test
+the full front path against its corresponding wall path and neighboring wall
+intervals, not only endpoint heights and quadrilateral corners.
 
-Do not change the default limits merely to make periodic hill green. Improve
-its sizing/grading later or report it honestly as valid and untangled but below
-the current interface/first-width targets.
+Attempt a deterministic local repair that adjusts only a scale-aware
+neighborhood of the contact while enforcing:
 
-## 4. Tests required for the primary work
+- positive wall/front separation along the entire interval;
+- the configured height-slope limit;
+- no new front self-intersection;
+- valid neighboring seams and feature cavities;
+- positive layer-block corner and sampled-cell Jacobians;
+- retention of a useful minimum layer thickness.
 
-Add focused, deterministic unit tests that do not encode 30P30N coordinates:
+If no such placement exists, introduce a local station/cut and rebuild the
+affected band/core interval, or return a structured topology requirement. Do
+not silently collapse the front onto the wall, remove the body's layer band, or
+apply a global shrink justified only by 30P30N.
 
-1. A locally convex fan whose spoke crosses an unaffected cavity edge is
-   rejected before mutation.
-2. Collinear overlap, a T-junction, and a near-endpoint proper crossing are
-   classified correctly at multiple translations, rotations, and scales.
-3. A valid sharp-cusp cavity accepts a fan, preserves Euler/index balance, and
-   converts to a conformal `MeshModel`.
-4. Candidate rejection is atomic and deterministic.
-5. A case where the best local-Jacobian candidate crosses an edge selects a
-   lower-scoring globally valid candidate instead.
-6. Multiple nearby sharp features cannot consume the same face/front interval
-   or create mutually crossing fans.
-7. A fan candidate remains equivalent under rigid transforms, uniform scaling,
-   and reversed input-loop representation.
-8. `GridReport` fails each declared threshold independently and reports the
-   correct observed value and limit.
-9. The periodic hill is reported as topology-valid and untangled while its
-   current interface and first-width misses are explicit.
-10. A topology-valid but below-target candidate follows the documented session
-    and CLI-exit policy; an inverted or crossed candidate emits no session.
+## 5. Required generic tests
 
-Keep every existing research and production test passing.
+Use synthetic geometry before relying on 30P30N. Add deterministic tests for:
 
-## 5. Reproducible acceptance runs
+1. A straight spoke crossing a curved front while a medial-gradient guide is
+   valid.
+2. A characteristic reaching the intended front edge away from its existing
+   endpoint and causing a conformal local split.
+3. A guide reaching the wrong interval or leaving its medial cell and being
+   rejected atomically.
+4. A guided edge crossing a remote edge and being rejected.
+5. Shared curved-spoke geometry surviving PatchGraph-to-`MeshModel` conversion,
+   session round-trip, and reversed canonical orientation.
+6. Sampled transfinite evaluation rejecting a curved guide whose block corners
+   are valid but whose interior is inverted.
+7. A front touching its wall between two valid endpoints being detected before
+   final graph assembly.
+8. A local front repair removing that contact without breaking an adjacent
+   seam or another body.
+9. An infeasible positive-clearance interval producing a precise failure rather
+   than a collapsed band.
+10. Translation, rotation, uniform-scale, input-reversal, and reasonable
+    resampling invariance for both guide tracing and contact repair.
+11. Euler/index, coverage, boundary, and cell-count-component preservation for
+    every topology-changing candidate.
+12. Every existing synthetic external and internal fixture remaining at least
+    as valid and untangled as its current baseline.
 
-### Generic fixtures
+Keep all existing research and production tests passing.
 
-Run all existing synthetic external and internal fixtures. Add at least one
-small synthetic two-body or narrow-gap case with a sharp feature close enough
-to other graph geometry that local-only fan placement would cross it. This
-must be the main fan regression fixture; 30P30N is the final integration test.
+## 6. Acceptance runs
 
-For every fixture, validate the patch graph before model construction, validate
-the `MeshModel`, evaluate every sampled transfinite cell, round-trip the session
-when topology permits it, and include deterministic topology signatures.
+Run the complete synthetic corpus, periodic hill, and 30P30N. Report stage
+timings and candidate counts as well as final metrics.
 
-### Periodic hill
+The periodic hill must remain a deterministic 48-block, topology-valid,
+untangled, periodic, reloadable, renderable, and serializable result. Its two
+known quality-target misses must remain explicit unless a genuinely general
+improvement changes them.
 
-Run `make research-periodic-hill` (or the equivalent Python invocation on
-Windows). Preserve its 48-block topology unless a general change has a measured
-reason. Confirm it remains deterministic, topology-valid, untangled, periodic,
-reloadable, renderable, and serializable. Report every quality target honestly.
+For 30P30N, first reproduce the two exact baseline conflicts. The primary
+acceptance target is then:
 
-### 30P30N
+- zero graph crossings, unexpected touches, overlaps, T-junctions, non-convex
+  faces, hanging vertices, and uncovered regions;
+- all three boundary-layer bands and all four sharp-feature repairs retained;
+- a valid `MeshModel` and newly written BlockDrawer session;
+- zero inverted cells in the complete sampled transfinite grid;
+- deterministic output across repeated runs;
+- stable behavior under reasonable input resampling;
+- no case-specific branch or coordinate.
 
-Run `make research-30p30n` (or the equivalent Python invocation). The minimum
-primary acceptance for this stage is:
+If the result becomes admissible but misses quality targets, write the session
+for inspection and report every miss. Do not claim that topological validity
+alone makes it a good mesh.
 
-- the current fan-related edge crossings are either eliminated or returned as
-  localized rejected alternatives before graph mutation;
-- no non-convex face, proper crossing, T-junction, duplicate edge, uncovered
-  cavity, or inverted sampled cell is described as resolved;
-- diagnostics name the exact remaining cavity and next required topology move;
-- the result is deterministic across repeated runs and stable under reasonable
-  input resampling;
-- no case-specific logic was introduced.
+If the guided spoke removes only the second conflict, the run remains
+unresolved until the wall/front contact is repaired or reduced to a precise
+topology requirement. Report both issues independently rather than saying the
+case is solved.
 
-A complete 30P30N session would be an excellent result, but do not force one by
-dropping the flap layer/front, coarsening quality sampling, loosening
-validation, or accepting crossed geometry. If the globally valid fans expose a
-different unresolved core connection, implement one general candidate move
-only when it is motivated by that region and also covered by a synthetic test.
+## 7. Performance and artifacts
 
-Compare any emitted grid with both known baselines:
+The current 30P30N run already takes several minutes. Cache distance queries,
+path bounds, traced characteristics, and unchanged validation results. Use
+cheap broad-phase and topology checks before sampled-grid scoring. Avoid an
+unrestricted Cartesian product of guide control points.
 
-- old 44-block baseline: 3 inverted cells, minimum scaled Jacobian about
-  -0.197, maximum interface ratio about 87.15;
-- pre-fan second-stage attempt: 101 blocks and 4 non-convex faces, therefore no
-  valid grid/session.
+Use fresh or run-specific ignored output directories for acceptance runs. A
+failed run must never advertise an older session at the requested path as a
+new artifact. Do not destructively delete arbitrary user files; emit explicit
+current-run artifact status or a manifest.
 
-## 6. Secondary work only after the primary acceptance is sound
+## Constraints
 
-If time remains, replace one permissive/stub topology move in `moves.py` with a
-real deterministic operation selected from the newly exposed worst region:
-
-- singularity split preserving total index;
-- separatrix insertion/reconnection;
-- poor-patch split;
-- safe regular-strip collapse/merge.
-
-It must operate on the general `PatchGraph`, be atomic, produce explicit
-rejection reasons, and have tests that would fail for a no-op stub. Do not try
-to superficially implement all four.
-
-Also fix small reproducibility defects encountered along the way, including the
-literal `\\n` embedded in the Makefile `.PHONY` declaration. Verify that every
-CLI artifact option creates its parent directory consistently. Keep such fixes
-separate and covered where useful; they are not substitutes for the topology
-work.
-
-## General constraints
-
-- No case-name, body-name, coordinate, body-count, fixed-orientation, or fixed
-  gate-index specialization.
-- No weakening `PatchGraph.validate()`, `MeshModel.validate()`, or sampled-grid
-  checks.
-- No pretending that extra cells repair the wrong topology.
-- No production dependency changes. NumPy/Pillow and optional research tools
-  remain confined to `experiments/agentic_topology/`.
-- No Gmsh/OpenFOAM requirement in the normal or research unit suite. If either
-  is available, it may be used only as an optional independent check.
-- Preserve exact point-list input and ordinary BlockDrawer session/export
-  semantics.
-- Generated sessions, images, OpenFOAM cases, caches, and fetched geometry stay
-  out of Git.
-- Prefer exact or scale-aware predicates and deterministic finite candidate
-  sets over stochastic searches.
-- Record the algorithm actually implemented, remaining limitations, commands
-  run, and exact acceptance metrics.
+- No case-name, body-name, coordinate, body-count, fixed-index, orientation, or
+  chord-direction specialization.
+- No weakening of domain, PatchGraph, `MeshModel`, coverage, or sampled-grid
+  validation.
+- No removal of difficult elements, layer bands, feature cavities, or exact
+  wall points.
+- No assumption that a curved spoke is valid merely because it avoids the
+  reported crossing.
+- No required OpenFOAM, Gmsh, SciPy, Shapely, or other compiled dependency in
+  the test suites. Optional research oracles must skip cleanly.
+- Generated sessions, plots, reports, cases, manifests, and caches remain out
+  of Git.
+- Preserve extension points for future cross-field/separatrix tracing, but do
+  not implement a global cross-field solver in this iteration.
 
 ## Deliverables
 
 Deliver executable code, tests, and documentation for:
 
-1. cavity-aware, globally planar sharp-feature fan alternatives;
-2. atomic candidate validation/application with agent-readable diagnostics;
-3. truthful topology/untangled/quality-target acceptance semantics;
-4. regression fixtures proving local quality alone is insufficient;
-5. reproducible periodic-hill and 30P30N reports;
-6. optionally, one real general discrete topology move if the primary work is
-   complete.
+1. medial/distance-derived core-spoke guide candidates;
+2. complete curved-edge validation, export, sizing, and sampled-grid handling;
+3. atomic conformal insertion when a guide hits inside a front interval;
+4. interval-level wall/front-contact diagnosis and local repair;
+5. agent-readable alternatives and rejection reasons;
+6. reproducible synthetic, periodic-hill, and 30P30N results.
 
-At the end, report all commands and test counts, the exact periodic-hill and
-30P30N status, which acceptance thresholds pass or fail, and the smallest
-remaining topological obstruction. A precise unresolved result is better than
-a false success.
+At the end, state plainly:
+
+- whether each of the two original 30P30N conflicts is gone;
+- whether the graph is topology-valid;
+- whether a new session was written in this run;
+- whether its sampled grid is untangled;
+- every quality target passed or missed;
+- exact test counts and timings;
+- the smallest remaining obstruction, if any.
+
+A precise unresolved result is preferable to a false success. Spend the quota
+on executable topology, geometric constraints, regression tests, and measured
+acceptance—not another survey.
