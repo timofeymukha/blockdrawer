@@ -235,11 +235,11 @@ def render_result(result, width: int = 1100, *, bounds=None, title: str = None):
         [
             (None, "topology valid: %s" % result.topology_valid),
             (None, "untangled:      %s" % result.untangled),
-            (None, "within targets: %s" % result.within_quality_targets),
+            (None, "shape targets: %s" % result.within_shape_targets),
+            (None, "sizing feasible: %s" % result.sizing_feasible),
         ]
     )
-    for failure in result.quality_failures[:4]:
-        described = failure.described()
+    for described in result.described_failures()[:4]:
         rows.append(
             (
                 None,

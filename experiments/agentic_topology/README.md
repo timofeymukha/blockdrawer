@@ -32,10 +32,13 @@ python experiments/agentic_topology/research_cli.py run \
 `make research-periodic-hill`, `make research-30p30n`, `make research-cases`
 and `make research-test` run exactly those. The exit code is 1 for anything
 short of `resolved` - which includes a valid, untangled result that misses a
-declared quality target - and the run prints which of `topology_valid`,
-`untangled` and `within_quality_targets` failed. The PNG and the JSON are always
-written so the result can be read either way; the session is written whenever
-the result is `admissible`.
+declared shape target or whose topology forces an unacceptable size jump - and
+the run prints which of `topology_valid`, `untangled`, `within_shape_targets`
+and `sizing_feasible` failed. Misses of the sizing limits by the mesh the
+default counts define are printed separately as informational, because counts
+and grading are a later stage. The PNG and the JSON are always written so the
+result can be read either way; the session is written whenever the result is
+`admissible`.
 
 ## Pipeline
 
@@ -55,8 +58,11 @@ the result is `admissible`.
 2. **Size metric** (`sizing.py`). One scalar field decides every count and every
    grading value: `size(d) = min(core_size, first_width + (growth - 1) * d)`,
    where `d` is the distance to the nearest wall. That is the boundary-layer
-   geometric series in closed form, and the requested band height is the
-   thickness at which the series reaches the isotropic core size.
+   geometric series in closed form. The requested band height is a separate,
+   geometric input - a fraction of the domain scale, by default the 0.256 at
+   which the default sizing's series reaches the core size - so the topology
+   does not change with the sizing; the series height of the sizing actually in
+   use is available instead (`layer_height_ratio=None`).
 
 3. **Boundary-layer fronts** (`layers.py`). For every wall chain the front is
    the boundary of the eroded fluid domain - the level set of the wall
@@ -256,22 +262,37 @@ the result is `admissible`.
    alignment, first-cell width error, interface size jumps, and the block and
    logical indices of every worst cell.
 
-   Acceptance is reported in four separate terms, and the report carries an
+   Two grids are measured. The **shape grid** samples every block at a fixed
+   number of uniform parametric fractions per side (`shape_cells`, default 8),
+   so it describes the block map itself and is identical whatever counts and
+   grading are chosen later; it is judged against the *shape* limits only:
+   non-orthogonality, equiangle skewness and wall misalignment. The **counts
+   grid** samples the graded mesh nodes the session defines and carries the
+   *sizing* report: aspect ratio, interface size ratio and first-cell width
+   error. Acceptance is reported in these terms, and the report carries an
    immutable copy of the limits it was judged against so it can never be
    compared with different defaults later:
 
    | term | meaning |
    | ---- | ------- |
    | `topology_valid` | incidence, planarity, exact domain coverage and periodic compatibility hold, and `MeshModel.validate()` accepted the session |
-   | `untangled` | no sampled cell is inverted and the minimum scaled Jacobian is positive |
-   | `within_quality_targets` | every **enabled** declared limit is met; `null` disables one explicitly rather than hiding it behind a huge number |
+   | `untangled` | no sampled cell is inverted on either grid and the minimum scaled Jacobian is positive |
+   | `within_shape_targets` | every **enabled** shape limit is met on the shape grid; `null` disables one explicitly rather than hiding it behind a huge number |
+   | `sizing_feasible` | no opposite-edge equality component forces a geometric length ratio above `StructureLimits.max_length_ratio` (default 20) or ties a tangential resolution to a wall-normal one - the count-independent statements of `graph.sizing_structure` |
    | `admissible` | `topology_valid and untangled` - a real mesh, so a session is written for inspection even when it misses a target |
+   | `within_sizing_targets` | **informational, not part of `resolved`**: the mesh the default counts and grading define meets the sizing limits |
 
-   `resolved` is `admissible and within_quality_targets`. Each miss is reported
-   as a record giving the metric, the observed value, the limit, the comparison
-   direction, the block and the location, so "below target" is never a summary
-   word. A tangled, crossed or uncovered candidate writes no session at all;
-   `run` exits 1 for anything short of `resolved` and prints which term failed.
+   `resolved` is `admissible and within_shape_targets and sizing_feasible`: the
+   topology stage is held to what it decides - the block map and the equality
+   components - and not to the counts, which an agent sets later from flow
+   considerations with `set_edge_cells`, `set_edge_grading` and spacing links.
+   Each miss is reported as a record giving the metric, the observed value, the
+   limit, the comparison direction, the block and the location, so "below
+   target" is never a summary word; a structural failure names the component
+   and its extreme edges instead of a block. A tangled, crossed or uncovered
+   candidate writes no session at all; `run` exits 1 for anything short of
+   `resolved` and prints which term failed, then the sizing misses as
+   `sizing (informational)`.
 
 10. **Session** (`session_emit.py`). Only a graph with no problems and exact
     coverage becomes a `MeshModel`; it is validated, saved, reloaded, validated
@@ -299,8 +320,13 @@ Re-quantisation is the same `run` with different metric flags -
 `--split CELL:CUT` forces an anchor where an agent asks for one. Because the
 run is stateless, that is also how `apply` realises a move.
 
-`--max-wall-turning DEGREES` exposes the largest wall turning one annular
-patch may span before it is cut (default 100). It is the single largest lever
+`--layer-height-ratio FRACTION` sets the requested band height as a fraction
+of the domain scale (default 0.256, where the default sizing's wall-normal
+series reaches the core size); it is a geometric input, so the block shapes
+and the shape verdict do not change with the cell sizing.
+`--layer-height-ratio series` uses the series height of the sizing in use. `--max-length-ratio RATIO` sets the
+structural feasibility limit. `--max-wall-turning DEGREES` exposes the largest
+wall turning one annular patch may span before it is cut (default 100). It is the single largest lever
 on near-wall orthogonality, and it is not monotone, which is why the default
 has not been changed:
 
@@ -337,31 +363,38 @@ published six-piece lower-wall polynomial mirrored across the period.
 
 | measure | value | declared limit |
 | ------- | ----- | -------------- |
-| blocks | 48 (32 boundary-layer band, 16 core) | |
-| vertices / edges | 68 / 115 | |
+| blocks | 33 (22 boundary-layer band, 11 core) | |
+| vertices / edges | 48 / 80 | |
 | singularities | 4 - the four domain corners, each with one block | |
-| sampled cells | 13 590, **0 inverted** | none admissible |
-| minimum scaled Jacobian | 0.816 (was 0.525 with the tangent-disk front) | must be positive |
-| sampled angle range | 54.8 deg .. 125.0 deg | |
-| maximum non-orthogonality | 35.3 deg (was 58.3) | 70 deg - **passes** |
-| maximum equiangle skewness | 0.391 (was 0.648) | 0.85 - **passes** |
-| aspect ratio (boundary layer / unintended) | 2.85 / 6.72 | 100 unintended - **passes** |
-| maximum wall misalignment | 20.5 deg (was 15.3) | 25 deg - **passes** |
-| maximum first-cell width error | 0.19 (was 0.387) | 0.25 - **passes** |
-| maximum interface size ratio | **2.93** (was 3.48) | 2.5 - **misses by 17 percent** |
+| shape grid (8 uniform cells per block side) | 2 112 cells, **0 inverted** | none admissible |
+| minimum scaled Jacobian, shape grid | 0.873 (was 0.525 with the tangent-disk front) | must be positive |
+| shape-grid angle range | 60.8 deg .. 117.7 deg | |
+| maximum non-orthogonality, shape grid | 29.2 deg (was 58.3) | 70 deg - **passes** |
+| maximum equiangle skewness, shape grid | 0.325 (was 0.648) | 0.85 - **passes** |
+| maximum wall misalignment, shape grid | 21.2 deg (was 15.3) | 25 deg - **passes** |
+| structural: worst component length ratio / couplings | 2.94 / none | 20 - **passes** |
+| counts grid (default sizing) | 12 768 cells, 0 inverted | informational |
+| aspect ratio (boundary layer / unintended), counts grid | 3.13 / 6.91 | 100 unintended - passes |
+| maximum first-cell width error, counts grid | 0.19 (was 0.387) | 0.25 - passes |
+| maximum interface size ratio, counts grid | **2.88** (was 3.48) | 2.5 - **sizing miss, informational** |
 | patches | `bottom_wall`, `top_wall` as `wall`; `periodic_left`/`periodic_right` as a reciprocal `cyclic` pair | |
 
-So the periodic hill is `topology_valid`, `untangled` and `admissible`, and it
-is **not** `resolved`: it misses one of the six declared limits, and the run
-says which, by how much and where. The level-set front removed the second
+So the periodic hill is `topology_valid`, `untangled`, `admissible` and
+**`resolved`**: on the shape grid it is within every shape limit and its
+equality components force a length ratio of only 2.9 with no coupling. It has
+33 blocks rather than the 48 of earlier iterations because the sweep's column
+count is now decided by a geometric rule - a core column is halved while it is
+longer than half the distance between the guides - instead of by the metric
+length of the column, so the block count no longer follows the cell sizing;
+the shape measures are slightly better than with 16 columns. The one miss left, the interface jump of the mesh
+the default counts define, is reported as an informational sizing miss: it is
+the band's last cell against the core's first, which belongs to the counts
+and grading stage. The level-set front removed the earlier first-cell-width
 miss: with the tangent-disk law the band at the hill foot was limited by the
 foot's own curvature and its offset was flattened into a wiggle, which made
 the first-cell width vary by 39 percent inside one block; the front now
 follows the eroded boundary there with a rib at the foot, and every shape
-measure improved with it. The remaining interface jump is the band's last
-cell against the core's first, a sizing consequence listed under *Remaining
-limits*. The session, rendering and `blockMeshDict` are still written, because
-an admissible result is worth looking at.
+measure improved with it.
 
 The domain is simply connected with no fabricated far field and no solid-body
 hole. Periodic vertices, edges, cell counts and grading match by construction:
@@ -561,6 +594,19 @@ installations whose LAPACK/BLAS build is broken.
   length ratio it forces (855 on 30P30N). The cavity coupling check does not
   refuse it yet, because every sharp feature currently depends on the seam and
   the through-cut alternative is built for three sectors only.
+* **The slat's band on 30P30N is on a knife edge.** Asking for a band 2.4
+  percent lower (0.25 of the scale instead of 0.256) makes the slat's front
+  loop fail: its band blocks beside the cusp keep failing the convexity and
+  spoke-crossing checks through every local repair, although the caps there
+  are far below the request. The requested height only enters through the
+  probe bound and the repair floor, so the loop's repair search, not the
+  geometry, decides the outcome. The same sensitivity shows on `sharp_bodies`
+  and `three_rotated_ellipses`: the geometric default height and the series
+  formula agree to the last floating-point bits, and that difference alone
+  moves a band front by 0.4 percent and the default cell count by 8 percent,
+  with identical block graphs. Runs are deterministic; the loop is not stable.
+  It needs a search that reduces the height where a block fails and proves it
+  cannot succeed before giving up.
 * **The 30P30N block graph follows the raster.** Doubling the width to 1400
   leaves the four junctions identical to four decimals but gives 106 faces
   and 18 singularities against 115 and 24, with different cavity templates

@@ -13,6 +13,7 @@ measures every sampled cell.
 from __future__ import annotations
 
 import math
+import dataclasses
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -34,6 +35,15 @@ LIMIT_FIELDS = (
     ("max_first_width_error", "maximum_first_cell_width_error"),
 )
 
+# Which limits describe the block map and which describe the mesh the counts
+# and grading define.  The shape grid is judged against the first group only.
+SHAPE_LIMIT_NAMES = frozenset(
+    {"max_non_orthogonality", "max_skewness", "max_wall_misalignment"}
+)
+SIZING_LIMIT_NAMES = frozenset(
+    {"max_aspect_ratio", "max_interface_ratio", "max_first_width_error"}
+)
+
 
 @dataclass(frozen=True)
 class GridOptions:
@@ -50,10 +60,26 @@ class GridOptions:
     max_wall_misalignment: float | None = 25.0
     max_first_width_error: float | None = 0.25
     node_budget: int = 4_000_000
+    # Cells per block side of the *shape* grid: every block is sampled at
+    # uniform parametric fractions, independent of any cell count or grading,
+    # so the shape measures describe the block map itself.
+    shape_cells: int = 8
 
     def limits(self) -> "GridLimits":
         return GridLimits(
             **{name: getattr(self, name) for name, _key in LIMIT_FIELDS}
+        )
+
+    def shape_only(self) -> "GridOptions":
+        """The same options with every sizing limit disabled.
+
+        Non-orthogonality, skewness and wall misalignment are properties of
+        the block map; aspect ratio, the interface size ratio and the
+        first-cell width depend on the counts and grading chosen later.
+        """
+        return dataclasses.replace(
+            self,
+            **{name: None for name in SIZING_LIMIT_NAMES},
         )
 
 
@@ -152,6 +178,10 @@ class GridReport:
     limits: GridLimits = field(default_factory=GridLimits)
     quality_failures: list[QualityFailure] = field(default_factory=list)
     topology_valid: bool = True
+    # ``counts`` samples the graded mesh nodes the session defines; ``uniform``
+    # samples every block at ``cells_per_side`` uniform fractions.
+    sampling: str = "counts"
+    cells_per_side: int | None = None
 
     @property
     def untangled(self) -> bool:
@@ -182,6 +212,8 @@ class GridReport:
             return None if extreme is None else extreme.described()
 
         return {
+            "sampling": self.sampling,
+            "cells_per_side": self.cells_per_side,
             "sampled_cells": self.sampled_cells,
             "inverted_cells": self.inverted_cells,
             "topology_valid": self.topology_valid,
@@ -217,22 +249,44 @@ class GridReport:
         }
 
 
-def block_nodes(model, block) -> np.ndarray:
-    """Every sampled node of one block as an ``(ny + 1, nx + 1, 2)`` array."""
+def _uniform_edge_samples(model, directed, cells: int):
+    """Edge samples at uniform parametric fractions, ignoring counts and grading."""
+    current = edge_key(*directed)
+    follows_canonical = directed == current
+    fractions = tuple(index / cells for index in range(cells + 1))
+    canonical = fractions if follows_canonical else tuple(1.0 - f for f in fractions)
+    points = model.edge_points(current, canonical)
+    return tuple(zip(fractions, points))
+
+
+def block_nodes(model, block, *, cells: int | None = None) -> np.ndarray:
+    """Every sampled node of one block as an ``(ny + 1, nx + 1, 2)`` array.
+
+    With ``cells`` the block is sampled at that many uniform parametric
+    fractions per side instead of at its graded mesh nodes, which makes the
+    result independent of any cell count or grading: it is the block map.
+    """
     directed = tuple(block.directed_edge(index) for index in range(4))
     edges = tuple(edge_key(*item) for item in directed)
-    x_cells = model.edge_cells[edges[0]]
-    y_cells = model.edge_cells[edges[1]]
-    x_indices = tuple(range(x_cells + 1))
-    y_indices = tuple(range(y_cells + 1))
-    bottom = bd_preview._directed_edge_samples(model, directed[0], x_indices)
-    right = bd_preview._directed_edge_samples(model, directed[1], y_indices)
-    top = bd_preview._directed_edge_samples(
-        model, (directed[2][1], directed[2][0]), x_indices
-    )
-    left = bd_preview._directed_edge_samples(
-        model, (directed[3][1], directed[3][0]), y_indices
-    )
+    if cells is None:
+        x_cells = model.edge_cells[edges[0]]
+        y_cells = model.edge_cells[edges[1]]
+        x_indices = tuple(range(x_cells + 1))
+        y_indices = tuple(range(y_cells + 1))
+        bottom = bd_preview._directed_edge_samples(model, directed[0], x_indices)
+        right = bd_preview._directed_edge_samples(model, directed[1], y_indices)
+        top = bd_preview._directed_edge_samples(
+            model, (directed[2][1], directed[2][0]), x_indices
+        )
+        left = bd_preview._directed_edge_samples(
+            model, (directed[3][1], directed[3][0]), y_indices
+        )
+    else:
+        x_cells = y_cells = int(cells)
+        bottom = _uniform_edge_samples(model, directed[0], x_cells)
+        right = _uniform_edge_samples(model, directed[1], y_cells)
+        top = _uniform_edge_samples(model, (directed[2][1], directed[2][0]), x_cells)
+        left = _uniform_edge_samples(model, (directed[3][1], directed[3][0]), y_cells)
     corners = tuple(
         (model.vertices[identifier].x, model.vertices[identifier].y)
         for identifier in block.vertices
@@ -324,18 +378,27 @@ def evaluate(
     layer_blocks: set[str] | None = None,
     first_width: float | None = None,
     topology_valid: bool = True,
+    cells: int | None = None,
 ) -> GridReport:
     """Measure every sampled cell of every block.
 
     ``topology_valid`` is supplied by the caller because this module only sees
     a ``MeshModel``: whether the patch graph it came from was planar, covered
     the domain and had compatible periodic patches is known one level up.
+
+    With ``cells`` every block is sampled at that many uniform parametric
+    fractions per side, independent of counts and grading: that is the *shape*
+    grid, and the interface size ratio and first-cell width - which only mean
+    something for the mesh the counts define - are not measured on it.
     """
     limits = options or GridOptions()
     layers = layer_blocks or set()
     total_nodes = 0
     for block in model.blocks:
-        nx, ny, _nz = model.block_cell_counts(block)
+        if cells is None:
+            nx, ny, _nz = model.block_cell_counts(block)
+        else:
+            nx = ny = int(cells)
         total_nodes += (nx + 1) * (ny + 1)
     warnings: list[str] = []
     if total_nodes > limits.node_budget:
@@ -382,7 +445,7 @@ def evaluate(
             )
 
     for block in model.blocks:
-        grid = block_nodes(model, block)
+        grid = block_nodes(model, block, cells=cells)
         metrics = cell_metrics(grid)
         centre = metrics["centre"]
         sampled += metrics["area"].size
@@ -420,7 +483,7 @@ def evaluate(
                 wall[usable][None, :],
                 largest=True,
             )
-            if first_width is not None and first_width > 0.0:
+            if cells is None and first_width is not None and first_width > 0.0:
                 error = np.abs(width[usable] - first_width) / first_width
                 consider(
                     "first_width_error",
@@ -454,18 +517,27 @@ def evaluate(
                 )
             )
     worst_records.sort(key=lambda item: -item[0])
-    corner_report = bd_quality.assess_quality(model)
-    summary = corner_report.summary()
-    interfaces = [
-        {
-            "edge": list(item.edge),
-            "blocks": list(item.blocks),
-            "max_size_ratio": item.max_size_ratio,
+    if cells is None:
+        corner_report = bd_quality.assess_quality(model)
+        summary = corner_report.summary()
+        interfaces = [
+            {
+                "edge": list(item.edge),
+                "blocks": list(item.blocks),
+                "max_size_ratio": item.max_size_ratio,
+            }
+            for item in sorted(
+                corner_report.interfaces, key=lambda item: -item.max_size_ratio
+            )[:8]
+        ]
+        interface = {
+            "maximum_size_ratio": summary.get("max_interface_size_ratio"),
+            "threshold": limits.max_interface_ratio,
+            "worst": interfaces,
         }
-        for item in sorted(
-            corner_report.interfaces, key=lambda item: -item.max_size_ratio
-        )[:8]
-    ]
+    else:
+        summary = {}
+        interface = {}
     report = GridReport(
         sampled,
         inverted,
@@ -479,16 +551,14 @@ def evaluate(
         best["wall_misalignment"],
         best["first_width_error"],
         [record for _score, record in worst_records[:12]],
-        {
-            "maximum_size_ratio": summary.get("max_interface_size_ratio"),
-            "threshold": limits.max_interface_ratio,
-            "worst": interfaces,
-        },
+        interface,
         summary,
         warnings,
         limits.limits(),
         [],
         bool(topology_valid),
+        "counts" if cells is None else "uniform",
+        None if cells is None else int(cells),
     )
     report.quality_failures = _quality_failures(report, limits)
     if inverted:

@@ -713,6 +713,84 @@ def coverage(graph: PatchGraph, domain, *, samples: int = 400) -> dict:
     }
 
 
+@dataclass(frozen=True)
+class StructureLimits:
+    """What a topology may impose on any later sizing.
+
+    ``max_length_ratio`` bounds the geometric length ratio inside one
+    opposite-edge equality component, which under uniform grading is the
+    cell-size jump that component forces whatever count it gets.  A
+    tangential/normal coupling ties a streamwise resolution to a wall-normal
+    one and is refused unless allowed.  ``None`` disables the ratio limit.
+    """
+
+    max_length_ratio: float | None = 20.0
+    allow_tangential_normal_coupling: bool = False
+
+    def described(self) -> dict:
+        return {
+            "max_length_ratio": (
+                "disabled" if self.max_length_ratio is None else self.max_length_ratio
+            ),
+            "allow_tangential_normal_coupling": self.allow_tangential_normal_coupling,
+        }
+
+
+def structure_failures(structure: dict, limits: StructureLimits) -> list[dict]:
+    """The structural sizing statements a topology fails, as failure records.
+
+    Each record has the shape of a grid quality failure - ``metric``,
+    ``observed``, ``limit``, ``comparison`` - so an agent reads both kinds the
+    same way; ``edges`` names the offending component's extreme edges.
+    """
+    found: list[dict] = []
+    worst = structure.get("worst") or []
+    if limits.max_length_ratio is not None and worst:
+        record = worst[0]
+        if record["length_ratio"] > limits.max_length_ratio:
+            found.append(
+                {
+                    "metric": "maximum_component_length_ratio",
+                    "observed": float(record["length_ratio"]),
+                    "limit": float(limits.max_length_ratio),
+                    "comparison": "at_most",
+                    "block": None,
+                    "component": record["component"],
+                    "roles": record["roles"],
+                    "edges": [record["shortest_edge"], record["longest_edge"]],
+                    "detail": (
+                        "two edges of one opposite-edge equality component carry "
+                        "the same cell count whatever it is, so their length ratio "
+                        "is the cell-size jump the topology forces under uniform "
+                        "grading"
+                    ),
+                }
+            )
+    couplings = int(structure.get("tangential_normal_couplings", 0))
+    if couplings and not limits.allow_tangential_normal_coupling:
+        example = next(
+            (item for item in worst if item.get("mixes_tangential_and_normal")),
+            None,
+        )
+        found.append(
+            {
+                "metric": "tangential_normal_couplings",
+                "observed": float(couplings),
+                "limit": 0.0,
+                "comparison": "at_most",
+                "block": None,
+                "component": None if example is None else example["component"],
+                "roles": None if example is None else example["roles"],
+                "edges": None,
+                "detail": (
+                    "a component holds both a tangential and a wall-normal edge, "
+                    "so a streamwise resolution is tied to a boundary-layer one"
+                ),
+            }
+        )
+    return found
+
+
 def sizing_structure(graph: PatchGraph, *, reported: int = 6) -> dict:
     """Count-independent consequences of the opposite-edge equality components.
 

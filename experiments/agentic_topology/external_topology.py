@@ -138,7 +138,7 @@ def build_graph(
                 options=settings,
                 obstacles=[front.front for front in fronts.values()],
                 station_caps=caps,
-                floor_height=settings.minimum_band_cells * metric.first,
+                floor_height=layer_module.floor_height(settings, metric),
                 exempt_orders=exempt,
                 scaffold=cell.ring,
                 site=cell.site,

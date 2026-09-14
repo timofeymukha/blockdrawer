@@ -45,6 +45,11 @@ class SweepOptions:
     orthogonality_weight: float = 1.0
     spacing_weight: float = 1.0e-3
     maximum_column_metric: float = 48.0
+    # A core column is halved while it is longer than this multiple of the
+    # distance between the guides at its ends: the geometric rule that decides
+    # how many ribs an H-grid core gets, so the block count does not follow the
+    # cell sizing.  ``None`` falls back to the metric-length rule above.
+    maximum_column_aspect: float | None = 0.5
     maximum_columns: int = 48
     relax_sweeps: int = 24
     relax_grid: int = 9
@@ -392,8 +397,17 @@ def _enforce_metric_limit(first, second, stations, metric, options: SweepOptions
             other = g2.polyline_section(
                 second, start * length_second, stop * length_second
             )
-            worst = max(metric.metric_length(section), metric.metric_length(other))
-            if worst > options.maximum_column_metric:
+            if options.maximum_column_aspect is not None:
+                worst = max(g2.total_length(section), g2.total_length(other))
+                height = 0.5 * (
+                    float(np.linalg.norm(section[0] - other[0]))
+                    + float(np.linalg.norm(section[-1] - other[-1]))
+                )
+                limit = options.maximum_column_aspect * max(height, 1.0e-300)
+            else:
+                worst = max(metric.metric_length(section), metric.metric_length(other))
+                limit = options.maximum_column_metric
+            if worst > limit:
                 extended.append(0.5 * (start + stop))
                 changed = True
             extended.append(stop)
@@ -588,7 +602,7 @@ def _guide_front(
         walls, points, -normals, upper=upper, steps=options.feature_steps
     )
     target = np.minimum(metric.layer_height, options.clearance_fraction * feature)
-    floor = options.minimum_band_cells * metric.first
+    floor = layer_module.floor_height(options, metric)
     target = np.minimum(
         target, np.maximum(options.curvature_fraction * inner, floor)
     )

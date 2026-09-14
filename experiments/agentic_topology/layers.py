@@ -90,6 +90,11 @@ class LayerOptions:
     # trims the level set into a mitre rather than collapsing it.
     shadow_window: float = 2.0
     miter_limit: float = 1.5
+    # Floor on the band height, as a fraction of the domain scale: a geometric
+    # input, so the block shapes do not follow the cell sizing.  ``None``
+    # falls back to ``minimum_band_cells`` first-cell widths of the metric.
+    # The default equals three first cells of the default sizing.
+    floor_ratio: float | None = 0.006
     minimum_band_cells: float = 3.0
     repair_factor: float = 0.6
     feature_steps: int = 26
@@ -100,6 +105,13 @@ class LayerOptions:
     # And one at least this wide gets a band seam straight away, so the cavity
     # stage starts from a three-sector construction rather than a folded one.
     sharp_fluid_angle: float = 250.0
+
+
+def floor_height(options: LayerOptions, metric) -> float:
+    """The smallest band height a producer may request, a length."""
+    if options.floor_ratio is not None:
+        return float(options.floor_ratio) * float(metric.scale)
+    return float(options.minimum_band_cells) * float(metric.first)
 
 
 # ---------------------------------------------------------------------------

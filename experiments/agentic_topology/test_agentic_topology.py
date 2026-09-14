@@ -402,10 +402,11 @@ class SweepTests(unittest.TestCase):
                 self.assertTrue(
                     result.admissible, result.failures or result.problems
                 )
+                self.assertEqual(result.resolved, reference.resolved)
                 self.assertEqual(
-                    result.within_quality_targets,
-                    reference.within_quality_targets,
+                    result.within_shape_targets, reference.within_shape_targets
                 )
+                self.assertEqual(result.sizing_feasible, reference.sizing_feasible)
                 self.assertEqual(
                     session_emit.topology_signature(result.model), signature
                 )
@@ -780,7 +781,7 @@ class SyntheticCaseTests(unittest.TestCase):
                 self.assertTrue(result.untangled)
                 self.assertEqual(
                     result.resolved,
-                    result.within_quality_targets,
+                    result.within_shape_targets and result.sizing_feasible,
                 )
                 self.assertEqual(result.coverage["uncovered_samples"], 0)
                 self.assertEqual(result.coverage["overlapping_samples"], 0)
@@ -1616,39 +1617,43 @@ class AcceptanceTests(unittest.TestCase):
         self.assertFalse(invalid.admissible)
         self.assertTrue(invalid.untangled)
 
-    def test_the_periodic_hill_states_the_targets_it_misses(self):
-        """Valid and untangled, and explicit about the rest."""
+    def test_the_periodic_hill_is_resolved_and_states_its_sizing_misses(self):
+        """Valid, untangled, within the shape targets, structurally sizable.
+
+        The interface size jump the default metric produces is real and is
+        reported, as a sizing miss that a later stage owns rather than as a
+        verdict on the topology.
+        """
         result = run_internal("periodic_hill")
         self.assertTrue(result.topology_valid)
         self.assertTrue(result.untangled)
         self.assertTrue(result.admissible)
+        self.assertEqual(result.shape.inverted_cells, 0)
         self.assertEqual(result.grid.inverted_cells, 0)
-        self.assertFalse(result.within_quality_targets)
-        self.assertFalse(result.resolved)
-        missed = {
-            failure.described()["metric"] for failure in result.quality_failures
-        }
-        # The two the README records; the coarse research sizing used here can
-        # add more, and every one of them has to be a real overshoot.
-        self.assertLessEqual(
-            {"maximum_interface_size_ratio", "maximum_first_cell_width_error"},
-            missed,
-        )
-        self.assertNotIn("maximum_equiangle_skewness", missed)
-        self.assertNotIn("maximum_non_orthogonality_degrees", missed)
-        for failure in result.quality_failures:
+        self.assertTrue(result.within_shape_targets, result.described_failures())
+        self.assertTrue(result.sizing_feasible, result.structure_failures)
+        self.assertTrue(result.resolved)
+        self.assertEqual(result.quality_failures, [])
+        self.assertFalse(result.within_sizing_targets)
+        missed = {failure.described()["metric"] for failure in result.sizing_failures}
+        self.assertIn("maximum_interface_size_ratio", missed)
+        for failure in result.sizing_failures:
             described = failure.described()
             self.assertGreater(described["observed"], described["limit"])
-        self.assertEqual(
-            result.analysis["acceptance"]["within_quality_targets"], False
-        )
-        self.assertEqual(result.analysis["acceptance"]["admissible"], True)
+        acceptance = result.analysis["acceptance"]
+        self.assertTrue(acceptance["resolved"])
+        self.assertTrue(acceptance["within_shape_targets"])
+        self.assertTrue(acceptance["sizing_feasible"])
+        self.assertFalse(acceptance["within_sizing_targets"])
+        self.assertEqual(result.analysis["quality"]["sampling"], "uniform")
+        self.assertEqual(result.analysis["sizing"]["report"]["sampling"], "counts")
 
     def test_a_below_target_candidate_is_still_written_out(self):
         """The documented session and exit policy, both ways round."""
         import research_cli
 
-        result = run_internal("periodic_hill")
+        # The peanut is admissible but misses the shape targets at its waist.
+        result = run_case("peanut_body", CAVITY_FAST)
         self.assertTrue(result.admissible)
         self.assertFalse(result.resolved)
         with tempfile.TemporaryDirectory() as folder:
@@ -1669,6 +1674,21 @@ class AcceptanceTests(unittest.TestCase):
             below = result.analysis["session"]["below_quality_targets"]
             self.assertTrue(below)
             self.assertTrue(all(item["observed"] > item["limit"] for item in below))
+        # A resolved result with a sizing miss records the miss separately.
+        hill = run_internal("periodic_hill")
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            arguments = argparse.Namespace(
+                session=root / "session.json",
+                json=None,
+                output=None,
+                session_render=None,
+                block_mesh_dict=None,
+                plot_width=400,
+            )
+            research_cli.write_artifacts(hill, arguments)
+            self.assertNotIn("below_quality_targets", hill.analysis["session"])
+            self.assertTrue(hill.analysis["session"]["sizing_misses"])
 
         broken = run_internal("periodic_hill", fresh=True)
         broken.problems.append({"kind": "crossing_edges", "edges": []})
@@ -2058,3 +2078,140 @@ class ConcaveCurvatureCapTests(unittest.TestCase):
         corner = int(np.argmin(angles))
         near = np.abs(arclength - arclength[corner]) < 0.3
         self.assertTrue(np.all(capped[near] == 0.3), capped[near])
+
+
+class AcceptanceRestructureTests(unittest.TestCase):
+    """Shape is judged count-free; sizing is structural at this stage."""
+
+    def test_the_shape_grid_does_not_depend_on_the_sizing(self):
+        names, loops = cases.two_circles()
+        coarse = pipeline.run_external(names, loops, FAST)
+        fine = pipeline.run_external(
+            names,
+            loops,
+            dataclasses.replace(
+                FAST,
+                sizing=sizing.SizingOptions(
+                    first_width_ratio=1.0e-3, core_size_ratio=2.0e-2
+                ),
+            ),
+        )
+        self.assertNotEqual(coarse.grid.sampled_cells, fine.grid.sampled_cells)
+        self.assertEqual(coarse.shape.sampled_cells, fine.shape.sampled_cells)
+        for name in (
+            "minimum_scaled_jacobian",
+            "maximum_non_orthogonality",
+            "maximum_skewness",
+            "maximum_wall_misalignment",
+        ):
+            first = getattr(coarse.shape, name).value
+            second = getattr(fine.shape, name).value
+            self.assertAlmostEqual(first, second, places=9, msg=name)
+        self.assertEqual(coarse.shape.sampling, "uniform")
+        self.assertEqual(coarse.shape.interface, {})
+        self.assertIsNone(coarse.shape.maximum_first_width_error)
+
+    def test_shape_only_disables_exactly_the_sizing_limits(self):
+        options = grid_quality.GridOptions().shape_only()
+        for name in grid_quality.SIZING_LIMIT_NAMES:
+            self.assertIsNone(getattr(options, name))
+        for name in grid_quality.SHAPE_LIMIT_NAMES:
+            self.assertIsNotNone(getattr(options, name))
+
+    def test_structural_infeasibility_is_a_topology_verdict(self):
+        """The seam wedge's coupling keeps the narrow gap tip from resolving."""
+        result = run_case("narrow_gap_tip", CAVITY_FAST)
+        self.assertTrue(result.admissible)
+        self.assertFalse(result.sizing_feasible)
+        self.assertFalse(result.resolved)
+        failure = next(
+            item
+            for item in result.structure_failures
+            if item["metric"] == "maximum_component_length_ratio"
+        )
+        self.assertEqual(sorted(failure["roles"]), ["core_spoke", "layer_spoke"])
+        self.assertGreater(failure["observed"], failure["limit"])
+        # Loosening the structural limit is an explicit option, and then the
+        # verdict is about shape alone.
+        loose = pipeline.run_external(
+            *cases.narrow_gap_tip(),
+            dataclasses.replace(
+                CAVITY_FAST, structure=pg.StructureLimits(max_length_ratio=None)
+            ),
+        )
+        self.assertTrue(loose.sizing_feasible)
+        self.assertEqual(loose.resolved, loose.within_shape_targets)
+
+    def test_structure_failures_read_like_quality_failures(self):
+        structure = {
+            "worst": [
+                {
+                    "component": 3,
+                    "length_ratio": 42.0,
+                    "roles": ["core_spoke", "layer_spoke"],
+                    "shortest_edge": [["a"], ["b"]],
+                    "longest_edge": [["c"], ["d"]],
+                    "mixes_tangential_and_normal": False,
+                }
+            ],
+            "tangential_normal_couplings": 1,
+        }
+        found = pg.structure_failures(
+            structure, pg.StructureLimits(max_length_ratio=20.0)
+        )
+        self.assertEqual(
+            [item["metric"] for item in found],
+            ["maximum_component_length_ratio", "tangential_normal_couplings"],
+        )
+        for item in found:
+            self.assertGreater(item["observed"], item["limit"])
+            self.assertEqual(item["comparison"], "at_most")
+        allowed = pg.structure_failures(
+            structure,
+            pg.StructureLimits(
+                max_length_ratio=None, allow_tangential_normal_coupling=True
+            ),
+        )
+        self.assertEqual(allowed, [])
+
+    def test_the_band_height_is_a_geometric_input(self):
+        names, loops = cases.two_circles()
+        default = run_case("two_circles")
+        # The metric's scale is the domain's, far field included.
+        self.assertAlmostEqual(
+            default.metric.layer_height,
+            sizing.DEFAULT_LAYER_HEIGHT_RATIO * default.domain.scale,
+        )
+        self.assertAlmostEqual(sizing.DEFAULT_LAYER_HEIGHT_RATIO, 0.2562, places=4)
+        self.assertEqual(
+            default.analysis["sizing"]["metric"]["layer_height_source"],
+            "geometric ratio",
+        )
+        series = pipeline.run_external(
+            names, loops, dataclasses.replace(FAST, layer_height_ratio=None)
+        )
+        self.assertEqual(
+            series.analysis["sizing"]["metric"]["layer_height_source"],
+            "wall-normal series",
+        )
+        self.assertAlmostEqual(
+            series.metric.layer_height, series.metric.series_height
+        )
+
+    def test_the_sweep_block_count_does_not_follow_the_sizing(self):
+        domain = pdm.from_internal_case(cases.periodic_hill())
+        coarse = pipeline.run_internal(domain, FAST)
+        fine = pipeline.run_internal(
+            domain,
+            dataclasses.replace(
+                FAST,
+                sizing=sizing.SizingOptions(
+                    first_width_ratio=1.0e-3, core_size_ratio=2.0e-2
+                ),
+            ),
+        )
+        self.assertEqual(len(coarse.graph.faces), len(fine.graph.faces))
+        self.assertEqual(
+            coarse.correspondence.columns, fine.correspondence.columns
+        )
+        self.assertEqual(coarse.shape.described(), fine.shape.described())

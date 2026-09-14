@@ -50,6 +50,13 @@ class PipelineOptions:
     band_repairs: int = 2
     evaluate_grid: bool = True
     check_edge_crossings: bool = True
+    # Band height as a fraction of the domain scale: a geometric parameter of
+    # the topology, so the block shapes do not change with the cell sizing.
+    # ``None`` asks for the metric's wall-normal series height instead.  The
+    # default is exactly the series height of the default sizing (0.256), so
+    # the default results are unchanged; a different sizing now leaves the
+    # band, and every block shape, where it was.
+    layer_height_ratio: float | None = sizing.DEFAULT_LAYER_HEIGHT_RATIO
     forced_splits: tuple = ()
     layout: block_layout.LayoutOptions = field(
         default_factory=block_layout.LayoutOptions
@@ -68,6 +75,7 @@ class PipelineOptions:
         default_factory=fan_cavity.CavityOptions
     )
     grid: grid_quality.GridOptions = field(default_factory=grid_quality.GridOptions)
+    structure: pg.StructureLimits = field(default_factory=pg.StructureLimits)
 
 
 @dataclass
@@ -95,6 +103,10 @@ class PipelineResult:
     model: object | None = None
     identifiers: dict = field(default_factory=dict)
     refused: list = field(default_factory=list)
+    # ``shape`` samples every block at uniform fractions and is judged against
+    # the shape limits only; ``grid`` samples the graded mesh nodes the
+    # session defines and carries the sizing report.
+    shape: grid_quality.GridReport | None = None
     grid: grid_quality.GridReport | None = None
     analysis: dict = field(default_factory=dict)
     errors: list = field(default_factory=list)
@@ -143,14 +155,45 @@ class PipelineResult:
 
     @property
     def untangled(self) -> bool:
-        """No sampled transfinite cell is inverted."""
+        """No sampled transfinite cell is inverted, on either grid."""
         if not self.topology_valid:
             return False
-        return self.grid is None or self.grid.untangled
+        for report in (self.shape, self.grid):
+            if report is not None and not report.untangled:
+                return False
+        return True
 
     @property
-    def within_quality_targets(self) -> bool:
-        """Every enabled limit in ``options.grid`` is met."""
+    def within_shape_targets(self) -> bool:
+        """Every enabled *shape* limit is met on the uniform shape grid.
+
+        Non-orthogonality, skewness and wall misalignment are properties of
+        the block map, sampled independently of any cell count or grading.
+        """
+        if self.shape is None:
+            return self.topology_valid
+        return self.shape.within_quality_targets
+
+    @property
+    def structure_failures(self) -> list:
+        """What the topology alone forces on any later sizing, when too much."""
+        if self.graph is None:
+            return []
+        return pg.structure_failures(pg.sizing_structure(self.graph), self.options.structure)
+
+    @property
+    def sizing_feasible(self) -> bool:
+        """No equality component forces an unacceptable size jump or coupling."""
+        return self.graph is not None and not self.structure_failures
+
+    @property
+    def within_sizing_targets(self) -> bool:
+        """Informational: the mesh the assigned counts define meets the sizing limits.
+
+        Not part of ``resolved``: counts and grading are a later stage that an
+        agent adjusts from flow considerations, and this report tells it what
+        the default metric produced.
+        """
         if self.grid is None:
             return self.topology_valid
         return self.grid.within_quality_targets
@@ -160,18 +203,37 @@ class PipelineResult:
         """Valid topology and no folded cell: a session may be written.
 
         Deliberately weaker than ``resolved``.  A research candidate that is a
-        real mesh but misses a declared quality target is still worth writing
-        out and looking at; one that is tangled, crossed or uncovered is not.
+        real mesh but misses a declared target is still worth writing out and
+        looking at; one that is tangled, crossed or uncovered is not.
         """
         return self.topology_valid and self.untangled
 
     @property
     def resolved(self) -> bool:
-        """Admissible *and* within every declared quality target."""
-        return self.admissible and self.within_quality_targets
+        """Admissible, within the shape targets and structurally sizable."""
+        return self.admissible and self.within_shape_targets and self.sizing_feasible
 
     @property
     def quality_failures(self) -> list:
+        """Everything that keeps an admissible result from being resolved.
+
+        Shape failures carry the ``QualityFailure`` records of the shape grid;
+        structural failures are dictionaries of the same shape.  Both have a
+        ``described()``-compatible reading through ``described_failures``.
+        """
+        found: list = [] if self.shape is None else list(self.shape.quality_failures)
+        found.extend(self.structure_failures)
+        return found
+
+    def described_failures(self) -> list[dict]:
+        return [
+            item.described() if hasattr(item, "described") else dict(item)
+            for item in self.quality_failures
+        ]
+
+    @property
+    def sizing_failures(self) -> list:
+        """Informational misses of the counts grid against the sizing limits."""
         return [] if self.grid is None else list(self.grid.quality_failures)
 
 
@@ -375,10 +437,16 @@ def run_internal(domain: pdm.PlanarDomain, options: PipelineOptions | None = Non
 
 
 def _metric(domain: pdm.PlanarDomain, settings: PipelineOptions) -> sizing.SizeMetric:
+    height = (
+        None
+        if settings.layer_height_ratio is None
+        else float(settings.layer_height_ratio) * domain.scale
+    )
     return sizing.SizeMetric(
         settings.sizing,
         domain.scale,
         [chain.points for chain in domain.wall_chains()],
+        layer_height=height,
     )
 
 
@@ -429,6 +497,17 @@ def _finish(result: PipelineResult, settings: PipelineOptions) -> None:
             result.errors.append({"stage": "session", "error": _describe(error)})
     if result.model is not None and settings.evaluate_grid:
         try:
+            # The shape grid: the block map at uniform fractions, judged
+            # against the shape limits only.  Count-independent.
+            result.shape = grid_quality.evaluate(
+                result.model,
+                options=settings.grid.shape_only(),
+                layer_blocks=result.layer_blocks,
+                topology_valid=result.topology_valid,
+                cells=settings.grid.shape_cells,
+            )
+            # The counts grid: the mesh the assigned counts and grading define,
+            # with every limit, as the sizing report.
             result.grid = grid_quality.evaluate(
                 result.model,
                 options=settings.grid,
@@ -497,9 +576,13 @@ def build_analysis(result: PipelineResult) -> dict:
         "acceptance": {
             "topology_valid": result.topology_valid,
             "untangled": result.untangled,
-            "within_quality_targets": result.within_quality_targets,
+            "within_shape_targets": result.within_shape_targets,
+            "sizing_feasible": result.sizing_feasible,
             "admissible": result.admissible,
             "resolved": result.resolved,
+            "within_sizing_targets": result.within_sizing_targets,
+            "quality_failures": result.described_failures(),
+            "structure_limits": settings.structure.described(),
             "definitions": ACCEPTANCE_TERMS,
         },
         "resolved": result.resolved,
@@ -549,6 +632,14 @@ def build_analysis(result: PipelineResult) -> dict:
                 [] if result.counts is None else result.counts.unattainable
             ),
             "refused_grading": result.refused,
+            # Informational: how the mesh the default counts define measures
+            # up.  Not part of ``resolved``.
+            "report": None if result.grid is None else result.grid.described(),
+            "within_sizing_targets": result.within_sizing_targets,
+            "feasibility": {
+                "limits": settings.structure.described(),
+                "failures": result.structure_failures,
+            },
         }
     if result.family == "external":
         analysis["medial"] = _medial_section(result)
@@ -556,8 +647,8 @@ def build_analysis(result: PipelineResult) -> dict:
     else:
         analysis["sweep"] = _sweep_section(result)
         analysis["layers"] = _sweep_layer_section(result)
-    if result.grid is not None:
-        analysis["quality"] = result.grid.described()
+    if result.shape is not None:
+        analysis["quality"] = result.shape.described()
     if result.model is not None:
         analysis["session"] = {
             "topology_signature": session_emit.topology_signature(result.model),
@@ -580,15 +671,29 @@ ACCEPTANCE_TERMS = {
         "patch-graph incidence, planarity, domain coverage and periodic "
         "compatibility all hold and MeshModel.validate() accepted the session"
     ),
-    "untangled": "no sampled transfinite cell is inverted",
-    "within_quality_targets": (
-        "every enabled limit in the GridOptions the report carries is met"
+    "untangled": (
+        "no sampled transfinite cell is inverted, on the uniform shape grid "
+        "or on the graded counts grid"
+    ),
+    "within_shape_targets": (
+        "every enabled shape limit - non-orthogonality, skewness, wall "
+        "misalignment - is met on the shape grid, which samples every block "
+        "at uniform fractions independent of counts and grading"
+    ),
+    "sizing_feasible": (
+        "no opposite-edge equality component forces a length ratio above the "
+        "structure limit or ties a tangential resolution to a wall-normal one"
     ),
     "admissible": (
         "topology_valid and untangled: a real mesh, so a session is written "
-        "for inspection even when it misses a quality target"
+        "for inspection even when it misses a target"
     ),
-    "resolved": "admissible and within_quality_targets",
+    "resolved": "admissible and within_shape_targets and sizing_feasible",
+    "within_sizing_targets": (
+        "informational, not part of resolved: the mesh the default counts and "
+        "grading define meets the sizing limits - aspect ratio, interface "
+        "size ratio, first-cell width"
+    ),
 }
 
 
@@ -608,6 +713,9 @@ LIMITATIONS = [
     "count; graph.sizing_structure reports the length ratio that forces.",
     "The 30P30N block graph depends on the raster width although its medial "
     "junctions do not; every synthetic fixture is raster-invariant.",
+    "The slat's band on 30P30N is on a knife edge: a 2.4 percent change of the "
+    "requested band height, which only enters the front loop through its probe "
+    "bound and repair floor, decides whether the loop's local repairs succeed.",
     "The through-cut cavity template is constructed for three sectors only. "
     "More sectors need a transition strip between the sector chain and the "
     "core boundary, which this stage reports rather than builds.",

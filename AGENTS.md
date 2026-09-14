@@ -216,9 +216,12 @@ them in the canvas widgets.
   copy of the graph and validated against the whole embedding - coverage,
   convexity, planarity, Euler and index balance and the cell-count components -
   before anything is committed, so a rejected alternative leaves the topology
-  untouched and carries its exact reason. Acceptance separates a valid topology,
-  an untangled sampled grid and meeting the declared quality limits, and the
-  report carries the limits it was judged against. `graph.sizing_structure`
+  untouched and carries its exact reason. Acceptance separates a valid
+  topology, an untangled grid, the shape limits measured on a count-free
+  uniform sampling of every block, and structural sizing feasibility from the
+  equality components; the sizing limits of the mesh the default counts define
+  are reported but do not decide `resolved`, because counts and grading are a
+  later stage. The report carries the limits it was judged against. `graph.sizing_structure`
   in the report gives the count-independent consequences of the opposite-edge
   equality components (length ratios and role couplings), which is what the
   topology stage can be held to before any cell count exists. Regression

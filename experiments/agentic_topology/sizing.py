@@ -65,21 +65,54 @@ def layer_cells(first: float, growth: float, core: float) -> int:
     return max(1, int(math.ceil(math.log(core / first) / math.log(growth))) + 1)
 
 
-def layer_height(first: float, growth: float, cells: int) -> float:
+def layer_height_of(first: float, growth: float, cells: int) -> float:
     """Total thickness of ``cells`` geometric cells starting at ``first``."""
     return first * (growth**cells - 1.0) / (growth - 1.0)
+
+
+# Backwards-compatible name.
+layer_height = layer_height_of
+
+# The band height the default sizing's wall-normal series reaches the core
+# size at, as a fraction of the domain scale.  Used as the geometric default
+# for the requested band height so the topology does not follow the sizing;
+# about 0.256.
+DEFAULT_LAYER_HEIGHT_RATIO = layer_height_of(
+    SizingOptions.first_width_ratio,
+    SizingOptions.growth,
+    layer_cells(
+        SizingOptions.first_width_ratio,
+        SizingOptions.growth,
+        SizingOptions.core_size_ratio,
+    ),
+)
 
 
 class SizeMetric:
     """Requested cell size as a function of distance from the nearest wall."""
 
-    def __init__(self, options: SizingOptions, scale: float, wall_loops):
+    def __init__(
+        self,
+        options: SizingOptions,
+        scale: float,
+        wall_loops,
+        *,
+        layer_height: float | None = None,
+    ):
         self.options = options
         self.scale = float(scale)
         self.first, self.core = options.widths(scale)
         self.growth = float(options.growth)
         self.layer_cells = layer_cells(self.first, self.growth, self.core)
-        self.layer_height = layer_height(self.first, self.growth, self.layer_cells)
+        # The band height is a geometric parameter of the topology.  By
+        # default it is the thickness at which the wall-normal series reaches
+        # the core size, so a change of resolution keeps the same band; an
+        # explicit height decouples the two.
+        self.series_height = layer_height_of(self.first, self.growth, self.layer_cells)
+        self.layer_height = (
+            float(layer_height) if layer_height is not None else self.series_height
+        )
+        self.layer_height_explicit = layer_height is not None
         self._walls = [np.asarray(loop, dtype=np.float64) for loop in wall_loops]
 
     def wall_distance(self, points) -> np.ndarray:
@@ -111,6 +144,10 @@ class SizeMetric:
             "layer_cells": self.layer_cells,
             "layer_height": self.layer_height,
             "layer_height_over_scale": self.layer_height / self.scale,
+            "layer_height_source": (
+                "geometric ratio" if self.layer_height_explicit else "wall-normal series"
+            ),
+            "series_height": self.series_height,
             "law": "size(d) = min(core, first + (growth - 1) * d)",
         }
 

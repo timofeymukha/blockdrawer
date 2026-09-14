@@ -29,16 +29,24 @@ def describe(result) -> dict:
         "admissible": result.admissible,
         "topology_valid": result.topology_valid,
         "untangled": result.untangled,
-        "within_quality_targets": result.within_quality_targets,
+        "within_shape_targets": result.within_shape_targets,
+        "sizing_feasible": result.sizing_feasible,
+        "within_sizing_targets": result.within_sizing_targets,
         "scale": result.scale,
         "domain": None,
         "boundaries": [],
         "layer_fronts": (result.analysis.get("layers") or {}).get("fronts", []),
         "sharp_feature_cavities": result.analysis.get("sharp_feature_cavities"),
         "acceptance": result.analysis.get("acceptance"),
-        "quality_failures": [
-            failure.described() for failure in result.quality_failures
+        "quality_failures": result.described_failures(),
+        "sizing_failures": [
+            failure.described() for failure in result.sizing_failures
         ],
+        "sizing_structure": (
+            None
+            if result.analysis.get("graph") is None
+            else result.analysis["graph"].get("sizing_structure")
+        ),
         "singularities": [],
         "separatrix_graph": None,
         "count_components": [],
@@ -114,9 +122,11 @@ def describe(result) -> dict:
             "monotone": result.correspondence.monotone,
             "crossing_columns": list(result.correspondence.crossing),
         }
+    if result.shape is not None:
+        description["worst_cells"] = result.shape.worst_cells
+        description["quality"] = result.shape.described()
     if result.grid is not None:
-        description["worst_cells"] = result.grid.worst_cells
-        description["quality"] = result.grid.described()
+        description["sizing_report"] = result.grid.described()
     return description
 
 

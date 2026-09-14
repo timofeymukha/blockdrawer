@@ -41,6 +41,7 @@ import agent_ops  # noqa: E402
 import analysis_plot  # noqa: E402
 import block_layout  # noqa: E402
 import fan_cavity  # noqa: E402
+import patch_graph as pg  # noqa: E402
 import layers as layer_module  # noqa: E402
 import pipeline  # noqa: E402
 import session_emit  # noqa: E402
@@ -94,6 +95,27 @@ def add_input_arguments(parser: argparse.ArgumentParser) -> None:
         "--clearance-fraction",
         type=float,
         default=layer_module.LayerOptions.clearance_fraction,
+    )
+    parser.add_argument(
+        "--layer-height-ratio",
+        type=lambda text: None if text == "series" else float(text),
+        default=pipeline.PipelineOptions.layer_height_ratio,
+        metavar="FRACTION",
+        help=(
+            "boundary-layer band height as a fraction of the domain scale "
+            "(default %(default)s); 'series' uses the height at which the "
+            "metric's wall-normal series reaches the core size instead"
+        ),
+    )
+    parser.add_argument(
+        "--max-length-ratio",
+        type=float,
+        default=pg.StructureLimits.max_length_ratio,
+        metavar="RATIO",
+        help=(
+            "largest geometric length ratio one opposite-edge equality "
+            "component may force; the structural sizing feasibility limit"
+        ),
     )
     parser.add_argument(
         "--max-wall-turning",
@@ -170,6 +192,8 @@ def build_options(arguments) -> pipeline.PipelineOptions:
         reference_curves=not arguments.no_reference_curves,
         evaluate_grid=not arguments.no_grid_quality,
         forced_splits=tuple(forced),
+        layer_height_ratio=arguments.layer_height_ratio,
+        structure=pg.StructureLimits(max_length_ratio=arguments.max_length_ratio),
         layout=block_layout.LayoutOptions(
             max_wall_turning=math.radians(arguments.max_wall_turning)
         ),
@@ -252,9 +276,13 @@ def write_artifacts(result, arguments) -> list[Path]:
             "the topology is not a mesh - it is crossed, uncovered, or has an "
             "inverted sampled cell - so no partial session is written"
         )
-    if result.admissible and not result.within_quality_targets:
-        analysis.setdefault("session", {})["below_quality_targets"] = [
-            failure.described() for failure in result.quality_failures
+    if result.admissible and not result.resolved:
+        analysis.setdefault("session", {})["below_quality_targets"] = (
+            result.described_failures()
+        )
+    if result.admissible and not result.within_sizing_targets:
+        analysis.setdefault("session", {})["sizing_misses"] = [
+            failure.described() for failure in result.sizing_failures
         ]
     if getattr(arguments, "json", None):
         arguments.json.parent.mkdir(parents=True, exist_ok=True)
@@ -291,12 +319,15 @@ def command_run(arguments) -> int:
         )
     )
     print(
-        "topology_valid=%s untangled=%s within_quality_targets=%s admissible=%s"
+        "topology_valid=%s untangled=%s within_shape_targets=%s "
+        "sizing_feasible=%s admissible=%s resolved=%s"
         % (
             result.topology_valid,
             result.untangled,
-            result.within_quality_targets,
+            result.within_shape_targets,
+            result.sizing_feasible,
             result.admissible,
+            result.resolved,
         )
     )
     if not result.topology_valid or not result.untangled:
@@ -317,8 +348,7 @@ def command_run(arguments) -> int:
                 file=sys.stderr,
             )
         return 1
-    for failure in result.quality_failures:
-        described = failure.described()
+    for described in result.described_failures():
         print(
             "below target: %s = %.4g, limit %.4g (%s) at %s"
             % (
@@ -326,6 +356,18 @@ def command_run(arguments) -> int:
                 described["observed"],
                 described["limit"],
                 described["comparison"],
+                described.get("block") or described.get("roles") or "-",
+            ),
+            file=sys.stderr,
+        )
+    for failure in result.sizing_failures:
+        described = failure.described()
+        print(
+            "sizing (informational): %s = %.4g, limit %.4g at %s"
+            % (
+                described["metric"],
+                described["observed"],
+                described["limit"],
                 described["block"] or "-",
             ),
             file=sys.stderr,
