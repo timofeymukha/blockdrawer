@@ -600,11 +600,9 @@ LIMITATIONS = [
     "tenths of the distance to the ring between gates, so a curved front can "
     "bulge past a straight core spoke. Tightening the interior cap was "
     "measured and is worse.",
-    "The front collapses onto the wall at every concave wall corner: the "
-    "tangent-disk local feature size is exactly zero at a reflex vertex, so "
-    "the clearance-limited height is zero there. That is the remaining 30P30N "
-    "touching_edges problem (the 90 degree cove corner) and the peanut_body "
-    "fixture.",
+    "A reflex wall corner carries a bisector spoke to the level set's mitre, "
+    "so the two band blocks beside it meet the wall at half the fluid angle; "
+    "the corner-block alternative is not written yet.",
     "The seam wedge's opposite sides are a band spoke and a core spoke, so "
     "every seam merges the chain's wall-normal band count with its core radial "
     "count; graph.sizing_structure reports the length ratio that forces.",

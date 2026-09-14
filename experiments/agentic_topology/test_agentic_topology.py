@@ -1744,7 +1744,11 @@ class RegressionFixtureTests(unittest.TestCase):
         self.assertLess(float(np.min(angles)), 95.0)
 
     def test_the_peanut_failure_is_located_at_the_reflex_corners(self):
-        """The tangent-disk feature size is zero there and the report says so."""
+        """The tangent-disk feature size is zero at the waist; the far clearance is not.
+
+        While the band could not be built, the failure named the two waist
+        gates; now that it can, the front keeps a positive height there.
+        """
         _names, loops = cases.peanut_body()
         loop = np.asarray(loops[0])
         closed = np.vstack([loop, loop[:1]])
@@ -1774,11 +1778,28 @@ class RegressionFixtureTests(unittest.TestCase):
             gap = float(np.min(np.linalg.norm(reported - corner, axis=1)))
             self.assertLess(gap, 1.0e-3 * result.scale)
 
-    @unittest.expectedFailure
-    def test_the_peanut_band_is_not_yet_admissible(self):
-        """Flip this test when a front survives a concave wall corner."""
+    def test_the_peanut_band_is_admissible(self):
+        """A front survives a concave wall corner: it mitres instead of folding."""
         result = run_case("peanut_body", CAVITY_FAST)
         self.assertTrue(result.admissible, (result.failures, result.problems[:2]))
+        self.assertEqual(result.grid.inverted_cells, 0)
+        front = next(iter(result.assembly.fronts.values()))
+        self.assertGreater(front.minimum_height, 0.0)
+        # Both reflex corners are pinned gates whose spoke runs along the
+        # bisector to the level set's mitre.
+        _names, loops = cases.peanut_body()
+        loop = np.asarray(loops[0])
+        corners = loop[np.where(_fluid_angles(loop) < 170.0)[0]]
+        reflex_gates = [
+            cut
+            for cuts in result.layout.cuts
+            for cut in cuts
+            if cut.anchor.kind == "reflex" and cut.pinned
+        ]
+        self.assertEqual(len(reflex_gates), 2)
+        for cut in reflex_gates:
+            gap = float(np.min(np.linalg.norm(corners - cut.wall_point, axis=1)))
+            self.assertLess(gap, 1.0e-6 * result.scale)
 
     def test_the_skimming_tail_is_a_narrow_slot(self):
         """One sharp tip, one smooth hull, a gap near one percent of the scale."""
@@ -1800,7 +1821,8 @@ class RegressionFixtureTests(unittest.TestCase):
         self.assertEqual(len(result.diagram.junctions), 2)
         if not result.admissible:
             located = any(
-                item.get("chain") == "hull" for item in result.failures
+                item.get("stage") == "boundary_layer_front"
+                for item in result.failures
             ) or bool(result.problems)
             self.assertTrue(located, (result.failures, result.problems))
 
@@ -1903,3 +1925,136 @@ class RasterInvarianceTests(unittest.TestCase):
                 summaries.append(result.graph.summary())
             with self.subTest(case=name):
                 self.assertEqual(summaries[0], summaries[1])
+
+
+class LevelSetFrontTests(unittest.TestCase):
+    """The front is the eroded domain's boundary, not a per-vertex offset."""
+
+    @staticmethod
+    def _corner_wall(height_of_wall: float = 1.0, samples: int = 41):
+        """An L-shaped wall: two unit edges meeting at a 90 degree reflex corner.
+
+        The fluid occupies the quadrant x > 0, y > 0 seen from the corner at the
+        origin, so the wall runs down the y axis and out along the x axis.
+        """
+        down = np.column_stack((np.zeros(samples), np.linspace(height_of_wall, 0.0, samples)))
+        out = np.column_stack((np.linspace(0.0, height_of_wall, samples), np.zeros(samples)))
+        return np.vstack([down, out[1:]])
+
+    def test_far_clearance_is_finite_at_a_reflex_corner(self):
+        _names, loops = cases.peanut_body()
+        loop = g2.close_loop(loops[0], 0.0)
+        sign = 1.0 if g2.signed_area(loop) > 0.0 else -1.0
+        normals = -sign * g2.vertex_normals(loop, closed=True)
+        angles = layer_module.fluid_angles(loop, sign)
+        at = np.concatenate((angles, angles[:1]))
+        reflex = np.where(np.degrees(angles) < 170.0)[0]
+        disk = layer_module.local_feature_size([loop], loop, normals, upper=2.0)
+        far = layer_module.far_clearance(
+            [], loop, normals, fluid_angles_at=at, closed=True, upper=2.0
+        )
+        self.assertTrue(np.all(disk[reflex] == 0.0))
+        self.assertTrue(np.all(far[reflex] > 1.0), far[reflex])
+
+    def test_far_clearance_matches_the_tangent_disk_against_another_body(self):
+        first = g2.orient_anticlockwise(
+            g2.close_loop(cases.circle((-0.6, 0.0), 0.5, 200), 0.0)
+        )
+        second = g2.orient_anticlockwise(
+            g2.close_loop(cases.circle((0.6, 0.0), 0.5, 200), 0.0)
+        )
+        normals = -1.0 * g2.vertex_normals(first, closed=True)
+        angles = layer_module.fluid_angles(first, 1.0)
+        at = np.concatenate((angles, angles[:1]))
+        disk = layer_module.local_feature_size([first, second], first, normals, upper=1.0)
+        far = layer_module.far_clearance(
+            [second], first, normals, fluid_angles_at=at, closed=True, upper=1.0
+        )
+        towards = int(np.argmax(first[:-1, 0]))
+        # The gap is 0.2, so the largest disk between the bodies has radius 0.1.
+        self.assertAlmostEqual(float(far[towards]), 0.1, delta=0.01)
+        self.assertAlmostEqual(float(far[towards]), float(disk[towards]), delta=1e-6)
+
+    def test_a_reflex_corner_shadow_maps_onto_the_mitre(self):
+        wall = self._corner_wall()
+        # Fluid on the left of the path (down the y axis, then along x), so a
+        # left turn closes the fluid sector: fluid angle = pi - turning.
+        normals = g2.vertex_normals(wall, closed=False)
+        turning = g2.turning_angles(wall, closed=False)
+        at = np.concatenate(([math.pi], math.pi - turning, [math.pi]))
+        height = 0.3
+        heights = np.full(len(wall), height)
+        offset = g2.offset_polyline(wall, heights, closed=False, limit=1.5)
+        front = layer_module.trim_to_level_set(
+            [wall], wall, offset, heights, normals, at, closed=False
+        )
+        distance = g2.distance_to_polyline(wall, front)
+        self.assertTrue(np.all(distance >= 0.98 * height - 1e-9), distance.min())
+        self.assertTrue(g2.is_simple(front, closed=False))
+        corner = int(np.argmin(np.degrees(at)))
+        self.assertTrue(np.allclose(front[corner], (height, height), atol=1e-6))
+        # Every wall vertex within one height of the corner maps to the mitre.
+        stations = g2.cumulative_length(wall)
+        shadow = np.abs(stations - stations[corner]) < height - 1e-9
+        self.assertTrue(np.all(np.linalg.norm(front[shadow] - (height, height), axis=1) < 1e-6))
+        outside = np.abs(stations - stations[corner]) > height + 0.05
+        self.assertTrue(np.all(np.abs(distance[outside] - height) < 1e-6))
+
+    def test_the_shadow_cap_keeps_a_gate_out_of_the_shadow(self):
+        wall = self._corner_wall()
+        turning = g2.turning_angles(wall, closed=False)
+        at = np.concatenate(([math.pi], math.pi - turning, [math.pi]))
+        corner = int(np.argmin(at))
+        stations = g2.cumulative_length(wall)
+        neighbour = corner + 8  # a gate 0.2 along the wall from the corner
+        cap = np.full(len(wall), 1.0)
+        capped = layer_module.reflex_shadow_cap(
+            cap, stations, at, [0, corner, neighbour, len(wall) - 1], closed=False
+        )
+        gap = float(stations[neighbour] - stations[corner])
+        self.assertAlmostEqual(float(capped[corner]), 0.9 * gap * math.tan(0.5 * float(at[corner])), places=9)
+        self.assertEqual(float(capped[corner + 1]), 1.0)
+
+
+class ConcaveCurvatureCapTests(unittest.TestCase):
+    """A smooth bend towards the fluid is capped at its radius of curvature."""
+
+    def test_a_bowl_is_capped_and_a_corner_shadow_is_not(self):
+        # A wall running along the x axis with a semicircular bowl of radius 0.5
+        # dipping towards the fluid (which lies above the wall, on its left).
+        radius = 0.5
+        theta = np.linspace(math.pi, 0.0, 61)
+        bowl = np.column_stack((radius * np.cos(theta), -radius * np.sin(theta)))
+        left = np.column_stack((np.linspace(-2.0, -radius, 31)[:-1], np.zeros(30)))
+        right = np.column_stack((np.linspace(radius, 2.0, 31)[1:], np.zeros(30)))
+        wall = np.vstack([left, bowl, right])
+        normals = g2.vertex_normals(wall, closed=False)
+        turning = g2.turning_angles(wall, closed=False)
+        angles = np.concatenate(([math.pi], math.pi - turning, [math.pi]))
+        arclength = g2.cumulative_length(wall)
+        far = np.full(len(wall), 10.0)
+        cap = np.full(len(wall), 1.0)
+        capped = layer_module.concave_curvature_cap(
+            cap, wall, normals, arclength, angles, far,
+            closed=False, clearance_fraction=0.35, curvature_fraction=0.8, upper=10.0,
+        )
+        bottom = int(np.argmin(wall[:, 1]))
+        self.assertAlmostEqual(float(capped[bottom]), 0.8 * radius, delta=0.02)
+        # The flat parts are not bent and keep their cap.
+        self.assertEqual(float(capped[5]), 1.0)
+        # A reflex corner's shadow is exempt: the L wall from the level-set
+        # tests keeps its far-clearance height right up to the corner.
+        corner_wall = LevelSetFrontTests._corner_wall()
+        normals = g2.vertex_normals(corner_wall, closed=False)
+        turning = g2.turning_angles(corner_wall, closed=False)
+        angles = np.concatenate(([math.pi], math.pi - turning, [math.pi]))
+        arclength = g2.cumulative_length(corner_wall)
+        far = np.full(len(corner_wall), 10.0)
+        cap = np.full(len(corner_wall), 0.3)
+        capped = layer_module.concave_curvature_cap(
+            cap, corner_wall, normals, arclength, angles, far,
+            closed=False, clearance_fraction=0.35, curvature_fraction=0.8, upper=10.0,
+        )
+        corner = int(np.argmin(angles))
+        near = np.abs(arclength - arclength[corner]) < 0.3
+        self.assertTrue(np.all(capped[near] == 0.3), capped[near])

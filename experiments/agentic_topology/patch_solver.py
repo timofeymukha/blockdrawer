@@ -201,11 +201,16 @@ def _collect_variables(
         count = len(cuts)
         balance = layout.anchors.gate_balance
         for position, cut in enumerate(cuts):
-            if cut.pinned and cut.anchor.kind == "corner" and not free_corner_gates:
+            if cut.pinned and (
+                cut.anchor.kind == "reflex"
+                or (cut.anchor.kind == "corner" and not free_corner_gates)
+            ):
                 # A sharp wall corner should stay a block corner: an edge that
                 # runs through the kink describes the boundary badly.  The
                 # constraint is released only when no valid layout exists with
-                # it in place.
+                # it in place - except at a reflex corner, where the level set
+                # of the wall distance has its mitre and the spoke must run
+                # along the bisector, so that pin is never released.
                 continue
             previous = cuts[(position - 1) % count]
             following = cuts[(position + 1) % count]

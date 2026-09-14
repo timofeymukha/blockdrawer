@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 import geometry2d as g2
+import layers as layer_module
 from sites import Site
 from voronoi_graph import Diagram
 
@@ -360,11 +361,40 @@ def corner_anchors(
         loop = site.curve.loop()
         turning = g2.turning_angles(loop, closed=True)
         stations = g2.cumulative_length(loop)[:-1]
+        fluid = math.pi + site.curve.fluid_sign * turning
         for index, angle in enumerate(turning):
             if abs(angle) < minimum_turn:
                 continue
+            if float(fluid[index]) < layer_module.REFLEX_FLUID_ANGLE:
+                continue  # reflex corners are anchored by reflex_anchors()
             anchor = anchor_from_wall(
                 diagram, cell, float(stations[index]), "corner"
+            )
+            if anchor is not None:
+                anchors.append(anchor)
+    return anchors
+
+
+def reflex_anchors(diagram: Diagram, cells: list[Cell]) -> list[Anchor]:
+    """Mandatory anchors at every reflex wall corner.
+
+    A vertex the fluid sees at less than ``layers.REFLEX_FLUID_ANGLE`` has no
+    tangent disk: the level set of the wall distance has a mitre there, and
+    the band's spoke must run along the bisector to it, so the corner has to
+    be a gate whatever the separation rule says, and its pin is never given
+    up.
+    """
+    anchors: list[Anchor] = []
+    for cell in cells:
+        site = diagram.sites[cell.site]
+        if site.curve.kind != "wall":
+            continue
+        loop = site.curve.loop()
+        fluid = math.pi + site.curve.fluid_sign * g2.turning_angles(loop, closed=True)
+        stations = g2.cumulative_length(loop)[:-1]
+        for index in np.nonzero(fluid < layer_module.REFLEX_FLUID_ANGLE)[0]:
+            anchor = anchor_from_wall(
+                diagram, cell, float(stations[index]), "reflex"
             )
             if anchor is not None:
                 anchors.append(anchor)
@@ -612,7 +642,7 @@ def relax_gates(site: Site, cuts: list[Cut], balance: float) -> None:
         cuts[index].wall_point = site.curve.point_at(cuts[index].wall_station)
 
 
-_PIN_PRIORITY = {"corner": 4, "curvature": 3, "turning": 2, "seed": 1}
+_PIN_PRIORITY = {"reflex": 5, "corner": 4, "curvature": 3, "turning": 2, "seed": 1}
 
 
 def _pin_priority(cut: Cut) -> int:
@@ -813,6 +843,11 @@ def build_layout(diagram: Diagram, options: LayoutOptions | None = None) -> Layo
     )
     notes: list[str] = []
     for anchor in junction_anchors(diagram):
+        anchors.add(anchor, force=True)
+    # A reflex corner is where the level set of the wall distance has its
+    # mitre; the band spoke has to run along its bisector, so it is always a
+    # gate.
+    for anchor in reflex_anchors(diagram, cells):
         anchors.add(anchor, force=True)
     # A wall vertex sharp enough to give the fluid more than 250 degrees must
     # be a block corner: no patch whose wall section runs through it can be a

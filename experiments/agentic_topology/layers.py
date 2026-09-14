@@ -7,16 +7,22 @@ front - not the physical wall - as its boundary.  That is the whole point: the
 near-wall region stops being whatever the interior decomposition happens to
 produce.
 
-The front height is clearance limited,
+The front is the boundary of the eroded fluid domain: the level set of the
+wall distance at a height that varies slowly along the wall,
 
-    height(s) = min(requested_height, clearance_fraction * local_feature_size(s))
+    height(s) = min(requested_height, clearance_fraction * far_clearance(s))
 
-where the local feature size is the radius of the largest disk that is tangent
-to the wall at ``s`` and still fits between the walls.  It is found by bisection
-on the wall distance field, so it is a property of the geometry rather than of a
-raster.  The result is slope limited along the wall so the front cannot kink,
-and it is shrunk globally when the offset would still self-intersect or cross
-another boundary.
+where the far clearance is the height at which the level set owned by ``s``
+collapses against a wall part that is not locally adjacent - another body, or
+a distant part of the same wall.  It is found by bisection on the wall distance
+field with the wall's own neighbourhood excluded, so it is a property of the
+geometry rather than of a raster, and it is finite at a concave corner, where
+the plain tangent-disk feature size is zero because no disk is tangent there.
+The per-vertex offset is then projected onto the level set, which turns the
+shadow of a concave corner into the corner's mitre instead of a fold.  The
+height is slope limited along the wall so the front cannot kink, and it is
+shrunk globally when the front would still self-intersect or cross another
+boundary.
 
 At a sharp convex wall feature one band block would have to span the whole
 fluid sector - a 352 degree cusp gives two 176 degree block corners no matter
@@ -37,6 +43,15 @@ import numpy as np
 
 import geometry2d as g2
 import patch_graph as pg
+
+
+# Fluid angle below which a wall vertex is a reflex corner rather than a
+# smooth bend.  The tangent-disk probe accepts a disk when its wall distance is
+# at least 0.98 of its radius, and a disk tangent at a vertex of fluid angle
+# ``theta`` reaches ``sin(theta / 2)`` of its radius towards the adjacent edge,
+# so below this angle no disk is tangent at all: the level set has a mitre
+# there and the corner has to be a gate.  About 157 degrees.
+REFLEX_FLUID_ANGLE = 2.0 * math.asin(0.98)
 
 
 class LayerError(RuntimeError):
@@ -70,6 +85,10 @@ class LayerOptions:
     curvature_fraction: float = 0.8
     # Fraction of the distance to the core scaffold a front may reach.
     scaffold_fraction: float = 0.9
+    # Arc-length window, in probe heights, within which the wall's own
+    # segments do not count as a clearance limit: a corner or bend inside it
+    # trims the level set into a mitre rather than collapsing it.
+    shadow_window: float = 2.0
     miter_limit: float = 1.5
     minimum_band_cells: float = 3.0
     repair_factor: float = 0.6
@@ -114,6 +133,298 @@ def local_feature_size(
         low = np.where(fits, middle, low)
         high = np.where(fits, high, middle)
     return low
+
+
+def _is_same_wall(loop: np.ndarray, wall: np.ndarray) -> bool:
+    """True when ``loop`` and ``wall`` trace the same curve.
+
+    The augmented wall carries the supplied loop's vertices plus inserted
+    stations, so every vertex of either lies on the other.
+    """
+    tolerance = 1.0e-7 * max(g2.total_length(wall), 1.0e-300)
+    if float(np.max(g2.distance_to_polyline(loop, wall[:-1]))) > tolerance:
+        return False
+    return float(np.max(g2.distance_to_polyline(wall, loop[:-1]))) <= tolerance
+
+
+def other_walls(wall_loops, wall: np.ndarray) -> list[np.ndarray]:
+    """Every wall loop except the one ``wall`` is an augmented copy of."""
+    return [
+        np.asarray(loop, dtype=np.float64)
+        for loop in wall_loops
+        if not _is_same_wall(np.asarray(loop, dtype=np.float64), wall)
+    ]
+
+
+def far_clearance(
+    others,
+    wall: np.ndarray,
+    normals: np.ndarray,
+    *,
+    fluid_angles_at: np.ndarray,
+    closed: bool,
+    upper: float,
+    window: float = 2.0,
+    steps: int = 26,
+) -> np.ndarray:
+    """Height at which the level set owned by each wall vertex collapses.
+
+    The plain tangent-disk feature size is zero at a reflex vertex and about
+    the distance to the corner beside it, because the probe disk touches the
+    wall's own adjacent edge.  That contact is the level set being *trimmed*
+    by the corner's mitre, not collapsing: the front there is the mitre point,
+    which is a perfectly good block vertex.  A collapse is a collision with a
+    wall part that is not locally adjacent - another body, or a distant part
+    of the same wall - so this probe ignores the wall's own segments within an
+    arc-length window of ``window`` times the probe height around each vertex,
+    and probes a reflex vertex at its mitre point (``height / sin(angle / 2)``
+    along the bisector) instead of at the plain offset point.  For a smooth
+    vertex far from any corner it is the tangent-disk feature size exactly.
+    """
+    points = np.asarray(wall, dtype=np.float64)
+    direction = np.asarray(normals, dtype=np.float64)
+    count = len(points)
+    angles = np.asarray(fluid_angles_at, dtype=np.float64)
+    half = 0.5 * np.clip(angles, 1.0e-6, math.pi)
+    # A reflex vertex is probed at its mitre point; everywhere else the level
+    # set point is the plain offset point.
+    reach = np.where(angles < REFLEX_FLUID_ANGLE, 1.0 / np.sin(half), 1.0)
+    stations = g2.cumulative_length(points)
+    total = float(stations[-1])
+    starts = points[:-1]
+    vectors = points[1:] - points[:-1]
+    lengths_squared = np.einsum("ij,ij->i", vectors, vectors)
+    safe = np.where(lengths_squared > 0.0, lengths_squared, 1.0)
+    middles = 0.5 * (stations[:-1] + stations[1:])
+    half_lengths = 0.5 * np.sqrt(lengths_squared)
+    separation = np.abs(stations[:, None] - middles[None, :])
+    if closed:
+        separation = np.minimum(separation, total - separation)
+    others = [np.asarray(loop, dtype=np.float64) for loop in others]
+
+    def own_distance(centres: np.ndarray, radius: np.ndarray) -> np.ndarray:
+        offset_x = centres[:, None, 0] - starts[None, :, 0]
+        offset_y = centres[:, None, 1] - starts[None, :, 1]
+        fraction = (offset_x * vectors[None, :, 0] + offset_y * vectors[None, :, 1]) / safe[None, :]
+        np.clip(fraction, 0.0, 1.0, out=fraction)
+        offset_x -= fraction * vectors[None, :, 0]
+        offset_y -= fraction * vectors[None, :, 1]
+        distance = np.sqrt(offset_x * offset_x + offset_y * offset_y)
+        excluded = separation <= (window * radius)[:, None] + half_lengths[None, :]
+        distance[excluded] = math.inf
+        return np.min(distance, axis=1)
+
+    low = np.zeros(count)
+    high = np.full(count, float(upper))
+    for _step in range(int(steps)):
+        middle = 0.5 * (low + high)
+        centres = points + (middle * reach)[:, None] * direction
+        best = own_distance(centres, middle)
+        for loop in others:
+            best = np.minimum(best, g2.distance_to_polyline(loop, centres))
+        fits = best >= 0.98 * middle
+        low = np.where(fits, middle, low)
+        high = np.where(fits, high, middle)
+    return low
+
+
+def trim_to_level_set(
+    wall_loops,
+    wall: np.ndarray,
+    offset: np.ndarray,
+    heights: np.ndarray,
+    normals: np.ndarray,
+    fluid_angles_at: np.ndarray,
+    *,
+    closed: bool,
+    tolerance: float = 0.98,
+    steps: int = 40,
+) -> np.ndarray:
+    """Replace the offset points the level set trims by the mitre of their run.
+
+    The per-vertex offset is the level set only where the vertex's own normal
+    reaches it.  In the shadow of a reflex corner, or of a concave bend
+    tighter than the height, the offset point lies closer to the adjacent wall
+    than the height; the level set there has a single corner, the *mitre*,
+    where the offsets of the wall on either side meet.  Every trimmed vertex
+    of one contiguous run therefore maps to that one point, which keeps the
+    front simple: projecting each point onto the nearest level-set arc would
+    put the run's points on the far side's arc and make the front zigzag
+    across the bisector.
+
+    The mitre is found on the bisector of the run's sharpest reflex vertex -
+    its arc-length midpoint when the run is a smooth bend - by bisection on
+    the wall distance, which grows monotonically along the bisector from zero
+    at the wall.  For a straight-edged corner this is the classical mitre at
+    ``height / sin(angle / 2)``; for curved walls it is exactly the point of
+    the eroded domain's boundary at that height.
+    """
+    result = np.array(offset, dtype=np.float64)
+    nodes = len(wall) - 1 if closed else len(wall)
+    loops = [np.asarray(loop, dtype=np.float64) for loop in wall_loops]
+    target = np.asarray(heights, dtype=np.float64)[:nodes]
+    if not loops or nodes == 0:
+        return result
+
+    def wall_distance(points: np.ndarray) -> np.ndarray:
+        best = np.full(len(points), math.inf)
+        for loop in loops:
+            best = np.minimum(best, g2.distance_to_polyline(loop, points))
+        return best
+
+    trimmed = (wall_distance(result[:nodes]) < tolerance * target) & (target > 0.0)
+    if not bool(np.any(trimmed)):
+        return result
+    angles = np.asarray(fluid_angles_at, dtype=np.float64)
+    # A reflex corner's own offset is the straight-edge mitre, which lies
+    # beyond the level set when the adjacent wall curves, so it is never
+    # "too close" and would split its shadow into two runs with two different
+    # mitres.  A run therefore absorbs the reflex vertices next to it, which
+    # merges the two sides of a corner into one run centred on the corner.
+    reflex = angles[:nodes] < REFLEX_FLUID_ANGLE
+    for _pass in range(nodes):
+        if closed:
+            neighbour = np.roll(trimmed, 1) | np.roll(trimmed, -1)
+        else:
+            neighbour = np.zeros(nodes, dtype=bool)
+            neighbour[1:] |= trimmed[:-1]
+            neighbour[:-1] |= trimmed[1:]
+        grown = trimmed | (reflex & neighbour)
+        if bool(np.array_equal(grown, trimmed)):
+            break
+        trimmed = grown
+    indices = np.nonzero(trimmed)[0]
+    runs: list[list[int]] = [[int(indices[0])]]
+    for index in indices[1:]:
+        if int(index) == runs[-1][-1] + 1:
+            runs[-1].append(int(index))
+        else:
+            runs.append([int(index)])
+    if closed and len(runs) > 1 and runs[0][0] == 0 and runs[-1][-1] == nodes - 1:
+        runs[0] = runs.pop() + runs[0]
+    for run in runs:
+        run_angles = angles[run]
+        if float(np.min(run_angles)) < REFLEX_FLUID_ANGLE:
+            corner = run[int(np.argmin(run_angles))]
+        else:
+            corner = run[len(run) // 2]
+        base = wall[corner]
+        direction = normals[corner]
+        height = float(target[corner])
+        if height <= 0.0:
+            continue
+        half = max(0.5 * float(angles[corner]), 0.05)
+        reach = height / max(math.sin(min(half, 0.5 * math.pi)), 0.05)
+
+        def distance_at(t: float) -> float:
+            return float(wall_distance((base + t * direction)[None, :])[0])
+
+        for _attempt in range(12):
+            if distance_at(reach) >= height:
+                break
+            reach *= 1.5
+        else:
+            continue
+        low, high = 0.0, reach
+        for _step in range(int(steps)):
+            middle = 0.5 * (low + high)
+            if distance_at(middle) < height:
+                low = middle
+            else:
+                high = middle
+        result[run] = base + high * direction
+    if closed:
+        result[-1] = result[0]
+    return result
+
+
+def concave_curvature_cap(
+    cap: np.ndarray,
+    wall: np.ndarray,
+    normals: np.ndarray,
+    arclength: np.ndarray,
+    fluid_angles_at: np.ndarray,
+    far: np.ndarray,
+    *,
+    closed: bool,
+    clearance_fraction: float,
+    curvature_fraction: float,
+    upper: float,
+    steps: int = 26,
+    margin: float = 1.5,
+) -> np.ndarray:
+    """Keep a smooth concave bend's front below its radius of curvature.
+
+    On a smooth stretch the offset at height ``h`` of a wall bending towards
+    the fluid with radius ``R`` is an arc of radius ``R - h``: as ``h``
+    approaches ``R`` the front turns through the whole bend inside a few
+    vertices and the band blocks there fold or cross their spokes, although
+    every offset point is still a valid level-set point.  The tangent disk
+    against the wall's own geometry measures exactly ``R`` there, so smooth
+    vertices are capped at ``curvature_fraction`` of it - the same rule the
+    convex side already uses for its radius of curvature.
+
+    A reflex corner and the wall inside its mitre shadow are exempt: there the
+    own-wall disk is the distance to the corner, which is the level set being
+    trimmed rather than bending, and the height comes from the far clearance.
+    """
+    result = np.array(cap, dtype=np.float64)
+    angles = np.asarray(fluid_angles_at, dtype=np.float64)
+    own = local_feature_size([wall], wall, normals, upper=upper, steps=steps)
+    stations = np.asarray(arclength, dtype=np.float64)
+    total = float(stations[-1])
+    exempt = angles < REFLEX_FLUID_ANGLE
+    for index in np.nonzero(angles < REFLEX_FLUID_ANGLE)[0]:
+        height = min(float(far[index]) * clearance_fraction, float(result[index]))
+        cot = 1.0 / math.tan(max(0.5 * float(angles[index]), 1.0e-3))
+        reach = margin * height * cot
+        gaps = np.abs(stations - stations[index])
+        if closed:
+            gaps = np.minimum(gaps, total - gaps)
+        exempt |= gaps <= reach
+    limited = np.minimum(result, curvature_fraction * own)
+    return np.where(exempt, result, limited)
+
+
+def reflex_shadow_cap(
+    cap: np.ndarray,
+    arclength: np.ndarray,
+    fluid_angles_at: np.ndarray,
+    gate_indices,
+    *,
+    closed: bool,
+    fraction: float = 0.9,
+) -> np.ndarray:
+    """Keep every gate out of the mitre shadow of a reflex corner.
+
+    At height ``h`` the level set owned by a reflex vertex of fluid angle
+    ``theta`` is the mitre, and the wall within ``h / tan(theta / 2)`` of the
+    corner on either side has no front point of its own.  A gate inside that
+    shadow would put its spoke onto the mitre too and collapse its band
+    block, so the corner's height is capped at the arc length to the nearest
+    other gate, in mitre units.  Corners that are themselves gates keep the
+    spoke along the bisector.
+    """
+    result = np.array(cap, dtype=np.float64)
+    angles = np.asarray(fluid_angles_at, dtype=np.float64)
+    stations = np.asarray(arclength, dtype=np.float64)
+    total = float(stations[-1])
+    gates = np.asarray(sorted(set(int(index) for index in gate_indices)))
+    if len(gates) < 2:
+        return result
+    gate_stations = stations[gates]
+    for index in np.nonzero(angles < REFLEX_FLUID_ANGLE)[0]:
+        cot = 1.0 / math.tan(0.5 * float(angles[index]))
+        if cot <= 0.0:
+            continue
+        gaps = np.abs(gate_stations - stations[index])
+        if closed:
+            gaps = np.minimum(gaps, total - gaps)
+        gaps = gaps[gaps > 1.0e-12 * max(total, 1.0e-300)]
+        if not len(gaps):
+            continue
+        result[index] = min(result[index], fraction * float(np.min(gaps)) / cot)
+    return result
 
 
 def slope_limited(
@@ -315,13 +626,25 @@ def build_front(
     augmented, gate_indices = insert_stations(wall_loop, stations, closed=True)
     normals = -fluid_sign * g2.vertex_normals(augmented, closed=True)
     upper = max(requested, 1.0e-12) / max(options.clearance_fraction, 1.0e-6)
-    feature = local_feature_size(
-        wall_loops, augmented, normals, upper=upper, steps=options.feature_steps
+    angles = fluid_angles(augmented, fluid_sign)
+    angles_at = np.concatenate((angles, angles[:1]))
+    # The clearance that limits a band is the distance to walls that are not
+    # locally adjacent.  The wall's own corners and bends trim the level set
+    # into a mitre instead, which the projection below constructs.
+    others = other_walls(wall_loops, augmented)
+    feature = far_clearance(
+        others,
+        augmented,
+        normals,
+        fluid_angles_at=angles_at,
+        closed=True,
+        upper=upper,
+        window=options.shadow_window,
+        steps=options.feature_steps,
     )
     inner = local_feature_size(
         wall_loops, augmented, -normals, upper=upper, steps=options.feature_steps
     )
-    angles = fluid_angles(augmented, fluid_sign)
     sharp = {
         order: index
         for order, index in enumerate(gate_indices)
@@ -366,6 +689,21 @@ def build_front(
 
     cap = floored(cap)
     arclength = g2.cumulative_length(augmented)
+    cap = concave_curvature_cap(
+        cap,
+        augmented,
+        normals,
+        arclength,
+        angles_at,
+        feature,
+        closed=True,
+        clearance_fraction=options.clearance_fraction,
+        curvature_fraction=options.curvature_fraction,
+        upper=upper,
+        steps=options.feature_steps,
+    )
+    cap = floored(cap)
+    cap = reflex_shadow_cap(cap, arclength, angles_at, gate_indices, closed=True)
     floor = options.minimum_fraction * requested
     notes: list[str] = []
     shrink = 1.0
@@ -387,6 +725,12 @@ def build_front(
             -fluid_sign * heights,
             closed=True,
             limit=options.miter_limit,
+        )
+        # The offset is the level set only where each normal reaches it; in
+        # the shadow of a reflex corner or a tight concave bend it is not, and
+        # the level set there is the mitre.
+        offset = trim_to_level_set(
+            wall_loops, augmented, offset, heights, normals, angles_at, closed=True
         )
         offset[-1] = offset[0]
         offset, stuck = flatten_offset_loops(

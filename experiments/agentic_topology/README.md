@@ -58,22 +58,48 @@ the result is `admissible`.
    geometric series in closed form, and the requested band height is the
    thickness at which the series reaches the isotropic core size.
 
-3. **Boundary-layer fronts** (`layers.py`). For every wall chain a front is
-   offset into the fluid by
+3. **Boundary-layer fronts** (`layers.py`). For every wall chain the front is
+   the boundary of the eroded fluid domain - the level set of the wall
+   distance - at a height that varies slowly along the wall,
 
    ```text
-   height(s) = min(requested, clearance_fraction * local_feature_size(s))
+   height(s) = min(requested, clearance_fraction * far_clearance(s))
    ```
 
-   The *local feature size* is the radius of the largest disk tangent to the wall
-   at `s` that still fits between the walls, found by bisection on the wall
-   distance field - a property of the geometry, not of a raster. Only wall
-   chains limit it, so a periodic end does not strangle the layer at the ends of
-   a period. The height is also capped by the wall's own inside feature size
-   (its radius of curvature), slope limited along the wall, floored at a few
-   first cells, and shrunk globally while the offset self-intersects or crosses
-   another boundary. Micro-loops that a large offset makes on a densely sampled
-   concave stretch are flattened against a window-averaged wall direction.
+   The *far clearance* is the height at which the level set owned by `s`
+   collapses against a wall part that is not locally adjacent: another body,
+   or a distant part of the same wall. It is found by bisection on the wall
+   distance field with the wall's own segments within an arc-length window of
+   two probe heights excluded, and with a reflex vertex probed at its mitre
+   point rather than at its plain offset point. For a smooth wall far from any
+   corner it is the classical tangent-disk feature size; at a concave corner,
+   where no disk is tangent and that feature size is zero, it is finite. Only
+   wall chains limit it, so a periodic end does not strangle the layer at the
+   ends of a period. The height is also capped by the wall's own radius of
+   curvature on both sides - on the convex side because a short wall section
+   would otherwise become a long front section, on the concave side because
+   the offset of a bend of radius `R` at height `h` is an arc of radius
+   `R - h` and the band blocks fold as `h` approaches `R` - by the arc length
+   to the nearest gate at a reflex corner so no gate falls into the corner's
+   shadow, slope limited along the wall, floored at a few first cells, and
+   shrunk globally while the front would still self-intersect or cross another
+   boundary. The concave cap is what the old tangent-disk law provided
+   implicitly; a reflex corner and its shadow are exempt from it, because
+   there the own-wall disk is the level set being trimmed, not bending.
+
+   The per-vertex offset is the level set only where a vertex's own normal
+   reaches it. In the shadow of a reflex corner, or of a concave bend tighter
+   than the height, the offset points lie closer to the adjacent wall than the
+   height; the level set there has one corner, the *mitre*, where the offsets
+   of the wall on either side meet. Every trimmed vertex of a contiguous run -
+   grown over the reflex vertices beside it, because a corner's own
+   straight-edge mitre overshoots a curved level set and would otherwise split
+   its shadow in two - maps to that one point, found on the run's bisector by
+   bisection on the wall distance. A reflex corner is always a gate, its pin is
+   never released by the layout relaxation, and its spoke runs along the
+   bisector to the mitre; the two band blocks beside it therefore meet the wall
+   at 45 degrees, which is valid but poor, and a corner block at the mitre is
+   the natural cavity alternative still to be written.
 
 4. **Sharp-feature cavities** (`fan_cavity.py`). This stage runs on the
    assembled patch graph, after whichever producer wrote it, and it reads only
@@ -314,24 +340,28 @@ published six-piece lower-wall polynomial mirrored across the period.
 | blocks | 48 (32 boundary-layer band, 16 core) | |
 | vertices / edges | 68 / 115 | |
 | singularities | 4 - the four domain corners, each with one block | |
-| sampled cells | 13 288, **0 inverted** | none admissible |
-| minimum scaled Jacobian | 0.525 | must be positive |
-| sampled angle range | 31.8 deg .. 148.3 deg | |
-| maximum non-orthogonality | 58.3 deg | 70 deg - **passes** |
-| maximum equiangle skewness | 0.648 | 0.85 - **passes** |
-| aspect ratio (boundary layer / unintended) | 2.85 / 7.18 | 100 unintended - **passes** |
-| maximum wall misalignment | 15.3 deg | 25 deg - **passes** |
-| maximum first-cell width error | **0.387** | 0.25 - **misses by 55 percent** |
-| maximum interface size ratio | **3.48** | 2.5 - **misses by 39 percent** |
+| sampled cells | 13 590, **0 inverted** | none admissible |
+| minimum scaled Jacobian | 0.816 (was 0.525 with the tangent-disk front) | must be positive |
+| sampled angle range | 54.8 deg .. 125.0 deg | |
+| maximum non-orthogonality | 35.3 deg (was 58.3) | 70 deg - **passes** |
+| maximum equiangle skewness | 0.391 (was 0.648) | 0.85 - **passes** |
+| aspect ratio (boundary layer / unintended) | 2.85 / 6.72 | 100 unintended - **passes** |
+| maximum wall misalignment | 20.5 deg (was 15.3) | 25 deg - **passes** |
+| maximum first-cell width error | 0.19 (was 0.387) | 0.25 - **passes** |
+| maximum interface size ratio | **2.93** (was 3.48) | 2.5 - **misses by 17 percent** |
 | patches | `bottom_wall`, `top_wall` as `wall`; `periodic_left`/`periodic_right` as a reciprocal `cyclic` pair | |
 
 So the periodic hill is `topology_valid`, `untangled` and `admissible`, and it
-is **not** `resolved`: it misses two of the six declared limits, and the run
-says which, by how much and where. Those two misses were there before and were
-hidden by an acceptance rule that only looked for inverted cells. The limits
-have not been moved to make them go away; the sizing work that would fix them is
-listed under *Remaining limits*. The session, rendering and `blockMeshDict` are
-still written, because an admissible result is worth looking at.
+is **not** `resolved`: it misses one of the six declared limits, and the run
+says which, by how much and where. The level-set front removed the second
+miss: with the tangent-disk law the band at the hill foot was limited by the
+foot's own curvature and its offset was flattened into a wiggle, which made
+the first-cell width vary by 39 percent inside one block; the front now
+follows the eroded boundary there with a rib at the foot, and every shape
+measure improved with it. The remaining interface jump is the band's last
+cell against the core's first, a sizing consequence listed under *Remaining
+limits*. The session, rendering and `blockMeshDict` are still written, because
+an admissible result is worth looking at.
 
 The domain is simply connected with no fabricated far field and no solid-body
 hole. Periodic vertices, edges, cell counts and grading match by construction:
@@ -379,19 +409,26 @@ because committing it would put a front and a ring edge into the same
 cell-count component as the chain's band spokes. A lower-scoring but
 structurally sound seam is applied instead.
 
-The run is **not `topology_valid`**, for five localised reasons: the three
-non-convex faces above, and two relations between a layer front and the medial
+The run is **not `topology_valid`**, for four localised reasons: the three
+non-convex faces above, and one relation between a layer front and the medial
 scaffold behind it:
 
 | remaining problem | where | cause |
 | ----------------- | ----- | ----- |
-| `touching_edges` between a `wall` edge and a `front` edge | `(0.6457, 0.0263)`, main-element vertex 40 | the 90 degree concave corner at the top of the cove cut. The tangent-disk feature size is exactly zero at a reflex vertex, so the front height is 0.0 there and the neighbouring stations rise linearly from it. `peanut_body` reproduces this |
 | `crossing_edges` between a `core_spoke` and a `front` edge | `(0.8020, 0.0221)`, in the flap gap | the gap is 0.0104 wide and the main/flap medial branch passes 0.006 from the main trailing edge. Both bands, both half-core strips and the medial ring are stacked inside it; the flap front's height cap changes threefold between a gate and the interior, so the front bulges past the straight spoke. `skimming_tail` is the small version |
 
-The second one is exactly the kind of defect a four-corner test cannot see - the
-corner quadrilateral there is convex - and it is only visible because edges that
+That defect is exactly the kind a four-corner test cannot see - the corner
+quadrilateral there is convex - and it is only visible because edges that
 share a vertex are checked against each other and because the front is compared
 as the polyline it really is.
+
+The `touching_edges` problem that used to sit beside it is gone. It was
+main-element vertex 40, the 90 degree concave corner at the top of the cove
+cut, where the tangent-disk feature size is exactly zero and the front height
+was 0.0. With the level-set front the corner is a pinned reflex gate, its spoke
+runs along the bisector to the mitre, and the main element's front keeps a
+positive height everywhere (minimum 0.0022, against a band of up to 0.038).
+`peanut_body` is the fixture for it.
 
 A front is already capped at nine tenths of the distance to the core scaffold,
 which is a guard against reaching past it; that guard does not help here because
@@ -420,6 +457,7 @@ line, which needs an interior guide curve and is listed as a remaining limit.
 | sharp features with a valid construction | 0 | 1 of 4 | 4 of 4, two of them 4 degree slivers | **2 of 4**, honestly |
 | non-convex faces | 0 reported (the test was four corners) | 4 | 0 | 3 |
 | edge crossings | not checked between edges sharing a vertex | 10 | 1 | **1** |
+| wall/front touches | not checked | 1 | 1 | **0** (level-set front) |
 | inverted sampled cells | **3** | no session | no session |
 | minimum sampled scaled Jacobian | -0.197 | no session | no session |
 | maximum interface size ratio | 87.15 | no session | no session |
@@ -468,21 +506,24 @@ a valid three-sector seam and the graph is clean. The cavity unit tests use a
 hand-built four-row strip whose bottom wall carries a spike, so every coordinate
 in them is written down in the test file.
 
-Two fixtures reproduce the 30P30N failure modes in small geometry and are
-**expected to fail** today. `peanut_body` is the union of two orthogonal
-circles: smooth everywhere except two 90 degree reflex corners at the waist.
-No disk can be tangent to a wall at a reflex vertex, so the tangent-disk local
-feature size the layer stage uses is exactly zero there and the front collapses
-onto the wall; the band cannot be built and the reported failure names the two
-waist gates. `skimming_tail` is a sharp tail whose lower flank runs
-horizontally two percent of the scale above a hull whose highest point lies
-just downstream of the tip, the configuration a deployed flap makes with the
-main element; the hull's band cannot be built in the slot. Each carries a
-stable test on where the failure is located and an `expectedFailure` on
-admissibility, so the moment a construction handles the fixture the suite
-reports an unexpected success and the test has to be flipped. Every synthetic
-fixture gives the same block graph at raster widths 400, 700 and 1000, and a
-test guards that; 30P30N does not (see the remaining limits).
+Two fixtures reproduce the 30P30N failure modes in small geometry.
+`peanut_body` is the union of two orthogonal circles: smooth everywhere except
+two 90 degree reflex corners at the waist. No disk can be tangent to a wall at
+a reflex vertex, so the tangent-disk feature size is exactly zero there; with
+that law the band could not be built at all. With the level-set front it is a
+valid, untangled 24-block topology whose waist gates are pinned reflex corners
+with bisector spokes to the mitre; its quality misses are the 45 degree block
+corners that construction leaves at the waist. `skimming_tail` is a sharp tail
+whose lower flank runs horizontally two percent of the scale above a hull
+whose highest point lies just downstream of the tip, the configuration a
+deployed flap makes with the main element; a band cannot be built in the slot
+and the fixture is **expected to fail** until the gap topology changes. Each
+carries a stable test on where the failure is located and, while it fails, an
+`expectedFailure` on admissibility, so the moment a construction handles the
+fixture the suite reports an unexpected success and the test has to be
+flipped. Every synthetic fixture gives the same block graph at raster widths
+400, 700 and 1000, and a test guards that; 30P30N does not (see the remaining
+limits).
 
 ## Dependencies and limits
 
@@ -503,20 +544,16 @@ installations whose LAPACK/BLAS build is broken.
   consistent at the tighter value was measured and costs two inverted sampled
   cells on `concave_and_convex`; the real fix is to let the core spoke follow
   the scaffold rather than a straight line, which needs an interior guide curve.
-* **The front collapses onto the wall at every concave wall corner.** The
-  band height is capped by the largest disk tangent to the wall, and no disk
-  is tangent at a reflex vertex: the tangent-disk feature size is exactly
-  zero at any wall vertex whose fluid angle is below about 157 degrees, and
-  roughly the distance to the corner nearby. The remaining 30P30N
-  `touching_edges` problem is main-element vertex 40, the 90 degree corner at
-  the top of the cove cut, where the front height is 0.0. The internal
-  producer uses the same function, so a step or cavity in a channel wall
-  would fail the same way; `peanut_body` reproduces it. Re-applying the sharp
-  floor after slope limiting was tried earlier and **measured** to make things
-  worse, which is consistent: the cause is the definition, not the limiter.
-  The fix is the eroded-domain boundary - the level set of the wall distance,
-  trimmed at the medial axis - which gives a mitre at a concave corner and one
-  consistent cap in a narrow gap.
+* **A reflex corner leaves 45 degree block corners.** The level-set front
+  gives a concave corner its mitre and a bisector spoke, so the two band
+  blocks beside it meet the wall at half the fluid angle: 45 degrees for a
+  90 degree corner, with 135 degree corners at the mitre. That is valid and
+  it is what `peanut_body` now reports as its non-orthogonality and skewness
+  misses. The natural alternative is a corner block: the corner becomes a
+  one-block boundary vertex, its two neighbouring gates share the mitre as
+  their front vertex, and the region between the mitre and the medial ring
+  becomes a wedge. It is a cavity template like the seam and has not been
+  written yet.
 * **The seam wedge ties the band count to the core depth.** Its opposite sides
   are a band spoke and a core spoke, so every sharp feature repaired with a
   seam merges the chain's wall-normal band count with its core radial count.

@@ -569,8 +569,20 @@ def _guide_front(
     normals = sign * g2.vertex_normals(points, closed=False)
     walls = [chain.points for chain in domain.wall_chains()]
     upper = metric.layer_height / max(options.clearance_fraction, 1.0e-6)
-    feature = layer_module.local_feature_size(
-        walls, points, normals, upper=upper, steps=options.feature_steps
+    # Fluid angle at every guide vertex; the open ends are treated as smooth.
+    # A left turn of a guide with the fluid on its left closes the fluid
+    # sector, so the fluid angle is pi minus the turning there.
+    turning = g2.turning_angles(points, closed=False)
+    angles_at = np.concatenate(([math.pi], math.pi - sign * turning, [math.pi]))
+    feature = layer_module.far_clearance(
+        layer_module.other_walls(walls, points),
+        points,
+        normals,
+        fluid_angles_at=angles_at,
+        closed=False,
+        upper=upper,
+        window=options.shadow_window,
+        steps=options.feature_steps,
     )
     inner = layer_module.local_feature_size(
         walls, points, -normals, upper=upper, steps=options.feature_steps
@@ -581,6 +593,22 @@ def _guide_front(
         target, np.maximum(options.curvature_fraction * inner, floor)
     )
     arclength = g2.cumulative_length(points)
+    target = layer_module.concave_curvature_cap(
+        target,
+        points,
+        normals,
+        arclength,
+        angles_at,
+        feature,
+        closed=False,
+        clearance_fraction=options.clearance_fraction,
+        curvature_fraction=options.curvature_fraction,
+        upper=upper,
+        steps=options.feature_steps,
+    )
+    target = layer_module.reflex_shadow_cap(
+        target, arclength, angles_at, protected, closed=False
+    )
     notes: list[str] = []
     shrink = 1.0
     for attempt in range(options.shrink_attempts + 1):
@@ -589,6 +617,9 @@ def _guide_front(
         )
         offset = g2.offset_polyline(
             points, sign * heights, closed=False, limit=options.miter_limit
+        )
+        offset = layer_module.trim_to_level_set(
+            walls, points, offset, heights, normals, angles_at, closed=False
         )
         offset, stuck = layer_module.flatten_offset_loops(
             points, offset, protected, closed=False
