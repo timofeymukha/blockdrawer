@@ -127,6 +127,79 @@ def narrow_gap_tip():
     )
 
 
+def peanut(
+    center,
+    radius: float,
+    *,
+    separation_ratio: float = math.sqrt(2.0),
+    angle: float = 0.0,
+    count: int = 200,
+) -> np.ndarray:
+    """Union of two equal circles: smooth except for two reflex waist corners.
+
+    With centres ``separation_ratio * radius`` apart the fluid sees a sector of
+    ``2 * acos(separation_ratio / 2)`` at each waist vertex.  The default
+    ``sqrt(2)`` makes the circles orthogonal, so that sector is exactly 90
+    degrees while every other vertex is within a few degrees of 180.  It is
+    the smallest closed body whose only sharp features are concave.
+    """
+    distance = separation_ratio * radius
+    if not 0.0 < distance < 2.0 * radius:
+        raise ValueError("the circles must overlap without coinciding")
+    half_chord = math.sqrt(radius**2 - (0.5 * distance) ** 2)
+    alpha = math.atan2(half_chord, 0.5 * distance)
+    samples = max(8, count // 2)
+    theta = np.linspace(alpha, 2.0 * math.pi - alpha, samples)
+    left = np.column_stack(
+        (-0.5 * distance + radius * np.cos(theta), radius * np.sin(theta))
+    )
+    theta = np.linspace(-(math.pi - alpha), math.pi - alpha, samples)
+    right = np.column_stack(
+        (0.5 * distance + radius * np.cos(theta), radius * np.sin(theta))
+    )
+    return _place(np.vstack([left[:-1], right[:-1]]), center, angle)
+
+
+def peanut_body():
+    """Two orthogonal circles unioned into one body.
+
+    The concave-corner fixture.  Its only sharp features are the two 90 degree
+    reflex corners at the waist; everywhere else the fluid angle is within a
+    few degrees of 180.  No disk can be tangent to a wall at a reflex vertex,
+    so the tangent-disk local feature size the layer stage uses is exactly
+    zero there and the clearance-limited front collapses onto the wall.  At
+    the time of writing no band can be built for this body and the run is not
+    admissible; the failure it reports names the two waist gates.
+    """
+    return ["peanut"], [peanut((0.0, 0.0), 0.6)]
+
+
+def skimming_tail(gap: float = 0.02):
+    """A sharp tail whose lower flank runs horizontally just above a hull.
+
+    The narrow-gap fixture in the configuration a deployed flap makes with the
+    main element: the tip sits ``gap`` above the hull's highest point, which
+    lies slightly downstream of it, and the flank overhangs the hull upstream
+    so the slot widens slowly.  The medial branch between the bodies runs
+    through the slot a few gap widths from either wall, so a band, a half-core
+    and the medial ring all have to fit into a gap of about one percent of the
+    domain scale.  At the time of writing the hull's band cannot be built and
+    the run is not admissible.
+    """
+    radius, tip_ratio, hull_radius = 0.26, 2.6, 0.35
+    angle = -math.asin(1.0 / tip_ratio)
+    reach = tip_ratio * radius
+    centre = (-reach * math.cos(angle), -reach * math.sin(angle))
+    hull_centre = (0.05, -gap - hull_radius)
+    return (
+        ["tail", "hull"],
+        [
+            teardrop(centre, radius, tip_ratio=tip_ratio, angle=angle),
+            circle(hull_centre, hull_radius, 200),
+        ],
+    )
+
+
 def _place(local: np.ndarray, center, angle: float) -> np.ndarray:
     rotation = np.asarray(
         [
@@ -377,6 +450,8 @@ CASES = {
     "four_bodies": four_bodies,
     "sharp_bodies": sharp_bodies,
     "narrow_gap_tip": narrow_gap_tip,
+    "peanut_body": peanut_body,
+    "skimming_tail": skimming_tail,
 }
 
 

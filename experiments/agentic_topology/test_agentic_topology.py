@@ -1712,3 +1712,194 @@ class AcceptanceTests(unittest.TestCase):
         for record in described["cavities"]:
             self.assertIn("opened_because", record)
             self.assertIn("fluid_angle_degrees", record)
+
+
+# ---------------------------------------------------------------------------
+# Regression fixtures for the 30P30N failure modes
+# ---------------------------------------------------------------------------
+#
+# Each fixture reproduces one of the two defects the acceptance geometry still
+# shows, in a body small enough to run in seconds.  Each carries a stable
+# statement about the geometry and about where the pipeline locates its
+# failure, plus an ``expectedFailure`` on admissibility: the moment the
+# construction handles the fixture that test becomes an unexpected success,
+# which unittest reports as a failure of the run, so the flip cannot go
+# unnoticed.
+
+
+def _fluid_angles(loop) -> np.ndarray:
+    closed = np.vstack([loop, loop[:1]])
+    sign = 1.0 if g2.signed_area(closed) > 0.0 else -1.0
+    return np.degrees(layer_module.fluid_angles(closed, sign))
+
+
+class RegressionFixtureTests(unittest.TestCase):
+    def test_the_peanut_has_only_reflex_sharp_features(self):
+        """Two 90 degree waist corners and nothing else sharper than 20 degrees."""
+        _names, loops = cases.peanut_body()
+        angles = _fluid_angles(np.asarray(loops[0]))
+        self.assertEqual(int(np.sum(angles < 170.0)), 2)
+        self.assertEqual(int(np.sum(angles > 200.0)), 0)
+        self.assertGreater(float(np.min(angles)), 85.0)
+        self.assertLess(float(np.min(angles)), 95.0)
+
+    def test_the_peanut_failure_is_located_at_the_reflex_corners(self):
+        """The tangent-disk feature size is zero there and the report says so."""
+        _names, loops = cases.peanut_body()
+        loop = np.asarray(loops[0])
+        closed = np.vstack([loop, loop[:1]])
+        angles = _fluid_angles(loop)
+        reflex = np.where(angles < 170.0)[0]
+        sign = 1.0 if g2.signed_area(closed) > 0.0 else -1.0
+        normals = -sign * g2.vertex_normals(closed, closed=True)
+        size = layer_module.local_feature_size(
+            [closed], closed[reflex], normals[reflex], upper=1.0
+        )
+        self.assertTrue(np.all(size == 0.0), size)
+        result = run_case("peanut_body", CAVITY_FAST)
+        if result.admissible:
+            front = next(iter(result.assembly.fronts.values()))
+            self.assertGreater(front.minimum_height, 0.0)
+            return
+        failures = [
+            item
+            for item in result.failures
+            if item.get("stage") == "boundary_layer_front"
+        ]
+        self.assertTrue(failures, result.failures)
+        reported = np.asarray(
+            [point for item in failures for point in item["gate_points"]]
+        )
+        for corner in closed[reflex]:
+            gap = float(np.min(np.linalg.norm(reported - corner, axis=1)))
+            self.assertLess(gap, 1.0e-3 * result.scale)
+
+    @unittest.expectedFailure
+    def test_the_peanut_band_is_not_yet_admissible(self):
+        """Flip this test when a front survives a concave wall corner."""
+        result = run_case("peanut_body", CAVITY_FAST)
+        self.assertTrue(result.admissible, (result.failures, result.problems[:2]))
+
+    def test_the_skimming_tail_is_a_narrow_slot(self):
+        """One sharp tip, one smooth hull, a gap near one percent of the scale."""
+        _names, loops = cases.skimming_tail()
+        tail, hull = (np.asarray(loop) for loop in loops)
+        self.assertEqual(int(np.sum(_fluid_angles(tail) > 200.0)), 1)
+        self.assertEqual(int(np.sum(_fluid_angles(hull) > 200.0)), 0)
+        result = run_case("skimming_tail", CAVITY_FAST)
+        self.assertEqual(result.domain.problems(), [])
+        closed_tail = np.vstack([tail, tail[:1]])
+        closed_hull = np.vstack([hull, hull[:1]])
+        gap = min(
+            float(np.min(g2.closest_on_polyline(closed_hull, closed_tail).distance)),
+            float(np.min(g2.closest_on_polyline(closed_tail, closed_hull).distance)),
+        ) / result.scale
+        self.assertGreater(gap, 0.005)
+        self.assertLess(gap, 0.03)
+        # The medial branch between the two bodies runs through the slot.
+        self.assertEqual(len(result.diagram.junctions), 2)
+        if not result.admissible:
+            located = any(
+                item.get("chain") == "hull" for item in result.failures
+            ) or bool(result.problems)
+            self.assertTrue(located, (result.failures, result.problems))
+
+    @unittest.expectedFailure
+    def test_the_skimming_tail_is_not_yet_admissible(self):
+        """Flip this test when both bands fit into the slot."""
+        result = run_case("skimming_tail", CAVITY_FAST)
+        self.assertTrue(result.admissible, (result.failures, result.problems[:2]))
+
+
+class RoleAndStructureTests(unittest.TestCase):
+    def test_replacement_faces_take_their_role_from_their_edges(self):
+        """A seam wedge is not a band block; a rebuilt core patch is not either."""
+        graph, domain = cusp_strip()
+        result = fan_cavity.repair(
+            graph, domain, options=fan_cavity.CavityOptions()
+        )
+        self.assertEqual(len(result.applied), 1)
+        after = result.graph
+        for face in after.faces:
+            roles = {after.edges[key].role for key in after.face_edges(face)}
+            expected = "layer" if {"wall", "front"} <= roles else "core"
+            self.assertEqual(face.role, expected, (face.corners, sorted(roles)))
+        fresh = after.faces[-result.applied[0]["new_faces"] :]
+        self.assertEqual({face.role for face in fresh}, {"layer", "core"})
+
+    def test_every_pipeline_face_role_agrees_with_its_edges(self):
+        """The producers and the cavity stage use one definition of a band block."""
+        for name in ("narrow_gap_tip", "sharp_bodies"):
+            result = run_case(name, CAVITY_FAST)
+            graph = result.graph
+            for face in graph.faces:
+                self.assertEqual(
+                    face.role,
+                    fan_cavity.face_role(graph, face.corners),
+                    (name, face.corners, face.provenance),
+                )
+
+    def test_sizing_structure_is_count_independent_and_dimensionless(self):
+        """Length ratios and role couplings come from the topology alone."""
+        result = run_case("two_circles")
+        structure = pg.sizing_structure(result.graph)
+        self.assertEqual(
+            structure["components"], len(pg.constraint_components(result.graph))
+        )
+        self.assertEqual(structure["tangential_normal_couplings"], 0)
+        self.assertEqual(structure["band_core_depth_couplings"], 0)
+        self.assertIn("sizing_structure", result.analysis["graph"])
+        names, loops = cases.two_circles()
+        scaled = pipeline.run_external(
+            names, cases.transform(loops, scale=1000.0), FAST
+        )
+        other = pg.sizing_structure(scaled.graph)
+        # The topology signature is identical under scaling; the relaxed
+        # coordinates are only comparable, as the invariance tests state.
+        self.assertEqual(
+            structure["band_core_depth_couplings"],
+            other["band_core_depth_couplings"],
+        )
+        self.assertLessEqual(
+            abs(structure["maximum_length_ratio"] - other["maximum_length_ratio"])
+            / structure["maximum_length_ratio"],
+            0.05,
+        )
+
+    def test_a_seam_wedge_ties_the_band_count_to_the_core_depth(self):
+        """The structural report names the coupling before any count is chosen."""
+        result = run_case("narrow_gap_tip", CAVITY_FAST)
+        self.assertTrue(
+            any(item.get("applied_template") == "seam" for item in result.cavity.applied)
+        )
+        structure = pg.sizing_structure(result.graph)
+        self.assertGreaterEqual(structure["band_core_depth_couplings"], 1)
+        worst = structure["worst"][0]
+        self.assertTrue(worst["ties_band_to_core_depth"])
+        self.assertEqual(sorted(worst["roles"]), ["core_spoke", "layer_spoke"])
+        self.assertGreater(worst["length_ratio"], 10.0)
+
+
+class RasterInvarianceTests(unittest.TestCase):
+    """The raster decides connectivity only; the block graph must not follow it.
+
+    Every synthetic fixture gives the same graph at widths 400, 700 and 1000.
+    The 30P30N acceptance geometry does not: at width 1400 it has 106 faces and
+    18 singularities against 115 and 24 at width 700, with the same four
+    junctions.  Until that is reproduced in a small fixture, this test guards
+    the property where it holds.
+    """
+
+    def test_the_block_graph_does_not_follow_the_raster(self):
+        for name in ("two_circles", "sharp_bodies"):
+            names, loops = cases.CASES[name]()
+            summaries = []
+            for width in (300, 600):
+                options = dataclasses.replace(
+                    CAVITY_FAST, grid_width=width, evaluate_grid=False
+                )
+                result = pipeline.run_external(names, loops, options)
+                self.assertTrue(result.topology_valid, (name, width, result.problems))
+                summaries.append(result.graph.summary())
+            with self.subTest(case=name):
+                self.assertEqual(summaries[0], summaries[1])

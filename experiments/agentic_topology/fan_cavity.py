@@ -53,8 +53,8 @@ import patch_graph as pg
 # from it.
 TOUCH_RATIO = 1.0e-9
 
-TANGENTIAL_ROLES = frozenset({"wall", "front", "ring"})
-NORMAL_ROLES = frozenset({"layer_spoke", "core_spoke"})
+TANGENTIAL_ROLES = pg.TANGENTIAL_ROLES
+NORMAL_ROLES = pg.NORMAL_ROLES
 
 
 @dataclass(frozen=True)
@@ -77,9 +77,13 @@ class CavityOptions:
     # Hard geometric tolerances, both as fractions of the cavity diagonal.
     touch_ratio: float = 1.0e-9
     minimum_edge_ratio: float = 1.0e-3
-    # Hard floor on the worst affected face; below this the candidate is not
-    # a mesh block whatever its other merits.
-    minimum_quality: float = 0.02
+    # Hard floor on the worst affected face's scaled corner Jacobian; below it
+    # the candidate is not a mesh block whatever its other merits.  0.15 is a
+    # corner of about 8.6 degrees.  The former 0.02 admitted 1.1 degree
+    # corners: on 30P30N it accepted seam wedges with 3.7 and 6.7 degree
+    # corners at the flap and main trailing edges, while every synthetic
+    # fixture is unchanged for any floor up to 0.2.
+    minimum_quality: float = 0.15
     # Soft objective weights.  Quality is in [-1, 1] and dominates.
     clearance_weight: float = 0.30
     clearance_reference: float = 0.05
@@ -1511,10 +1515,32 @@ def apply_candidate(
     for corners in candidate.faces:
         clone.add_face(
             corners,
-            role="layer" if cavity.has_layer else "core",
+            role=face_role(clone, corners),
             provenance=f"cavity {candidate.template}",
         )
     return clone
+
+
+def face_role(graph: pg.PatchGraph, corners) -> str:
+    """``layer`` for a face bounded by a wall edge and a front edge, else ``core``.
+
+    A replacement face inherits nothing from the cavity it fills.  A seam wedge
+    touches the wall at one vertex but has no wall edge, and a core patch
+    rebuilt behind a band is not a band block; labelling every new face
+    ``layer`` because the cavity contained one made the sampled-grid report
+    judge such faces by the lenient boundary-layer aspect-ratio rule and drew
+    them as bands.  Both edges are required because the producers give every
+    site boundary the role ``wall``, the far field included, and a far-field
+    patch has no front.
+    """
+    roles = set()
+    for index in range(4):
+        edge = graph.edges.get(
+            graph.edge_key(corners[index], corners[(index + 1) % 4])
+        )
+        if edge is not None:
+            roles.add(edge.role)
+    return "layer" if {"wall", "front"} <= roles else "core"
 
 
 def _count_coupling(graph: pg.PatchGraph) -> list[dict]:

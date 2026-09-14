@@ -111,7 +111,11 @@ the result is `admissible`.
 
    * every new vertex strictly inside the cavity;
    * every affected face strictly convex, positively oriented, and above a hard
-     floor on the scaled corner Jacobian;
+     floor of 0.15 on the scaled corner Jacobian - a corner of about 8.6
+     degrees. The floor used to be 0.02, a 1.1 degree corner; every synthetic
+     fixture is unchanged for any floor up to 0.2, and on 30P30N the old value
+     admitted seam wedges with 3.7 and 6.7 degree corners at the flap and main
+     trailing edges;
    * the replacement faces tile the cavity exactly, compared against the
      *curved* cavity outline, not the straight corner quadrilaterals;
    * each cavity-boundary edge used once and each interior edge twice;
@@ -126,7 +130,13 @@ the result is `admissible`.
 
    A rejected candidate leaves the graph with the topology signature it had. An
    accepted one is applied atomically. Adjacent features cannot rewrite the same
-   faces: the second is refused with that reason.
+   faces: the second is refused with that reason. A replacement face is a band
+   block only when it is bounded by a wall edge *and* a front edge; a seam wedge
+   touches the wall at one vertex and a rebuilt core patch does not touch it at
+   all, so both are core blocks. (Every new face used to inherit `layer` from
+   the cavity, which drew the two rebuilt core patches behind the 30P30N flap
+   as a band covering a third of the near field and judged them by the lenient
+   boundary-layer aspect-ratio rule.)
 
    The **cell-count coupling** check is why a contained fan is not a boundary
    layer. BlockDrawer forces opposite edges of a block to share a cell count, so
@@ -185,6 +195,30 @@ the result is `admissible`.
    request BlockDrawer refuses is reported rather than dropped. No mixed-integer
    dependency is used.
 
+   Before any count is chosen, `graph.sizing_structure` in the report states
+   what the topology alone forces on every later sizing. Two edges in one
+   equality component carry the same count whatever it is, so the ratio of
+   their geometric lengths is a lower bound on the cell-size jump between them
+   under uniform grading; a component holding both a tangential edge (wall,
+   front, ring) and a normal one (band spoke, core spoke, sweep rib) ties a
+   streamwise resolution to a wall-normal one; and a component holding both
+   band spokes and core spokes ties the boundary layer's thickness resolution
+   to the depth of the core behind it. These are properties of the topology
+   and the vertex positions, measured before the metric is consulted, and they
+   are the sizing statements a topology stage can be held to. The metric-based
+   interface size ratio measured afterwards is largely a consequence of them:
+
+   | case | worst length ratio in one component | roles in it |
+   | ---- | ----------------------------------- | ----------- |
+   | 30P30N | 855 | band spokes and core spokes |
+   | `narrow_gap_tip` | 100 | band spokes and core spokes |
+   | `sharp_bodies` | 35 | band spokes and core spokes |
+   | `single_ellipse` | 4.7 | wall, front and ring of one O-grid sector |
+
+   The first three rows are the seam wedge: its opposite sides are a band
+   spoke and a core spoke, so committing it merges the chain's wall-normal
+   band count with its core radial count all the way to the medial ring.
+
 9. **Sampled-grid quality** (`grid_quality.py`). Block-corner measures are cheap
    early filters only. Every sampled node of every block is built with
    **BlockDrawer's own** edge-weighted transfinite interpolation - the private
@@ -238,6 +272,20 @@ Re-quantisation is the same `run` with different metric flags -
 `--first-width-ratio`, `--core-size-ratio`, `--growth`, `--cell-budget` - and
 `--split CELL:CUT` forces an anchor where an agent asks for one. Because the
 run is stateless, that is also how `apply` realises a move.
+
+`--max-wall-turning DEGREES` exposes the largest wall turning one annular
+patch may span before it is cut (default 100). It is the single largest lever
+on near-wall orthogonality, and it is not monotone, which is why the default
+has not been changed:
+
+| limit | `single_ellipse` blocks / misalignment | `concave_and_convex` | `narrow_gap_tip` misalignment |
+| ----- | -------------------------------------- | -------------------- | ----------------------------- |
+| 100 deg | 12 / 35.8 deg | admissible | 5.2 deg |
+| 45 deg | 33 / 14.8 deg | **inverted cells** (min scaled Jacobian -0.334) | 5.5 deg |
+| 30 deg | 45 / 6.3 deg | admissible | 21.7 deg |
+
+A tighter limit adds anchors, and the extra anchors expose the same front and
+gate placement problems the remaining limits describe.
 
 `moves.py` generates and screens five families of candidate operation:
 `wall_feature_cavity`, `split_patch`, `split_singularity`, `collapse_strip` and
@@ -298,57 +346,52 @@ the four domain corners carry 90 degree sectors.
 ### 30P30N (external-flow acceptance) - a smaller, precise failure
 
 The stable medial relationships are preserved: the same **four junctions and six
-branches**, with junction equidistance residuals at round-off. What is new is
-that **all three elements now carry a complete boundary-layer band**, and that
-**all four sharp trailing-edge features - 352.2, 351.8, 335.2 and 284.2 degree
-fluid sectors - carry a valid three-sector seam** chosen and validated by the
-cavity stage. Every non-convex face is gone. 115 blocks, 142 vertices, 259
+branches**, with junction equidistance residuals at round-off, and **all three
+elements carry a complete boundary-layer band**. 115 blocks, 142 vertices, 259
 edges, total index -8 against the required `4 * chi = -8` for a three-hole
 domain.
 
 What each cavity did, taken from `output/30p30n.json`. "Before" is the worst
 block in the cavity as the producer left it; "after" is the worst affected face
-of the replacement:
+of the best candidate, judged against the 0.15 floor:
 
-| feature | sector | before | applied | score | after | alternatives refused |
-| ------- | ------ | ------ | ------- | ----- | ----- | -------------------- |
-| `main` trailing edge | 352.2 deg | -0.209 | `seam` | 0.332 | 0.061 | `fan2..4` and `through_fan3`, all non-convex in a cavity that narrow; `band` valid at 0.328 |
-| `slat` trailing edge | 351.8 deg | -0.177 | `seam` | 0.657 | 0.252 | **`fan3` scored 0.661 - higher than the winner - and was refused for merging the chain's cell-count components**; `through_fan3` 0.561 and `band` 0.439 were valid but lower |
-| `slat` cusp | 335.2 deg | -0.026 | `seam` | 0.684 | 0.291 | `fan3` refused for the same merge at 0.619; `fan2`, `fan4`, `through_fan3` non-convex |
-| `flap` trailing edge | 284.2 deg | -0.056 | `seam` | 0.197 | 0.064 | `band`, `fan2..4`, `through_fan3` all non-convex |
+| feature | sector | before | best candidate | after | outcome |
+| ------- | ------ | ------ | -------------- | ----- | ------- |
+| `main` trailing edge | 352.2 deg | -0.209 | `seam` | 0.061 | **refused**: a 3.5 degree corner; `band` 0.043, every fan non-convex. The producer's folded construction stays and is reported as two non-convex core patches |
+| `slat` trailing edge | 351.8 deg | -0.177 | `seam` | 0.252 | applied. **`fan3` scored higher and was refused for merging the chain's cell-count components**; `through_fan3` valid at 0.245 |
+| `slat` cusp | 335.2 deg | -0.026 | `seam` | 0.291 | applied; `band` valid at 0.179, `fan3` refused for the same merge |
+| `flap` trailing edge | 284.2 deg | -0.056 | `seam` | 0.064 | **refused**: a 3.7 degree corner; everything else non-convex. The producer's folded wedge stays and is reported |
 
-Two of those rows are the whole argument for doing this cavity-wide rather than
-locally.
+At the former floor of 0.02 the two refused seams were accepted, which is how
+the previous iteration could say that every sharp feature carried a valid
+construction: the wedge from the flap trailing edge reaches back to a medial
+anchor half a chord away and closes with a 3.7 degree corner there, and the
+main trailing-edge wedge is 0.005 long with a 6.7 degree corner. Those are not
+mesh blocks, so the stage now says so. What the two refusals mean is that the
+seam template, which reaches from the feature to the medial ring, is the wrong
+construction wherever the ring is far away or squeezed into a gap; the next
+alternative needs a wake-style cut rather than a wedge.
 
-The slat trailing edge is the case the design was built for: the **highest
-scoring** candidate there is a contained three-sector fan, and it is refused -
-not for anything visible in its own five faces, which are fine, but because
-committing it would put a front and a ring edge into the same cell-count
-component as the chain's band spokes, and all of a chain's spokes are already
-one component. A lower-scoring but structurally sound seam is applied instead.
+The slat trailing edge is still the case the cavity design was built for: the
+**highest scoring** candidate there is a contained three-sector fan, and it is
+refused - not for anything visible in its own five faces, which are fine, but
+because committing it would put a front and a ring edge into the same
+cell-count component as the chain's band spokes. A lower-scoring but
+structurally sound seam is applied instead.
 
-The flap is the other one. In the previous iteration its seam was rejected
-outright and **the whole flap band was dropped**; the producer still hands the
-cavity stage a folded wedge there (`sharp_feature_seams` records
-`wedge_is_convex: false` for it), and the stage searches the seam's two free
-front vertices over the fluid sector and the room available along each ray until
-it finds one that validates. Nothing about the flap is special-cased; it is the
-same search every feature gets.
+The run is **not `topology_valid`**, for five localised reasons: the three
+non-convex faces above, and two relations between a layer front and the medial
+scaffold behind it:
 
-The run is still **not `topology_valid`**, and the reason is now two localised
-facts rather than ten crossings and four folded faces:
+| remaining problem | where | cause |
+| ----------------- | ----- | ----- |
+| `touching_edges` between a `wall` edge and a `front` edge | `(0.6457, 0.0263)`, main-element vertex 40 | the 90 degree concave corner at the top of the cove cut. The tangent-disk feature size is exactly zero at a reflex vertex, so the front height is 0.0 there and the neighbouring stations rise linearly from it. `peanut_body` reproduces this |
+| `crossing_edges` between a `core_spoke` and a `front` edge | `(0.8020, 0.0221)`, in the flap gap | the gap is 0.0104 wide and the main/flap medial branch passes 0.006 from the main trailing edge. Both bands, both half-core strips and the medial ring are stacked inside it; the flap front's height cap changes threefold between a gate and the interior, so the front bulges past the straight spoke. `skimming_tail` is the small version |
 
-| remaining problem | where | what it means |
-| ----------------- | ----- | ------------- |
-| `touching_edges` between a `wall` edge and a `front` edge | `(0.6457, 0.0263)`, a sharp feature on the main element | the band has collapsed onto its own wall at that station: the front vertex and the wall vertex are the same point to within `1e-9` of the graph diagonal |
-| `crossing_edges` between a `core_spoke` and a `front` edge | `(0.8020, 0.0221)`, behind the main element's trailing edge | the *curved* front edge between two gates bulges past the straight core spoke that starts at one of them, so the core patch outline self-intersects even though its four corners are convex |
-
-Neither is a sharp-feature cavity: both are in the relationship between a layer
-front and the medial scaffold behind it, which is the next thing to fix. The
-second one is exactly the kind of defect a four-corner test cannot see - the
+The second one is exactly the kind of defect a four-corner test cannot see - the
 corner quadrilateral there is convex - and it is only visible because edges that
-share a vertex are now checked against each other and because the front is
-compared as the polyline it really is.
+share a vertex are checked against each other and because the front is compared
+as the polyline it really is.
 
 A front is already capped at nine tenths of the distance to the core scaffold,
 which is a guard against reaching past it; that guard does not help here because
@@ -370,13 +413,13 @@ line, which needs an interior guide curve and is listed as a remaining limit.
 
 ### Baseline comparison
 
-| measure | 44-block baseline | pre-cavity attempt | this iteration |
-| ------- | ----------------- | ------------------ | -------------- |
-| blocks | 44 | 107 | 115 |
-| bands | none | slat and main only | **all three elements** |
-| sharp features with a valid construction | 0 | 1 of 4 | **4 of 4** |
-| non-convex faces | 0 reported (the test was four corners) | 4 | **0** |
-| edge crossings | not checked between edges sharing a vertex | 10 | **1** |
+| measure | 44-block baseline | pre-cavity attempt | cavity stage, floor 0.02 | this iteration, floor 0.15 |
+| ------- | ----------------- | ------------------ | ------------------------ | -------------------------- |
+| blocks | 44 | 107 | 115 | 115 |
+| bands | none | slat and main only | all three elements | **all three elements** |
+| sharp features with a valid construction | 0 | 1 of 4 | 4 of 4, two of them 4 degree slivers | **2 of 4**, honestly |
+| non-convex faces | 0 reported (the test was four corners) | 4 | 0 | 3 |
+| edge crossings | not checked between edges sharing a vertex | 10 | 1 | **1** |
 | inverted sampled cells | **3** | no session | no session |
 | minimum sampled scaled Jacobian | -0.197 | no session | no session |
 | maximum interface size ratio | 87.15 | no session | no session |
@@ -411,9 +454,10 @@ tolerance derives from the domain scale, the local feature size, curvature,
 metric size or numerical precision. The self-tests cover one ellipse, two
 circles of unequal radius, three rotated ellipses, a concave body with a convex
 one, four bodies, a body with a sharp tip, a sharp tip aimed into a narrow gap
-beside a second body, a rectangular channel with inlet and outlet, and the
-periodic hill - plus permuted, reversed, translated, rotated and 1000x scaled
-copies.
+beside a second body, a body whose only sharp features are two concave corners,
+a sharp tail skimming a second body, a rectangular channel with inlet and
+outlet, and the periodic hill - plus permuted, reversed, translated, rotated
+and 1000x scaled copies.
 
 `narrow_gap_tip` is the sharp-feature regression fixture. Its tip carries a 315
 degree fluid sector and the medial scaffold bends hard around the 0.11-wide gap,
@@ -423,6 +467,22 @@ cavity stage the topology has two non-convex faces; with it the feature carries
 a valid three-sector seam and the graph is clean. The cavity unit tests use a
 hand-built four-row strip whose bottom wall carries a spike, so every coordinate
 in them is written down in the test file.
+
+Two fixtures reproduce the 30P30N failure modes in small geometry and are
+**expected to fail** today. `peanut_body` is the union of two orthogonal
+circles: smooth everywhere except two 90 degree reflex corners at the waist.
+No disk can be tangent to a wall at a reflex vertex, so the tangent-disk local
+feature size the layer stage uses is exactly zero there and the front collapses
+onto the wall; the band cannot be built and the reported failure names the two
+waist gates. `skimming_tail` is a sharp tail whose lower flank runs
+horizontally two percent of the scale above a hull whose highest point lies
+just downstream of the tip, the configuration a deployed flap makes with the
+main element; the hull's band cannot be built in the slot. Each carries a
+stable test on where the failure is located and an `expectedFailure` on
+admissibility, so the moment a construction handles the fixture the suite
+reports an unexpected success and the test has to be flipped. Every synthetic
+fixture gives the same block graph at raster widths 400, 700 and 1000, and a
+test guards that; 30P30N does not (see the remaining limits).
 
 ## Dependencies and limits
 
@@ -443,15 +503,37 @@ installations whose LAPACK/BLAS build is broken.
   consistent at the tighter value was measured and costs two inverted sampled
   cells on `concave_and_convex`; the real fix is to let the core spoke follow
   the scaffold rather than a straight line, which needs an interior guide curve.
-* **A band can still collapse onto its own wall at a sharp feature.** The floor
-  of a few first cells survives every repair and shrink pass, but not slope
-  limiting, and a cusp's stations are very close together in arc length. That
-  looked like the cause of the remaining 30P30N `touching_edges` problem, so
-  re-applying the floor after slope limiting was tried and **measured**: it
-  leaves all seven synthetic external fixtures unchanged, it does **not** remove
-  the touch, and it spikes the offset at a cusp badly enough that the flap's
-  seam stops being constructible and two non-convex core faces come back. It was
-  reverted. The collapse has a different cause, which is not yet located.
+* **The front collapses onto the wall at every concave wall corner.** The
+  band height is capped by the largest disk tangent to the wall, and no disk
+  is tangent at a reflex vertex: the tangent-disk feature size is exactly
+  zero at any wall vertex whose fluid angle is below about 157 degrees, and
+  roughly the distance to the corner nearby. The remaining 30P30N
+  `touching_edges` problem is main-element vertex 40, the 90 degree corner at
+  the top of the cove cut, where the front height is 0.0. The internal
+  producer uses the same function, so a step or cavity in a channel wall
+  would fail the same way; `peanut_body` reproduces it. Re-applying the sharp
+  floor after slope limiting was tried earlier and **measured** to make things
+  worse, which is consistent: the cause is the definition, not the limiter.
+  The fix is the eroded-domain boundary - the level set of the wall distance,
+  trimmed at the medial axis - which gives a mitre at a concave corner and one
+  consistent cap in a narrow gap.
+* **The seam wedge ties the band count to the core depth.** Its opposite sides
+  are a band spoke and a core spoke, so every sharp feature repaired with a
+  seam merges the chain's wall-normal band count with its core radial count.
+  `graph.sizing_structure` reports it as `band_core_depth_couplings` with the
+  length ratio it forces (855 on 30P30N). The cavity coupling check does not
+  refuse it yet, because every sharp feature currently depends on the seam and
+  the through-cut alternative is built for three sectors only.
+* **The 30P30N block graph follows the raster.** Doubling the width to 1400
+  leaves the four junctions identical to four decimals but gives 106 faces
+  and 18 singularities against 115 and 24, with different cavity templates
+  chosen: the anchor set and the relaxation depend on the branch
+  discretisation. Every synthetic fixture is raster-invariant, so this is not
+  yet reproduced in a small case.
+* **A band block may span 100 degrees of wall turning**, which is what gives
+  the single ellipse its 36 degree wall misalignment under transfinite
+  interpolation. `--max-wall-turning` exposes the limit; the measured table
+  above shows why the default has not moved.
 * **The through-cut cavity template is built for three sectors only.** More
   sectors need a transition strip between the sector chain and the core
   boundary; the template reports that it does not apply rather than guessing.

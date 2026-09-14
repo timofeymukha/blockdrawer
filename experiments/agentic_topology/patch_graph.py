@@ -30,6 +30,13 @@ TOUCH_RATIO = 1.0e-9
 # An edge shorter than this fraction of the graph diagonal has collapsed.
 DEGENERATE_RATIO = 1.0e-7
 
+# The edge roles the producers assign, grouped by the direction they resolve.
+# A tangential edge runs along a wall, or along the front or medial ring that
+# follows one; a normal edge crosses a band or a core towards a wall.  The
+# sweep producer's ribs cross the channel, so they are normal edges too.
+TANGENTIAL_ROLES = frozenset({"wall", "front", "ring"})
+NORMAL_ROLES = frozenset({"layer_spoke", "core_spoke", "core_rib"})
+
 
 class GraphError(RuntimeError):
     """Raised when a patch graph is asked for something structurally impossible."""
@@ -703,6 +710,62 @@ def coverage(graph: PatchGraph, domain, *, samples: int = 400) -> dict:
             [float(value) for value in point]
             for point in points[uncovered | overlapped][:12]
         ],
+    }
+
+
+def sizing_structure(graph: PatchGraph, *, reported: int = 6) -> dict:
+    """Count-independent consequences of the opposite-edge equality components.
+
+    Whatever cell counts are chosen later, two edges in one component carry
+    the same number of cells, so the ratio of their geometric lengths is a
+    lower bound on the cell-size jump between them under uniform grading, and a
+    component that holds both a tangential and a normal edge ties a streamwise
+    resolution to a wall-normal one.  A component that holds both band spokes
+    and core spokes ties the boundary layer's thickness resolution to the depth
+    of the core behind it.  All three are properties of the topology and the
+    vertex positions alone, so they are measured here before any size metric
+    is consulted, and they are what the topology stage can be held to.
+    """
+    records = []
+    for index, keys in enumerate(constraint_components(graph)):
+        lengths = np.asarray([graph.edges[key].length for key in keys])
+        roles = sorted({graph.edges[key].role for key in keys})
+        shortest = int(np.argmin(lengths))
+        longest = int(np.argmax(lengths))
+        ratio = (
+            float(lengths[longest] / lengths[shortest])
+            if lengths[shortest] > 0.0
+            else math.inf
+        )
+        records.append(
+            {
+                "component": index,
+                "edges": len(keys),
+                "roles": roles,
+                "minimum_length": float(lengths[shortest]),
+                "maximum_length": float(lengths[longest]),
+                "length_ratio": ratio,
+                "shortest_edge": [list(keys[shortest][0]), list(keys[shortest][1])],
+                "longest_edge": [list(keys[longest][0]), list(keys[longest][1])],
+                "mixes_tangential_and_normal": bool(
+                    set(roles) & TANGENTIAL_ROLES and set(roles) & NORMAL_ROLES
+                ),
+                "ties_band_to_core_depth": (
+                    {"layer_spoke", "core_spoke"} <= set(roles)
+                ),
+            }
+        )
+    records.sort(key=lambda record: -record["length_ratio"])
+    return {
+        "components": len(records),
+        "maximum_length_ratio": records[0]["length_ratio"] if records else 1.0,
+        "tangential_normal_couplings": sum(
+            record["mixes_tangential_and_normal"] for record in records
+        ),
+        "band_core_depth_couplings": sum(
+            record["ties_band_to_core_depth"] for record in records
+        ),
+        "worst": records[:reported],
     }
 
 

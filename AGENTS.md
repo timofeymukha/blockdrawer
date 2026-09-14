@@ -218,7 +218,12 @@ them in the canvas widgets.
   before anything is committed, so a rejected alternative leaves the topology
   untouched and carries its exact reason. Acceptance separates a valid topology,
   an untangled sampled grid and meeting the declared quality limits, and the
-  report carries the limits it was judged against. It may use NumPy and Pillow and keeps its own self-tests beside it.
+  report carries the limits it was judged against. `graph.sizing_structure`
+  in the report gives the count-independent consequences of the opposite-edge
+  equality components (length ratios and role couplings), which is what the
+  topology stage can be held to before any cell count exists. Regression
+  fixtures that reproduce a known failure carry `expectedFailure` tests so a
+  fix cannot land unnoticed. It may use NumPy and Pillow and keeps its own self-tests beside it.
   It imports BlockDrawer but nothing in `blockdrawer/` may import it, and none
   of its numerical code belongs in the package until it earns its way in. Its
   experimental agent operations stay in `research_cli.py`; do not widen the

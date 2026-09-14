@@ -39,6 +39,7 @@ except ImportError:  # pragma: no cover
 
 import agent_ops  # noqa: E402
 import analysis_plot  # noqa: E402
+import block_layout  # noqa: E402
 import fan_cavity  # noqa: E402
 import layers as layer_module  # noqa: E402
 import pipeline  # noqa: E402
@@ -93,6 +94,16 @@ def add_input_arguments(parser: argparse.ArgumentParser) -> None:
         "--clearance-fraction",
         type=float,
         default=layer_module.LayerOptions.clearance_fraction,
+    )
+    parser.add_argument(
+        "--max-wall-turning",
+        type=float,
+        default=math.degrees(block_layout.LayoutOptions.max_wall_turning),
+        metavar="DEGREES",
+        help=(
+            "largest wall turning one annular patch may span before it is cut; "
+            "smaller values give more, straighter band blocks"
+        ),
     )
     parser.add_argument(
         "--no-layers", action="store_true", help="build the core without wall bands"
@@ -159,6 +170,9 @@ def build_options(arguments) -> pipeline.PipelineOptions:
         reference_curves=not arguments.no_reference_curves,
         evaluate_grid=not arguments.no_grid_quality,
         forced_splits=tuple(forced),
+        layout=block_layout.LayoutOptions(
+            max_wall_turning=math.radians(arguments.max_wall_turning)
+        ),
         layer=layer_module.LayerOptions(
             enabled=not arguments.no_layers,
             clearance_fraction=arguments.clearance_fraction,

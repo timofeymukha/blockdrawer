@@ -34,7 +34,8 @@ research-periodic-hill:
 research-cases:
 	for case in single_ellipse two_circles three_rotated_ellipses \
 	            concave_and_convex four_bodies sharp_bodies \
-	            narrow_gap_tip straight_channel periodic_hill; do \
+	            narrow_gap_tip peanut_body skimming_tail \
+	            straight_channel periodic_hill; do \
 	    $(PYTHON) $(RESEARCH)/research_cli.py run --case $$case \
 	        --json $(RESEARCH_OUTPUT)/$$case.json \
 	        --output $(RESEARCH_OUTPUT)/$$case.png || true; \

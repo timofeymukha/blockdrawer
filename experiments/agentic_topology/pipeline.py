@@ -531,6 +531,9 @@ def build_analysis(result: PipelineResult) -> dict:
             **result.graph.summary(),
             "problems": result.problems,
             "constraint_components": len(pg.constraint_components(result.graph)),
+            # Count-independent: what any later choice of cell counts inherits
+            # from this topology.  Reported even when no counts are assigned.
+            "sizing_structure": pg.sizing_structure(result.graph),
         }
     if result.metric is not None:
         analysis["sizing"] = {
@@ -597,9 +600,16 @@ LIMITATIONS = [
     "tenths of the distance to the ring between gates, so a curved front can "
     "bulge past a straight core spoke. Tightening the interior cap was "
     "measured and is worse.",
-    "A band can still collapse onto its own wall at a sharp feature, because "
-    "the neighbouring stations are slope-limited down from the floor and a "
-    "cusp's stations are very close together in arc length.",
+    "The front collapses onto the wall at every concave wall corner: the "
+    "tangent-disk local feature size is exactly zero at a reflex vertex, so "
+    "the clearance-limited height is zero there. That is the remaining 30P30N "
+    "touching_edges problem (the 90 degree cove corner) and the peanut_body "
+    "fixture.",
+    "The seam wedge's opposite sides are a band spoke and a core spoke, so "
+    "every seam merges the chain's wall-normal band count with its core radial "
+    "count; graph.sizing_structure reports the length ratio that forces.",
+    "The 30P30N block graph depends on the raster width although its medial "
+    "junctions do not; every synthetic fixture is raster-invariant.",
     "The through-cut cavity template is constructed for three sectors only. "
     "More sectors need a transition strip between the sector chain and the "
     "core boundary, which this stage reports rather than builds.",
