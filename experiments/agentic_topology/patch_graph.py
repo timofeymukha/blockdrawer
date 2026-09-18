@@ -30,10 +30,12 @@ TOUCH_RATIO = 1.0e-9
 # An edge shorter than this fraction of the graph diagonal has collapsed.
 DEGENERATE_RATIO = 1.0e-7
 
-# The edge roles the producers assign, grouped by the direction they resolve.
+# The edge roles the producers assign, grouped by their local direction.
 # A tangential edge runs along a wall, or along the front or medial ring that
 # follows one; a normal edge crosses a band or a core towards a wall.  The
 # sweep producer's ribs cross the channel, so they are normal edges too.
+# These labels are diagnostics, not physical wall-band directions: a core
+# axis can turn through a singularity, and even far-field edges have role wall.
 TANGENTIAL_ROLES = frozenset({"wall", "front", "ring"})
 NORMAL_ROLES = frozenset({"layer_spoke", "core_spoke", "core_rib", "core_rung"})
 
@@ -119,6 +121,8 @@ class PatchGraph:
     # Face keys must stay unique for the lifetime of a graph, including
     # across removals, so a counter issues them instead of the face count.
     face_counter: int = 0
+    # Physical domain roles, distinct from construction labels on edges.
+    boundary_roles: dict[str, str] = field(default_factory=dict)
 
     # -- construction ------------------------------------------------------
 
@@ -225,6 +229,7 @@ class PatchGraph:
         clone.periodic_vertices = dict(self.periodic_vertices)
         clone.notes = list(self.notes)
         clone.face_counter = self.face_counter
+        clone.boundary_roles = dict(self.boundary_roles)
         return clone
 
     def remove_faces(self, keys) -> list[PGFace]:
@@ -720,8 +725,10 @@ class StructureLimits:
     ``max_length_ratio`` bounds the geometric length ratio inside one
     opposite-edge equality component, which under uniform grading is the
     cell-size jump that component forces whatever count it gets.  A
-    tangential/normal coupling ties a streamwise resolution to a wall-normal
-    one and is refused unless allowed.  ``None`` disables the ratio limit.
+    physical wall-tangent/band-normal coupling ties a streamwise resolution
+    to a boundary-layer one and is refused unless allowed. Merely mixing
+    local core/ring direction labels is informational. ``None`` disables
+    the ratio limit.
     """
 
     max_length_ratio: float | None = 20.0
@@ -766,29 +773,121 @@ def structure_failures(structure: dict, limits: StructureLimits) -> list[dict]:
                     ),
                 }
             )
-    couplings = int(structure.get("tangential_normal_couplings", 0))
+    # Old saved reports lack physical boundary evidence. Keep their original
+    # conservative verdict; newly measured reports use the physical criterion.
+    physical = "wall_tangential_normal_couplings" in structure
+    metric = (
+        "wall_tangential_normal_couplings" if physical else "tangential_normal_couplings"
+    )
+    couplings = int(structure.get(metric, 0))
     if couplings and not limits.allow_tangential_normal_coupling:
-        example = next(
-            (item for item in structure.get("coupled", worst) if item.get("mixes_tangential_and_normal")),
-            None,
+        evidence = structure.get("wall_coupled" if physical else "coupled", worst)
+        predicate = (
+            "couples_wall_tangential_and_normal" if physical
+            else "mixes_tangential_and_normal"
         )
+        example = next((item for item in evidence if item.get(predicate)), None)
         found.append(
             {
-                "metric": "tangential_normal_couplings",
+                "metric": metric,
                 "observed": float(couplings),
                 "limit": 0.0,
                 "comparison": "at_most",
                 "block": None,
                 "component": None if example is None else example["component"],
                 "roles": None if example is None else example["roles"],
-                "edges": None,
+                "edges": (
+                    [example["wall_tangential_edge"], example["wall_normal_edge"]]
+                    if physical and example is not None else None
+                ),
                 "detail": (
-                    "a component holds both a tangential and a wall-normal edge, "
+                    "a component holds both a physical wall/front tangent and a band-normal edge, "
                     "so a streamwise resolution is tied to a boundary-layer one"
+                ) if physical else (
+                    "a component mixes tangential and normal construction roles; "
+                    "this legacy report lacks physical wall-band evidence"
                 ),
             }
         )
     return found
+
+
+def wall_direction_components(graph: PatchGraph, components=None) -> list[dict]:
+    """Physical wall-direction evidence for every equality component.
+
+    Tangents are edges of actual wall boundary chains and their layer fronts,
+    not arbitrary edges labelled ``wall`` or ``ring`` by a producer. Normals
+    are layer spokes incident to those walls; core spokes/ribs/rungs do not
+    resolve boundary-layer thickness. Front chains inherit wall provenance
+    through their incident layer spokes, including after a fan replacement.
+    Reaching both kinds through opposite-edge equalities couples their counts,
+    including when they belong to different walls. Direction labels on the
+    intervening edges do not matter.
+
+    Producers carry the domain roles on the graph so cavity surgery preserves
+    them. Older hand-built graphs can infer missing roles only from a wall edge
+    in an explicit wall/front layer face, never from a far-field/core face.
+    """
+    roles = dict(graph.boundary_roles)
+    for face in graph.faces:
+        edges = [graph.edges[key] for key in graph.face_edges(face)]
+        if face.role == "layer" and any(edge.role == "front" for edge in edges):
+            for edge in edges:
+                if edge.role == "wall" and edge.boundary is not None:
+                    roles.setdefault(edge.boundary, "wall")
+    tangents = {
+        key: {edge.boundary} for key, edge in graph.edges.items()
+        if roles.get(edge.boundary) == "wall"
+    }
+    wall_vertices: dict[tuple, set[str]] = {}
+    for key, names in tangents.items():
+        for vertex in key:
+            wall_vertices.setdefault(vertex, set()).update(names)
+    normals = {}
+    front_seeds: dict[tuple, set[str]] = {}
+    for key, edge in graph.edges.items():
+        names = wall_vertices.get(key[0], set()) | wall_vertices.get(key[1], set())
+        if edge.role == "layer_spoke" and names:
+            normals[key] = names
+            for vertex in key:
+                if vertex not in wall_vertices:
+                    front_seeds.setdefault(vertex, set()).update(names)
+    adjacency: dict[tuple, list[tuple]] = {}
+    for key, edge in graph.edges.items():
+        if edge.role == "front" and edge.boundary is None:
+            for vertex in key:
+                adjacency.setdefault(vertex, []).append(key)
+    unseen = set(adjacency)
+    while unseen:
+        pending = [min(unseen, key=str)]
+        front_edges = set()
+        names = set()
+        while pending:
+            vertex = pending.pop()
+            if vertex not in unseen:
+                continue
+            unseen.remove(vertex)
+            names.update(front_seeds.get(vertex, ()))
+            for key in adjacency[vertex]:
+                front_edges.add(key)
+                pending.extend(endpoint for endpoint in key if endpoint in unseen)
+        if names:
+            tangents.update({key: names for key in front_edges})
+    records = []
+    if components is None:
+        components = constraint_components(graph)
+    for index, keys in enumerate(components):
+        tangent = [key for key in keys if key in tangents]
+        normal = [key for key in keys if key in normals]
+        records.append({
+            "component": index,
+            "couples_wall_tangential_and_normal": bool(tangent and normal),
+            "wall_tangential_chains": sorted({name for key in tangent for name in tangents[key]}),
+            "wall_normal_chains": sorted({name for key in normal for name in normals[key]}),
+            "wall_tangential_edge": [list(vertex) for vertex in tangent[0]] if tangent else None,
+            "wall_normal_edge": [list(vertex) for vertex in normal[0]] if normal else None,
+        })
+    return records
 
 
 def sizing_structure(graph: PatchGraph, *, reported: int = 6) -> dict:
@@ -797,15 +896,19 @@ def sizing_structure(graph: PatchGraph, *, reported: int = 6) -> dict:
     Whatever cell counts are chosen later, two edges in one component carry
     the same number of cells, so the ratio of their geometric lengths is a
     lower bound on the cell-size jump between them under uniform grading, and a
-    component that holds both a tangential and a normal edge ties a streamwise
-    resolution to a wall-normal one.  A component that holds both band spokes
-    and core spokes ties the boundary layer's thickness resolution to the depth
-    of the core behind it.  All three are properties of the topology and the
+    component that holds both an actual wall/front tangent and a band-normal
+    spoke ties a streamwise resolution to a wall-normal one. Generic local
+    direction labels remain diagnostics, not an acceptance criterion. A
+    component that holds both band spokes and core spokes ties the boundary
+    layer's thickness resolution to the depth of the core behind it. All three
+    are properties of the topology and the
     vertex positions alone, so they are measured here before any size metric
     is consulted, and they are what the topology stage can be held to.
     """
     records = []
-    for index, keys in enumerate(constraint_components(graph)):
+    components = constraint_components(graph)
+    physical = wall_direction_components(graph, components)
+    for index, keys in enumerate(components):
         lengths = np.asarray([graph.edges[key].length for key in keys])
         roles = sorted({graph.edges[key].role for key in keys})
         shortest = int(np.argmin(lengths))
@@ -817,7 +920,7 @@ def sizing_structure(graph: PatchGraph, *, reported: int = 6) -> dict:
         )
         records.append(
             {
-                "component": index,
+                **physical[index],
                 "edges": len(keys),
                 "roles": roles,
                 "minimum_length": float(lengths[shortest]),
@@ -840,6 +943,9 @@ def sizing_structure(graph: PatchGraph, *, reported: int = 6) -> dict:
         "tangential_normal_couplings": sum(
             record["mixes_tangential_and_normal"] for record in records
         ),
+        "wall_tangential_normal_couplings": sum(
+            record["couples_wall_tangential_and_normal"] for record in records
+        ),
         "band_core_depth_couplings": sum(
             record["ties_band_to_core_depth"] for record in records
         ),
@@ -847,6 +953,7 @@ def sizing_structure(graph: PatchGraph, *, reported: int = 6) -> dict:
         # Couplings need not have an extreme length ratio. Keep their full
         # evidence even when they fall outside the short worst-ratio table.
         "coupled": [record for record in records if record["mixes_tangential_and_normal"]],
+        "wall_coupled": [record for record in records if record["couples_wall_tangential_and_normal"]],
     }
 
 

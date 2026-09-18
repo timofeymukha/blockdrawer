@@ -97,7 +97,10 @@ def build_graph(
     """
     settings = options or layer_module.LayerOptions()
     diagram = layout.diagram
-    graph = pg.PatchGraph(euler_characteristic=domain.euler_characteristic)
+    graph = pg.PatchGraph(
+        euler_characteristic=domain.euler_characteristic,
+        boundary_roles={chain.name: chain.role for chain in domain.chains()},
+    )
     wall_loops = [chain.points for chain in domain.wall_chains()]
     fronts: dict[int, layer_module.Front] = {}
     gate_stations: dict[int, list[float]] = {}

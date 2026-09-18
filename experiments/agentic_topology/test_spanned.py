@@ -58,15 +58,21 @@ class SpanTests(unittest.TestCase):
             self.assertLess(float(np.max(g2.distance_to_polyline(edge.path, points))), result.graph.scale() * 1e-3)
         self.assertGreater(arcs, 0)
 
-    def test_spanning_does_not_hide_the_mouth_count_coupling(self):
+    def test_core_to_farfield_coupling_is_not_a_wall_band_coupling(self):
         result = run_case("two_circles", SPAN)
         structure = result.analysis["graph"]["sizing_structure"]
         self.assertEqual(structure["tangential_normal_couplings"], 1)
         self.assertEqual(len(structure["coupled"]), 1)
         self.assertEqual(structure["coupled"][0]["roles"], ["core_rung", "ring", "wall"])
-        self.assertIsNotNone(result.structure_failures[0]["component"])
-        self.assertFalse(result.sizing_feasible)
-        self.assertFalse(result.resolved)
+        mouth = structure["coupled"][0]
+        self.assertEqual(mouth["wall_tangential_chains"], [])
+        self.assertEqual(mouth["wall_normal_chains"], [])
+        self.assertLess(mouth["length_ratio"], 2.0)
+        self.assertEqual(structure["wall_tangential_normal_couplings"], 0)
+        self.assertEqual(structure["wall_coupled"], [])
+        self.assertEqual(result.structure_failures, [])
+        self.assertTrue(result.sizing_feasible)
+        self.assertTrue(result.resolved)
         self.assertFalse(spanned.SpanOptions().enabled)
 
     def test_rejection_restores_gates_anchors_graph_and_session(self):

@@ -307,6 +307,10 @@ class SweepTests(unittest.TestCase):
     def test_periodic_hill_builds_bands_a_core_and_a_cyclic_pair(self):
         result = run_internal("periodic_hill")
         self.assertTrue(result.admissible, result.failures or result.problems)
+        self.assertEqual(result.graph.boundary_roles, {
+            chain.name: chain.role for chain in result.domain.chains()
+        })
+        self.assertEqual(pg.sizing_structure(result.graph)["wall_tangential_normal_couplings"], 0)
         self.assertTrue(result.four_sided.periodic)
         self.assertTrue(
             np.allclose(np.abs(result.four_sided.translation), [9.0, 0.0])
@@ -1889,6 +1893,10 @@ class RoleAndStructureTests(unittest.TestCase):
             structure["components"], len(pg.constraint_components(result.graph))
         )
         self.assertEqual(structure["tangential_normal_couplings"], 0)
+        self.assertEqual(structure["wall_tangential_normal_couplings"], 0)
+        self.assertEqual(result.graph.boundary_roles, {
+            chain.name: chain.role for chain in result.domain.chains()
+        })
         self.assertEqual(structure["band_core_depth_couplings"], 0)
         self.assertIn("sizing_structure", result.analysis["graph"])
         names, loops = cases.two_circles()
@@ -1896,6 +1904,10 @@ class RoleAndStructureTests(unittest.TestCase):
             names, cases.transform(loops, scale=1000.0), FAST
         )
         other = pg.sizing_structure(scaled.graph)
+        self.assertEqual(
+            structure["wall_tangential_normal_couplings"],
+            other["wall_tangential_normal_couplings"],
+        )
         # The topology signature is identical under scaling; the relaxed
         # coordinates are only comparable, as the invariance tests state.
         self.assertEqual(

@@ -53,9 +53,6 @@ import patch_graph as pg
 # from it.
 TOUCH_RATIO = 1.0e-9
 
-TANGENTIAL_ROLES = pg.TANGENTIAL_ROLES
-NORMAL_ROLES = pg.NORMAL_ROLES
-
 
 @dataclass(frozen=True)
 class CavityOptions:
@@ -1544,33 +1541,21 @@ def face_role(graph: pg.PatchGraph, corners) -> str:
 
 
 def _count_coupling(graph: pg.PatchGraph) -> list[dict]:
-    """Equality components that tie a tangential resolution to a normal one.
-
-    BlockDrawer forces opposite edges of a block to carry the same cell count,
-    so the components of that relation decide the mesh resolution.  A component
-    holding both a wall/front/ring edge and a layer/core spoke forces the
-    boundary-layer thickness resolution to equal a streamwise one, and because
-    all the spokes of a wall chain are already one component, a single such
-    merge destroys the whole chain's near-wall grading.  That is a property of
-    the topology, so it is measured here rather than discovered later as bad
-    aspect ratios.
-    """
+    """Use the same physical wall-band criterion as final acceptance."""
+    components = pg.constraint_components(graph)
     found = []
-    for component in pg.constraint_components(graph):
-        roles = {graph.edges[key].role for key in component}
-        tangential = sorted(roles & TANGENTIAL_ROLES)
-        normal = sorted(roles & NORMAL_ROLES)
-        if tangential and normal:
-            found.append(
-                {
-                    "tangential_roles": tangential,
-                    "normal_roles": normal,
-                    "edges": len(component),
-                    "example": [
-                        [list(key[0]), list(key[1])] for key in component[:4]
-                    ],
-                }
-            )
+    for record in pg.wall_direction_components(graph, components):
+        if not record["couples_wall_tangential_and_normal"]:
+            continue
+        keys = components[record["component"]]
+        roles = {graph.edges[key].role for key in keys}
+        found.append({
+            **record,
+            "tangential_roles": sorted(roles & pg.TANGENTIAL_ROLES),
+            "normal_roles": sorted(roles & pg.NORMAL_ROLES),
+            "edges": len(keys),
+            "example": [record["wall_tangential_edge"], record["wall_normal_edge"]],
+        })
     return found
 
 
@@ -1909,8 +1894,8 @@ def _commit_problems(
                     "reason": "count_component_coupling",
                     "components": coupling[:2],
                     "detail": (
-                        "the replacement merges a wall/front/ring cell-count "
-                        "component with a layer or core spoke component, which "
+                        "the replacement merges a physical wall-tangent cell-count "
+                        "component with a boundary-layer normal component, which "
                         "forces the boundary-layer thickness resolution of the "
                         "whole chain to equal a streamwise resolution"
                     ),

@@ -750,7 +750,10 @@ def build(
         )
     rows.append(Row(second_side.names[0], "wall", wall_b, index_b, second_side))
 
-    graph = pg.PatchGraph(euler_characteristic=domain.euler_characteristic)
+    graph = pg.PatchGraph(
+        euler_characteristic=domain.euler_characteristic,
+        boundary_roles={chain.name: chain.role for chain in domain.chains()},
+    )
     columns = correspondence.columns
     keys: list[list[tuple]] = []
     for row_index, row in enumerate(rows):

@@ -765,7 +765,9 @@ ACCEPTANCE_TERMS = {
     ),
     "sizing_feasible": (
         "no opposite-edge equality component forces a length ratio above the "
-        "structure limit or ties a tangential resolution to a wall-normal one"
+        "structure limit or ties a physical wall/front tangential resolution "
+        "to a boundary-layer normal one; generic core/ring role mixing alone "
+        "does not establish wall-band coupling"
     ),
     "admissible": (
         "topology_valid and untangled: a real mesh, so a session is written "
@@ -783,8 +785,8 @@ ACCEPTANCE_TERMS = {
 # Emitted into every JSON report.  Keep this in step with the "Remaining
 # limits" section of the research README; it is the same list, shorter.
 LIMITATIONS = [
-    "Gap spanning is opt-in: its mouth couples a normal core rung to a "
-    "tangential far-field edge, so it is not structurally resolved. Mouths "
+    "Gap spanning is opt-in. Its core-to-farfield count connection is reported "
+    "but is not a wall-band direction coupling. Mouths "
     "must fit before the next branch anchor; sharp gates, a third wall and "
     "junctions with several narrow branches need another transition. Rejected "
     "trials restore gate placement, bands and session as well as the graph.",

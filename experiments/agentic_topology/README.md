@@ -165,8 +165,8 @@ result can be read either way; the session is written whenever the result is
      supplied body and outer-boundary point lists;
    * Euler characteristic and total index preserved on the whole graph;
    * no new structural problem anywhere;
-   * no merge of a wall/front/ring cell-count component with a layer or core
-     spoke component inside a boundary layer (see below).
+   * no new equality component coupling a physical wall/front tangent count
+     with a boundary-layer normal count (see below).
 
    A rejected candidate leaves the graph with the topology signature it had. An
    accepted one is applied atomically. Adjacent features cannot rewrite the same
@@ -182,11 +182,26 @@ result can be read either way; the session is written whenever the result is
    layer. BlockDrawer forces opposite edges of a block to share a cell count, so
    the equality components of that relation decide the resolution, and all the
    spokes of a wall chain are already one component. An odd-sector fan that
-   stops at the front links a front or ring edge into that component, which
+   stops at the front links a wall-front edge into that component, which
    forces the whole chain's near-wall thickness resolution to equal a streamwise
    one. That is a property of the topology, so it is measured and refused rather
    than discovered later as bad aspect ratios. `seam` and `fan2` do not couple;
    `fan3` and `through_fan3` do, and say so.
+
+   This is a physical wall-band check, shared by cavity screening and final
+   acceptance. Both producers copy the domain boundary roles to the graph;
+   wall edges and connected fronts seeded by their layer spokes carry wall
+   provenance. Inlet, outlet, symmetry, cyclic and far-field edges are not wall
+   tangents just because the producer calls their construction role `wall`.
+   Core spokes, ribs and gap rungs are not boundary-layer normals. A component
+   mixing local core/ring direction labels remains visible in
+   `tangential_normal_couplings` and `coupled`, but does not establish harmful
+   band coupling. The additive `wall_tangential_normal_couplings` and
+   `wall_coupled` fields supply the acceptance evidence: named wall chains and
+   a tangent/normal edge pair in the same component, even outside the short
+   worst-ratio table. Coupling different walls is still rejected. The length
+   ratio limit of 20 still applies to every component. Old saved reports without
+   physical evidence retain their conservative legacy verdict until remeasured.
 
    A cavity is also opened, whatever the sector, wherever it would contain a
    block below the hard quality floor - a folded or slivered block is not a mesh
@@ -403,8 +418,8 @@ and a medial raster width of 700:
 
 | case | default → span blocks | worst component length ratio | outcome with spanning requested |
 | ---- | --------------------- | ---------------------------- | ------------------------------- |
-| `two_circles` | 32 → 40 | 18.37 → 8.70 | admissible, shape limits pass; one count coupling prevents `resolved` |
-| `concave_and_convex` | 34 → 40 | 15.58 → 6.05 | admissible; shape misses remain and one count coupling is introduced |
+| `two_circles` | 32 → 40 | 18.37 → 8.70 | resolved; no physical wall-band coupling |
+| `concave_and_convex` | 34 → 40 | 15.58 → 6.05 | admissible and structurally feasible; shape misses remain |
 | `sharp_bodies` | 33 → 33 | 34.69 unchanged | reverted: mouth collides with an existing wall gate |
 | `narrow_gap_tip` | 41 → 41 | 99.97 unchanged | reverted: no facing mouth before the next branch anchor |
 | `three_rotated_ellipses` | 89 → 89 | 71.72 unchanged | both candidate branches lack room for a facing mouth |
@@ -428,18 +443,30 @@ OpenFOAM 2606 also accepts that session: `blockMesh` produces 3,145 cells,
 6,504 points and 12,688 faces; `checkMesh` reports `Mesh OK`, maximum
 non-orthogonality 59.58 degrees, skewness 0.495 and aspect ratio 80.71. The
 production suite runs 410 tests (27 integration tests skipped there); those
-27 pass separately against OpenFOAM. The research suite runs 108 tests with
+27 pass separately against OpenFOAM. The research suite runs 113 tests with
 the existing one expected failure for `skimming_tail`.
 
-This is a constructible alternative, **not yet an improvement in acceptance**:
-the mouth puts a cross-gap `core_rung`, the merged `ring`, and a far-field
-`wall` in one opposite-edge equality component. The existing structural rule
-correctly reports this normal/tangential coupling, so even `two_circles` loses
-its default `resolved` status. `graph.sizing_structure.coupled` retains the
-full component record even when it is outside the six largest length ratios.
-The criterion is unchanged. A transition that avoids the coupling and can
-consume more than the first branch interval is still needed before spanning
-can become a default or address the sharp-gap acceptance cases.
+The physical coupling audit corrects a false rejection at the previous
+checkpoint. The mouth puts a cross-gap `core_rung`, the merged `ring`, and a
+far-field `wall` in one nine-edge equality component, but it contains no
+physical wall/front tangent and no band-normal spoke. Its length ratio is
+only 1.91. This core-to-farfield connection does not tie streamwise wall
+resolution to boundary-layer thickness resolution. The original generic
+diagnostic remains visible; the new physical coupling count is zero, and
+`two_circles` is resolved without changing its geometry or counts. A contained
+odd-sector fan still produces two physical couplings through the wall fronts
+and is rejected. No numeric threshold was relaxed.
+
+The audit reruns all 11 synthetic cases in both default and spanning modes,
+plus 30P30N in both modes. Topology, sampled quality, coverage, bands and cavity
+decisions match the preceding checkpoint. The spanned-circle and periodic-hill
+sessions are byte-for-byte unchanged. Reports, sessions and dictionaries for
+this repeat are under `output/coupling-audit/` and
+`output/coupling-audit-baseline/` (generated files, not versioned).
+
+The next geometric step is a gap-end cavity that can consume more than the
+first branch interval, beginning with `narrow_gap_tip` and then 30P30N. That
+construction is not part of this audit, and spanning remains opt-in.
 
 ### Periodic hill (internal-flow acceptance)
 
@@ -654,11 +681,10 @@ installations whose LAPACK/BLAS build is broken.
 
 ### Remaining limits
 
-* **Gap spanning is opt-in and its mouth still couples counts.** The single
-  strip removes a medial edge and preserves the index, but its mouth equates
-  a cross-gap normal rung with a far-field tangential edge. It therefore fails
-  the existing structural criterion. A mouth is currently confined to the
-  first branch interval; sharp gates, a third wall, or several candidate
+* **Gap spanning is opt-in and its mouth has limited reach.** The single strip
+  removes a medial edge and preserves the index; its core-to-farfield count
+  connection is reported but is not a wall-band direction coupling. A mouth is
+  currently confined to the first branch interval; sharp gates, a third wall, or several candidate
   branches at one junction require a different transition. Rejections restore
   the complete pre-span result. It does not yet fix the 30P30N flap gap.
 * **The front and the medial scaffold are not yet reconciled.** A front is

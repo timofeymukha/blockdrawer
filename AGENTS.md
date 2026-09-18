@@ -223,9 +223,15 @@ them in the canvas widgets.
   are reported but do not decide `resolved`, because counts and grading are a
   later stage. The report carries the limits it was judged against. `graph.sizing_structure`
   in the report gives the count-independent consequences of the opposite-edge
-  equality components (length ratios and role couplings), which is what the
-  topology stage can be held to before any cell count exists; `coupled` retains
-  coupling records even outside the short worst-length-ratio table.
+  equality components before any cell count exists. Generic construction-role
+  mixing remains informational in `tangential_normal_couplings` and `coupled`;
+  acceptance uses `wall_tangential_normal_couplings` and `wall_coupled`, with
+  physical wall/front and band-normal edge witnesses. Producers carry the
+  domain's boundary roles on `PatchGraph`; copied graphs preserve them. Front
+  chains inherit wall provenance through layer spokes, so a contained fan
+  cannot evade the check by disconnecting front counts from wall counts.
+  Cavity screening uses the same physical criterion. The component length-ratio
+  limit still applies to every component, including core-to-farfield ones.
   `spanned.py` exposes an opt-in `--span-gaps` construction: mutually facing
   mouths replace a narrow body-body medial branch with one core strip and
   dissolve its two junctions into valence-five front vertices. Trials include
@@ -233,10 +239,11 @@ them in the canvas widgets.
   after graph, coverage, exported session and both sampled grids pass, even
   when ordinary grid evaluation is disabled. Rejections restore the whole
   result and retain their reasons under `medial.spanned_branches`. It stays
-  disabled by default: the mouth couples `core_rung` to tangential far-field
-  edges and cannot yet cross existing sharp gates or handle several narrow
-  branches at one junction. Do not weaken the structural criterion to enable
-  it. Front repair reduces the caps of whole failing blocks; repeated failures
+  disabled by default: mouths cannot yet cross existing sharp gates or handle
+  several narrow branches at one junction. Its `core_rung` to far-field count
+  connection is not itself a wall-band direction coupling; the physical
+  criterion and unchanged length-ratio limit resolve the spanned circles.
+  Front repair reduces the caps of whole failing blocks; repeated failures
   request a patch split, with bounded global height search permitted on the
   caller's final repair round. That search is not a proof of monotone
   admissibility or numerical stability. Regression
