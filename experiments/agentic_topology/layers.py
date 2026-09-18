@@ -82,6 +82,9 @@ class LayerOptions:
     repair_band_quality: float = 0.26
     repair_budget: int = 12
     hard_attempts: int = 6
+    # Local repair attempts before the global bisection, and its steps.
+    local_attempts: int = 33
+    bisection_steps: int = 10
     curvature_fraction: float = 0.8
     # Fraction of the distance to the core scaffold a front may reach.
     scaffold_fraction: float = 0.9
@@ -628,8 +631,17 @@ def build_front(
     scaffold=None,
     site: int = 0,
     name: str = "",
+    allow_scale: bool = False,
 ) -> Front:
     """Offset a closed wall loop into the fluid by a clearance-limited height.
+
+    When the local repairs do not converge the front is not admissible as
+    the gates stand, and the right response is usually a cut - the caller
+    inserts an anchor at the failing block and asks again.  Only with
+    ``allow_scale`` does this fall back to one global scale of the height
+    found by a bounded bisection search. A failure reports the failing sampled
+    scale; it is not a proof that every possible height fails. The caller
+    passes it on its last repair round.
 
     ``fluid_sign`` is +1 when the fluid lies to the right of the stored winding
     (a solid body) and -1 when it lies to the left (an outer boundary), matching
@@ -723,14 +735,17 @@ def build_front(
     stubborn = 0
     previous_hard: list[int] | None = None
     failing: list[int] = []
-    for _attempt in range(options.shrink_attempts * 4 + 1):
+    cap0 = cap.copy()
+
+    def evaluate(current: np.ndarray) -> dict:
+        """Construct the front for one cap vector and judge it completely."""
         # The floor is *not* re-applied after slope limiting.  Doing so was
         # measured: it leaves every synthetic case unchanged but spikes the
         # offset at a cusp, which breaks the seam wedges beside it - on 30P30N
         # the flap's seam stops being constructible and two non-convex core
         # faces come back - and it does not remove the collapse it was aimed at.
         heights = slope_limited(
-            np.maximum(cap, 0.0), arclength, options.slope_limit, closed=True
+            np.maximum(current, 0.0), arclength, options.slope_limit, closed=True
         )
         offset = g2.offset_polyline(
             augmented,
@@ -749,34 +764,97 @@ def build_front(
             augmented, offset, gate_indices, closed=True
         )
         seams = _seam_points(augmented, sharp, heights, fluid_sign)
-        if stuck or not _front_is_usable(augmented, offset, obstacles):
+        usable = not stuck and _front_is_usable(augmented, offset, obstacles)
+        hard: list[int] = []
+        soft: list[int] = []
+        if usable:
+            hard, soft = _band_failures(
+                augmented,
+                offset,
+                gate_indices,
+                options.minimum_band_quality,
+                options.repair_band_quality,
+                exempt_orders,
+                seams,
+            )
+        return {
+            "heights": heights,
+            "offset": offset,
+            "seams": seams,
+            "usable": usable,
+            "hard": hard,
+            "soft": soft,
+        }
+
+    def block_vertices(order: int) -> np.ndarray:
+        """Augmented-wall indices spanned by one band block, gates included."""
+        first = gate_indices[order]
+        second = gate_indices[(order + 1) % len(gate_indices)]
+        count = len(augmented) - 1
+        span = (second - first) % count
+        return (first + np.arange(span + 1)) % count
+
+    def finish(state: dict, scale: float, extra: list[str]) -> Front:
+        seams = state["seams"]
+        if state["soft"]:
+            notes.append(
+                f"{name}: {len(state['soft'])} band block(s) stay below the repair "
+                f"quality; they are strictly convex but poor"
+            )
+        if scale < 1.0:
+            notes.append(
+                f"{name}: front height globally reduced to {scale:.3f} of the "
+                f"request so the offset stays simple"
+            )
+        notes.extend(extra)
+        if seams:
+            notes.append(
+                f"{name}: {len(seams)} sharp wall feature(s) carry a band seam - "
+                f"two front vertices and a wedge block, so the feature has three "
+                f"incident blocks instead of two"
+            )
+        return Front(
+            site,
+            name,
+            augmented,
+            state["offset"],
+            state["heights"],
+            gate_indices,
+            scale,
+            notes,
+            seams,
+        )
+
+    # Stage 1 - local repairs.  A failing band block has the caps of *all* its
+    # wall vertices reduced, gates included, so a bend inside the block responds
+    # too; reducing only the taller gate left the interior to the slope limiter
+    # and made the search wander.
+    for _attempt in range(options.local_attempts):
+        state = evaluate(cap)
+        if not state["usable"]:
             shrink *= options.shrink_factor
             cap = floored(cap * options.shrink_factor)
             if float(np.max(cap)) < floor:
                 break
             continue
-        hard, soft = _band_failures(
-            augmented,
-            offset,
-            gate_indices,
-            options.minimum_band_quality,
-            options.repair_band_quality,
-            exempt_orders,
-            seams,
-        )
+        hard, soft = state["hard"], state["soft"]
         if hard:
             stubborn = stubborn + 1 if hard == previous_hard else 0
             previous_hard = list(hard)
             if stubborn > options.hard_attempts:
+                # The same blocks fail however they are thinned locally: the
+                # wall section needs a cut.  Say so unless thinning the whole
+                # front is the last move the caller has left.
+                if allow_scale:
+                    break
                 touching = {
                     order
                     for order in hard
-                    if order in sharp
-                    or (order + 1) % len(gate_indices) in sharp
+                    if order in sharp or (order + 1) % len(gate_indices) in sharp
                 }
                 raise LayerError(
                     f"band block(s) {hard} of {name!r} stay inadmissible however "
-                    f"thin the layer is made; "
+                    f"thin the layer is made locally; "
                     + (
                         "they sit against a sharp wall feature that needs more "
                         "incident sectors"
@@ -789,59 +867,85 @@ def build_front(
                 )
         failing = hard or (soft if repairs < options.repair_budget else [])
         if not failing:
-            if soft:
-                notes.append(
-                    f"{name}: {len(soft)} band block(s) stay below the repair "
-                    f"quality; they are strictly convex but poor"
-                )
-            if shrink < 1.0:
-                notes.append(
-                    f"{name}: front height globally reduced to {shrink:.3f} of the "
-                    f"request so the offset stays simple"
-                )
-            if repairs:
-                notes.append(
+            extra = (
+                [
                     f"{name}: {repairs} band block(s) had their front height "
                     f"reduced locally to stay strictly convex"
-                )
-            if seams:
-                notes.append(
-                    f"{name}: {len(seams)} sharp wall feature(s) carry a band seam - "
-                    f"two front vertices and a wedge block, so the feature has three "
-                    f"incident blocks instead of two"
-                )
-            return Front(
-                site,
-                name,
-                augmented,
-                offset,
-                heights,
-                gate_indices,
-                shrink,
-                notes,
-                seams,
+                ]
+                if repairs
+                else []
             )
+            return finish(state, shrink, extra)
         for order in failing:
-            following = (order + 1) % len(gate_indices)
-            first = gate_indices[order]
-            second = gate_indices[following]
-            taller = (
-                first
-                if _height(augmented, offset, first)
-                >= _height(augmented, offset, second)
-                else second
-            )
-            cap[taller] *= options.repair_factor
+            cap[block_vertices(order)] *= options.repair_factor
             repairs += 1
         cap = floored(cap)
         if float(np.max(cap)) < floor:
             break
+
+    if not allow_scale:
+        raise LayerError(
+            f"no admissible boundary-layer front for {name!r} after {repairs} "
+            f"local reductions: band block(s) {failing} still fold or produce a "
+            f"non-convex block at {shrink:.4f} of the requested height; the wall "
+            f"section needs a cut",
+            name=name,
+            orders=failing,
+        )
+
+    # Stage 2 - one global scale of the original caps, by bisection.  A thin
+    # enough band usually follows the wall with convex blocks. The search is
+    # bounded, and each accepted sample is checked completely; the discrete
+    # trimming and height floor do not guarantee monotone admissibility.
+    low, high = 0.0, 1.0
+    accepted: dict | None = None
+    accepted_scale = 0.0
+    thinnest: tuple[float, dict] | None = None
+    for _step in range(options.bisection_steps):
+        scale = 0.5 * (low + high)
+        state = evaluate(floored(cap0 * scale))
+        if state["usable"] and not state["hard"]:
+            accepted, accepted_scale, low = state, scale, scale
+        else:
+            high = scale
+            thinnest = (scale, state)
+    if accepted is not None:
+        return finish(
+            accepted,
+            accepted_scale,
+            [
+                f"{name}: local repairs did not converge after {repairs} "
+                f"reductions; the whole front was scaled to {accepted_scale:.3f} "
+                f"of its clearance-limited height instead"
+            ],
+        )
+
+    # Stage 3 - no sampled height worked: name the thinnest sample's failures.
+    scale, state = thinnest if thinnest is not None else (0.0, evaluate(cap0 * 0.0))
+    hard = list(state["hard"]) if state["usable"] else []
+    touching = {
+        order
+        for order in hard
+        if order in sharp or (order + 1) % len(gate_indices) in sharp
+    }
+    if not state["usable"]:
+        detail = "the front still folds or crosses another boundary"
+    elif touching:
+        detail = (
+            f"band block(s) {hard} sit against a sharp wall feature that needs "
+            "more incident sectors"
+        )
+    else:
+        detail = (
+            f"band block(s) {hard} stay inadmissible; the wall section needs a "
+            "cut, not a smaller height"
+        )
     raise LayerError(
-        f"no admissible boundary-layer front for {name!r}: the clearance-limited "
-        f"offset still folds or produces a non-convex band block at "
-        f"{shrink:.4f} of the requested height",
+        f"no admissible boundary-layer front for {name!r}: at {scale:.4f} of the "
+        f"clearance-limited height {detail}",
         name=name,
-        orders=failing,
+        orders=hard,
+        sharp=bool(touching),
     )
 
 

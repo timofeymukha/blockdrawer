@@ -107,6 +107,14 @@ result can be read either way; the session is written whenever the result is
    at 45 degrees, which is valid but poor, and a corner block at the mitre is
    the natural cavity alternative still to be written.
 
+   Local repair reduces the caps of every wall sample in a failing block,
+   including both gates. Repeated hard failures request a patch split from the
+   caller. On its final repair round the caller permits a bounded bisection
+   search over one scale of the original caps. Every accepted sample passes the
+   same front and band checks; an exhausted search reports the failing blocks
+   and sampled scale. Trimming and the height floor are discrete, so this is
+   not a proof that all possible heights fail.
+
 4. **Sharp-feature cavities** (`fan_cavity.py`). This stage runs on the
    assembled patch graph, after whichever producer wrote it, and it reads only
    incidence, provenance and geometry - so it is listed here, with the layers it
@@ -193,6 +201,33 @@ result can be read either way; the session is written whenever the result is
    bounded coordinate descent relaxes every anchor and gate against a scale-free
    objective. What is new is that the **band front, not the wall**, is the inner
    boundary of those patches.
+
+   **Optional gap spanning** (`spanned.py`, `--span-gaps`) replaces the two
+   half-core strips along a narrow body-body branch with one strip between
+   the wall fronts. Each endpoint dissolves into an extended strip block,
+   a mouth block and a merged far-field block. Its valence-six medial junction
+   becomes two valence-five front vertices, preserving the total index.
+   Body-to-far-field branches remain rings.
+
+   Annular junction gates generally face the far field: simply connecting
+   them or walking farther around the bodies makes straight rungs cross the
+   bands. The mouth search instead walks the first medial branch interval
+   towards the gap until the two wall-to-medial vectors oppose by at least
+   110 degrees. Their closest wall points become mouth gates; junction gates
+   move halfway towards the next interior gate. New ring anchors sit within
+   the first adjacent ring intervals, at most 0.3 mouth widths from the
+   junction, with matching far-field projections. The annular objective is
+   not applied to these variables afterwards. If a mouth would pass another
+   gate, collapse onto a sharp feature, or meet a third wall, it is refused.
+
+   The entire trial, including gate movement, new anchors and rebuilt bands,
+   is isolated. Graph validation, coverage, session emission and both sampled
+   grids must pass before it replaces the original result. A failure restores
+   the original layout and session as well as the graph, and appears under
+   `medial.spanned_branches`. Grid validation remains mandatory for a span
+   even with `--no-grid-quality`. Merged circular boundary edges follow the
+   section containing the removed gate; selecting the opposite arc can leave
+   a clean graph but invert the exported grid.
 
 6. **Internal core** (`sweep.py`). A four-sided reading of a simply connected
    domain is searched for: four corners are chosen from the domain's own chain
@@ -354,6 +389,57 @@ which keeps the command line stateless. A refused alternative carries the exact
 reason, including the two conflicting entity ids for a crossing.
 
 ## Results
+
+### Gap spanning checkpoint (opt-in)
+
+```bash
+python experiments/agentic_topology/research_cli.py run --case two_circles \
+  --span-gaps --json out/two-circles-span.json \
+  --output out/two-circles-span.png --session out/two-circles-span-session.json
+```
+
+The default remains the annular construction. With default numerical options
+and a medial raster width of 700:
+
+| case | default → span blocks | worst component length ratio | outcome with spanning requested |
+| ---- | --------------------- | ---------------------------- | ------------------------------- |
+| `two_circles` | 32 → 40 | 18.37 → 8.70 | admissible, shape limits pass; one count coupling prevents `resolved` |
+| `concave_and_convex` | 34 → 40 | 15.58 → 6.05 | admissible; shape misses remain and one count coupling is introduced |
+| `sharp_bodies` | 33 → 33 | 34.69 unchanged | reverted: mouth collides with an existing wall gate |
+| `narrow_gap_tip` | 41 → 41 | 99.97 unchanged | reverted: no facing mouth before the next branch anchor |
+| `three_rotated_ellipses` | 89 → 89 | 71.72 unchanged | both candidate branches lack room for a facing mouth |
+| `four_bodies` | 53 → 53 | 35.80 unchanged | junctions with several narrow branches need another transition |
+| `skimming_tail` | 26 → 26 | 89.53 unchanged | still inadmissible; spanning has no room for a mouth |
+| 30P30N | 116 → 116 | 282.93 unchanged | both gap trials revert; the same three non-convex faces and one crossing remain |
+| periodic hill | 33 → 33 | 2.94 unchanged | resolved; internal producer unchanged |
+
+`single_ellipse`, `peanut_body` and `straight_channel` are also unchanged.
+No previously admissible case becomes inadmissible. The current 30P30N repeat
+has 143 vertices, 261 edges and all three bands; older detailed tables below
+refer to the earlier 115-block checkpoint, not this repeat.
+
+The spanned `two_circles` has four strip blocks, two dissolved junctions and
+four valence-five front vertices; Euler characteristic stays -1 and total
+index stays -4. Its shape grid has 2,560 cells, zero inversions, minimum scaled
+Jacobian 0.402, maximum non-orthogonality 66.32 degrees and wall misalignment
+7.37 degrees. The default counts grid also has zero inversions (3,145 cells).
+Its session reloads and exports with the same curved boundary sections.
+OpenFOAM 2606 also accepts that session: `blockMesh` produces 3,145 cells,
+6,504 points and 12,688 faces; `checkMesh` reports `Mesh OK`, maximum
+non-orthogonality 59.58 degrees, skewness 0.495 and aspect ratio 80.71. The
+production suite runs 410 tests (27 integration tests skipped there); those
+27 pass separately against OpenFOAM. The research suite runs 108 tests with
+the existing one expected failure for `skimming_tail`.
+
+This is a constructible alternative, **not yet an improvement in acceptance**:
+the mouth puts a cross-gap `core_rung`, the merged `ring`, and a far-field
+`wall` in one opposite-edge equality component. The existing structural rule
+correctly reports this normal/tangential coupling, so even `two_circles` loses
+its default `resolved` status. `graph.sizing_structure.coupled` retains the
+full component record even when it is outside the six largest length ratios.
+The criterion is unchanged. A transition that avoids the coupling and can
+consume more than the first branch interval is still needed before spanning
+can become a default or address the sharp-gap acceptance cases.
 
 ### Periodic hill (internal-flow acceptance)
 
@@ -568,6 +654,13 @@ installations whose LAPACK/BLAS build is broken.
 
 ### Remaining limits
 
+* **Gap spanning is opt-in and its mouth still couples counts.** The single
+  strip removes a medial edge and preserves the index, but its mouth equates
+  a cross-gap normal rung with a far-field tangential edge. It therefore fails
+  the existing structural criterion. A mouth is currently confined to the
+  first branch interval; sharp gates, a third wall, or several candidate
+  branches at one junction require a different transition. Rejections restore
+  the complete pre-span result. It does not yet fix the 30P30N flap gap.
 * **The front and the medial scaffold are not yet reconciled.** A front is
   capped at a fraction of the local feature size, at the wall's own radius of
   curvature, at the gate-to-ring distance *at each gate*, and at nine tenths of
@@ -594,19 +687,14 @@ installations whose LAPACK/BLAS build is broken.
   length ratio it forces (855 on 30P30N). The cavity coupling check does not
   refuse it yet, because every sharp feature currently depends on the seam and
   the through-cut alternative is built for three sectors only.
-* **The slat's band on 30P30N is on a knife edge.** Asking for a band 2.4
-  percent lower (0.25 of the scale instead of 0.256) makes the slat's front
-  loop fail: its band blocks beside the cusp keep failing the convexity and
-  spoke-crossing checks through every local repair, although the caps there
-  are far below the request. The requested height only enters through the
-  probe bound and the repair floor, so the loop's repair search, not the
-  geometry, decides the outcome. The same sensitivity shows on `sharp_bodies`
-  and `three_rotated_ellipses`: the geometric default height and the series
-  formula agree to the last floating-point bits, and that difference alone
-  moves a band front by 0.4 percent and the default cell count by 8 percent,
-  with identical block graphs. Runs are deterministic; the loop is not stable.
-  It needs a search that reduces the height where a block fails and proves it
-  cannot succeed before giving up.
+* **Front repair is deterministic but still sensitive to rounding.** Local
+  repair now reduces a whole failing block's cap, requests cuts for stubborn
+  failures and permits a bounded global height search on the caller's last
+  repair round. A last-bit difference between the geometric default height
+  and the sizing-series formula still changes `sharp_bodies`' default cell
+  count from 4,801 to 4,421 cells (about 8 percent) with the same 33-block
+  graph. The search has explicit
+  stopping conditions; numerical stability is still a separate open problem.
 * **The 30P30N block graph follows the raster.** Doubling the width to 1400
   leaves the four junctions identical to four decimals but gives 106 faces
   and 18 singularities against 115 and 24, with different cavity templates
@@ -628,7 +716,7 @@ installations whose LAPACK/BLAS build is broken.
   intervals beside the feature it repairs. The supplied wall point list is
   untouched, because it lies on the cavity boundary and cavity-boundary edges are
   reused exactly.
-* The medial core is one annulus per body; a cell whose ring has several
+* The default medial core is one annulus per body; a cell whose ring has several
   disjoint components is reported, not decomposed.
 * A band block's first cell follows the local band thickness, so the first-cell
   width varies inside a block wherever the clearance does - about 39 percent on
@@ -656,6 +744,7 @@ installations whose LAPACK/BLAS build is broken.
 | `layers.py` | clearance-limited fronts, offset repair, band seams |
 | `fan_cavity.py` | sharp-feature cavities, templates, validation, atomic application |
 | `external_topology.py` | medial scaffold plus wall bands, written as a patch graph |
+| `spanned.py` | optional gap strips, facing mouths, junction dissolution and structured refusals |
 | `sweep.py` | four-sided detection, guide correspondence, H-grid core |
 | `moves.py` | candidate discrete operations with Euler/index screening |
 | `agent_ops.py` | describe / candidates / compare / focus for an agent |

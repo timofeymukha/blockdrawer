@@ -46,6 +46,7 @@ import layers as layer_module  # noqa: E402
 import pipeline  # noqa: E402
 import session_emit  # noqa: E402
 import sizing  # noqa: E402
+import spanned  # noqa: E402
 import synthetic_cases as cases  # noqa: E402
 import planar_domain as pdm  # noqa: E402
 from pointlist import parse_curve_argument, read_point_list  # noqa: E402
@@ -71,6 +72,10 @@ def add_input_arguments(parser: argparse.ArgumentParser) -> None:
         "--farfield-shape", choices=("circle", "rectangle"), default="circle"
     )
     parser.add_argument("--farfield-name", default="farfield")
+    parser.add_argument(
+        "--span-gaps", action="store_true",
+        help="try one core strip across narrow body-body gaps (experimental; rejected trials roll back)",
+    )
     parser.add_argument(
         "--wall-edge-type", choices=("polyLine", "spline"), default="polyLine"
     )
@@ -183,6 +188,7 @@ def build_options(arguments) -> pipeline.PipelineOptions:
             raise SystemExit("--cavity-choice takes FEATURE=TEMPLATE")
         choices.append((feature, template))
     return pipeline.PipelineOptions(
+        span=spanned.SpanOptions(enabled=arguments.span_gaps),
         grid_width=arguments.width,
         farfield_scale=arguments.farfield_scale,
         farfield_shape=arguments.farfield_shape,

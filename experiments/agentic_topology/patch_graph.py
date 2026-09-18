@@ -35,7 +35,7 @@ DEGENERATE_RATIO = 1.0e-7
 # follows one; a normal edge crosses a band or a core towards a wall.  The
 # sweep producer's ribs cross the channel, so they are normal edges too.
 TANGENTIAL_ROLES = frozenset({"wall", "front", "ring"})
-NORMAL_ROLES = frozenset({"layer_spoke", "core_spoke", "core_rib"})
+NORMAL_ROLES = frozenset({"layer_spoke", "core_spoke", "core_rib", "core_rung"})
 
 
 class GraphError(RuntimeError):
@@ -769,7 +769,7 @@ def structure_failures(structure: dict, limits: StructureLimits) -> list[dict]:
     couplings = int(structure.get("tangential_normal_couplings", 0))
     if couplings and not limits.allow_tangential_normal_coupling:
         example = next(
-            (item for item in worst if item.get("mixes_tangential_and_normal")),
+            (item for item in structure.get("coupled", worst) if item.get("mixes_tangential_and_normal")),
             None,
         )
         found.append(
@@ -844,6 +844,9 @@ def sizing_structure(graph: PatchGraph, *, reported: int = 6) -> dict:
             record["ties_band_to_core_depth"] for record in records
         ),
         "worst": records[:reported],
+        # Couplings need not have an extreme length ratio. Keep their full
+        # evidence even when they fall outside the short worst-ratio table.
+        "coupled": [record for record in records if record["mixes_tangential_and_normal"]],
     }
 
 

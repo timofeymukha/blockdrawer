@@ -87,8 +87,14 @@ def build_graph(
     *,
     options: layer_module.LayerOptions | None = None,
     wall_edge_style: str = "polyLine",
+    allow_scale: bool = False,
 ) -> AssemblyResult:
-    """Assemble bands, seams, fans and core patches into one patch graph."""
+    """Assemble bands, seams, fans and core patches into one patch graph.
+
+    ``allow_scale`` lets a front that no local repair admits fall back to a
+    uniformly thinner band instead of failing; the pipeline passes it on its
+    last band-repair round, after inserting anchors has been tried.
+    """
     settings = options or layer_module.LayerOptions()
     diagram = layout.diagram
     graph = pg.PatchGraph(euler_characteristic=domain.euler_characteristic)
@@ -143,6 +149,7 @@ def build_graph(
                 scaffold=cell.ring,
                 site=cell.site,
                 name=site.name,
+                allow_scale=allow_scale,
             )
             notes.extend(front.notes)
             fronts[cell_index] = front

@@ -17,8 +17,9 @@ emission, and quality measured on the actual sampled transfinite grid.
 
 from __future__ import annotations
 
+import copy
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
@@ -34,6 +35,7 @@ import planar_domain as pdm
 import session_emit
 import sites as site_module
 import sizing
+import spanned
 import sweep as sweep_module
 import voronoi_graph
 
@@ -76,6 +78,7 @@ class PipelineOptions:
     )
     grid: grid_quality.GridOptions = field(default_factory=grid_quality.GridOptions)
     structure: pg.StructureLimits = field(default_factory=pg.StructureLimits)
+    span: spanned.SpanOptions = field(default_factory=spanned.SpanOptions)
 
 
 @dataclass
@@ -94,6 +97,8 @@ class PipelineResult:
     correspondence: object | None = None
     sweep_result: object | None = None
     assembly: object | None = None
+    spanning: spanned.SpanResult | None = None
+    span_notes: list = field(default_factory=list)
     cavity: object | None = None
     graph: pg.PatchGraph | None = None
     metric: sizing.SizeMetric | None = None
@@ -293,6 +298,80 @@ def run_external(names, loops, options: PipelineOptions | None = None):
         except Exception as error:
             result.errors.append({"stage": "bands", "error": _describe(error)})
     _finish(result, settings)
+    if settings.span.enabled and result.layout is not None and result.metric is not None:
+        result = _try_spanning(result, settings)
+    return result
+
+
+def _try_spanning(result: PipelineResult, settings: PipelineOptions) -> PipelineResult:
+    """Commit a complete admissible construction, including its gate placement.
+
+    A graph-only rollback leaves moved gates and added mouth anchors behind.
+    Keep the annular result until coverage, session emission and both sampled
+    grids accept the trial. Rejected branches retain their exact reason.
+    """
+    records = spanned.plan(result.layout, result.metric, settings.span)
+    notes = []
+    # Rebuilding an annular graph would resurrect any earlier dissolved
+    # branches, so each trial constructs all previously accepted spans too.
+    accepted = []
+    original_layout = result.layout
+    for record in records:
+        if not record["spanned"]:
+            continue
+        if result.errors or result.solve.failures or not result.solve.converged:
+            record["spanned"] = False
+            record["reason"] = "spanning requires a successful domain and medial layout stage"
+            continue
+        trial_records = [dict(item) for item in accepted + [record]]
+        trial = PipelineResult(
+            settings, "external", domain=result.domain, scale=result.scale,
+            sites=result.sites, diagram=result.diagram,
+            layout=copy.deepcopy(original_layout), solve=result.solve, metric=result.metric,
+            problems=list(result.domain.problems()),
+        )
+        try:
+            if not settings.layer.enabled:
+                raise pg.GraphError("gap spanning requires boundary-layer fronts")
+            trial.span_notes = spanned.prepare(trial.layout, trial_records, settings.span)
+            trial.assembly = external_topology.build_graph(
+                trial.layout, trial.domain, trial.metric, options=settings.layer,
+                wall_edge_style=settings.wall_edge_style, allow_scale=True,
+            )
+            if trial.assembly.failures:
+                record["failures"] = trial.assembly.failures
+                raise pg.GraphError("the facing-mouth layout could not build every wall band")
+            trial.spanning = spanned.apply(
+                trial.layout, trial.assembly.graph, trial_records,
+                wall_edge_style=settings.wall_edge_style,
+            )
+            refused = [item for item in trial.spanning.branches if not item["spanned"]]
+            if refused:
+                record["failures"] = refused
+                raise pg.GraphError(refused[0]["reason"])
+            trial.graph = trial.spanning.graph
+            # Even a caller omitting ordinary grid evaluation cannot commit
+            # a span whose exported curved geometry has not been checked.
+            _finish(trial, replace(settings, evaluate_grid=True))
+            if not trial.admissible:
+                record["problems"] = trial.problems
+                record["errors"] = trial.errors
+                record["coverage"] = trial.coverage
+                record["grid"] = {
+                    "shape_inverted": None if trial.shape is None else trial.shape.inverted_cells,
+                    "counts_inverted": None if trial.grid is None else trial.grid.inverted_cells,
+                }
+                raise pg.GraphError("the complete span failed coverage, export or sampled-grid validation")
+        except Exception as error:
+            record["spanned"] = False
+            record["reason"] = f"spanning reverted, including mouth placement: {_describe(error)}"
+            continue
+        record.update(trial.spanning.branches[-1])
+        accepted.append(dict(record))
+        notes = trial.spanning.notes
+        result = trial
+    result.spanning = spanned.SpanResult(result.graph, records, notes)
+    result.analysis = build_analysis(result)
     return result
 
 
@@ -341,9 +420,10 @@ def _assemble_external(result: PipelineResult, settings: PipelineOptions):
         options=settings.layer,
         wall_edge_style=settings.wall_edge_style,
     )
-    for _attempt in range(settings.band_repairs):
+    for attempt in range(settings.band_repairs):
         if not assembly.failures:
             break
+        final = attempt == settings.band_repairs - 1
         progressed = False
         for failure in assembly.failures:
             cell = failure.get("cell")
@@ -378,6 +458,9 @@ def _assemble_external(result: PipelineResult, settings: PipelineOptions):
             result.metric,
             options=settings.layer,
             wall_edge_style=settings.wall_edge_style,
+            # On the last round a front that still has no admissible height
+            # may be thinned uniformly instead of dropping the whole band.
+            allow_scale=final,
         )
     return assembly
 
@@ -700,6 +783,11 @@ ACCEPTANCE_TERMS = {
 # Emitted into every JSON report.  Keep this in step with the "Remaining
 # limits" section of the research README; it is the same list, shorter.
 LIMITATIONS = [
+    "Gap spanning is opt-in: its mouth couples a normal core rung to a "
+    "tangential far-field edge, so it is not structurally resolved. Mouths "
+    "must fit before the next branch anchor; sharp gates, a third wall and "
+    "junctions with several narrow branches need another transition. Rejected "
+    "trials restore gate placement, bands and session as well as the graph.",
     "The layer front and the medial scaffold are not reconciled: a front is "
     "capped at a third of the gate-to-ring distance at each gate but at nine "
     "tenths of the distance to the ring between gates, so a curved front can "
@@ -713,9 +801,10 @@ LIMITATIONS = [
     "count; graph.sizing_structure reports the length ratio that forces.",
     "The 30P30N block graph depends on the raster width although its medial "
     "junctions do not; every synthetic fixture is raster-invariant.",
-    "The slat's band on 30P30N is on a knife edge: a 2.4 percent change of the "
-    "requested band height, which only enters the front loop through its probe "
-    "bound and repair floor, decides whether the loop's local repairs succeed.",
+    "Front repair reduces whole failing blocks, requests cuts and permits a "
+    "bounded global height search on the final repair round. It is deterministic "
+    "but a last-bit height change still moves sharp_bodies' default cell count "
+    "by about eight percent without changing its block graph.",
     "The through-cut cavity template is constructed for three sectors only. "
     "More sectors need a transition strip between the sector chain and the "
     "core boundary, which this stage reports rather than builds.",
@@ -725,7 +814,7 @@ LIMITATIONS = [
     "A cavity replacement straightens the interior front edges of the two band "
     "intervals beside the feature it repairs; the supplied wall point list is "
     "untouched because it lies on the cavity boundary.",
-    "The medial core is still one annulus per body: a cell whose ring has "
+    "The default medial core is one annulus per body: a cell whose ring has "
     "several disjoint components is reported, not decomposed.",
     "A band block's first cell follows the local band thickness, so the "
     "first-cell width varies inside a block wherever the clearance does.",
@@ -787,6 +876,17 @@ def _medial_section(result: PipelineResult) -> dict | None:
             }
             for branch in diagram.branches
         ],
+        "spanned_branches": (
+            None if result.spanning is None else result.spanning.branches
+        ),
+        "spanning_options": {
+            "enabled": result.options.span.enabled,
+            "clearance_ratio": result.options.span.clearance_ratio,
+            "mouth_angle": result.options.span.mouth_angle,
+            "mouth_reach": result.options.span.mouth_reach,
+        },
+        "spanning_notes": list(result.span_notes)
+        + ([] if result.spanning is None else result.spanning.notes),
         "solver": {
             "converged": result.solve.converged,
             "worst_corner_scaled_jacobian": result.solve.worst_quality,

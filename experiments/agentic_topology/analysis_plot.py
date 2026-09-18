@@ -155,7 +155,10 @@ def render_result(result, width: int = 1100, *, bounds=None, title: str = None):
             if edge.role in ("front",):
                 canvas.polyline(edge.path, (20, 120, 80), 2)
     if diagram is not None:
+        spanned = set(result.spanning.spanned) if result.spanning is not None else set()
         for branch in diagram.branches:
+            if branch.index in spanned:
+                continue
             canvas.polyline(branch.path, BRANCH_COLOUR, 2)
     if domain is not None:
         for loop in domain.loops:
