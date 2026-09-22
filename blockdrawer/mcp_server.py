@@ -27,6 +27,7 @@ from .commands import (
     apply_commands as _apply_commands,
     command_specs,
     format_result,
+    read_command_lines,
 )
 from .describe import SECTIONS, describe_model, filter_description, format_description
 from .foam import block_mesh_dict, write_block_mesh_dict
@@ -46,23 +47,31 @@ SERVER_NAME = "blockdrawer"
 
 INSTRUCTIONS = """\
 BlockDrawer edits 2D block topologies for OpenFOAM blockMesh. A session is a
-JSON file; every tool takes its path. Typical loop:
+JSON file; every tool takes its path, so several agents or a person in the GUI
+can share one file. Mechanics:
 
-1. describe_session to learn block, vertex, and edge IDs. Edges are written
-   first-second (either order), e.g. v0-v1.
-2. edit_session with a list of commands such as "set_edge_cells v0-v1 40",
+1. describe_session for block, vertex, edge and patch IDs. Edges are written
+   first-second in either order, e.g. v0-v1.
+2. edit_session with a list of commands ("set_edge_cells v0-v1 40",
    "add_block v1-v2", "set_edge_grading v0-v1 start_width 0.002",
    "set_edge_type v2-v3 arc", "split_edge v1-v2 0.5", "add_boundary inlet",
-   "set_edge_boundary v0-v3 inlet". list_commands documents all of them.
-   Batches are atomic: nothing is saved when any command fails.
-3. quality_report for corner angles, aspect ratios, growth, and size jumps.
-4. render_session to look at the result; use zoom and highlight for detail.
-5. check_mesh to run blockMesh and checkMesh when OpenFOAM is available, then
-   export_block_mesh_dict into the case.
+   "set_edge_boundary v0-v3 inlet") or with commands_file pointing at a
+   generated batch (one command per line, # comments, JSON objects allowed).
+   list_commands documents every command. Batches are atomic: nothing is
+   saved when any command fails.
+3. quality_report for corner angles, aspect ratios, growth and size jumps -
+   a screen, not a verdict.
+4. render_session to look, with zoom and highlight for trailing edges,
+   corners and gaps.
+5. check_mesh runs blockMesh and checkMesh when OpenFOAM is available; it is
+   the authority. export_block_mesh_dict writes the dictionary into a case.
 
-For pseudo-2D cases set both z patches to type empty with
-set_export_settings z_min_patch_type=empty z_max_patch_type=empty; otherwise
-checkMesh treats the mesh as 3D.
+How to choose and build a topology - O, C or H grids, wall bands, wakes,
+far-field placement, sizing from a target y+, the validation ladder and the
+known failure signatures - is the repository skill
+.claude/skills/mesh-blocking/SKILL.md. Read it before building or judging a
+mesh. Pseudo-2D cases need both z patches of type empty:
+set_export_settings z_min_patch_type=empty z_max_patch_type=empty.
 """
 
 
@@ -133,25 +142,37 @@ def list_commands(name: str | None = None) -> dict[str, Any]:
 
 def edit_session(
     path: str,
-    commands: list[str | dict[str, Any]],
+    commands: list[str | dict[str, Any]] | None = None,
     output: str | None = None,
     in_place: bool = False,
     dry_run: bool = False,
+    commands_file: str | None = None,
 ) -> dict[str, Any]:
     """Apply editing commands atomically and save the result.
 
     ``commands`` are text lines ("set_edge_cells v0-v1 20") or objects
-    ({"op": "add_block", "edge": ["v1", "v2"]}). Pass ``in_place=true`` to
+    ({"op": "add_block", "edge": ["v1", "v2"]}). ``commands_file`` names a
+    batch file - one command per line, ``#`` comments, JSON objects allowed,
+    the same format ``blockdrawer-cli apply -f`` reads - which is applied
+    before any inline ``commands``; a generated topology of thousands of
+    commands belongs in a file, not in the call. Pass ``in_place=true`` to
     overwrite ``path`` or ``output`` to write elsewhere; with neither, or with
     ``dry_run``, the result is reported but not saved. If any command fails
     nothing is written and the error names the failing step.
     """
     if output and in_place:
         raise ToolFailure("output and in_place are mutually exclusive")
-    if not commands:
+    batch_commands: list[Any] = []
+    if commands_file:
+        source = Path(commands_file)
+        if not source.is_file():
+            raise ToolFailure(f"commands_file {source} does not exist")
+        batch_commands.extend(read_command_lines(source.read_text(encoding="utf-8")))
+    batch_commands.extend(commands or [])
+    if not batch_commands:
         raise ToolFailure("No commands given")
     model = load_session(path)
-    batch = _apply_commands(model, commands)
+    batch = _apply_commands(model, batch_commands)
     destination: Path | None = None
     if in_place:
         destination = Path(path)

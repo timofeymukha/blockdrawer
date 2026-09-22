@@ -117,6 +117,38 @@ class ToolFunctionTests(unittest.TestCase):
         with self.assertRaisesRegex(ToolFailure, "No commands"):
             edit_session(str(self.session), [])
 
+    def test_edit_session_reads_a_commands_file(self) -> None:
+        batch = self.root / "batch.jsonl"
+        batch.write_text(
+            "# a generated batch\n"
+            "set_edge_cells v0-v1 6\n"
+            "\n"
+            '{"op": "add_block", "edge": ["v1", "v2"]}\n',
+            encoding="utf-8",
+        )
+        output = self.root / "edited.json"
+        data = edit_session(
+            str(self.session), commands_file=str(batch), output=str(output),
+        )
+        self.assertEqual(data["applied"], 2)
+        self.assertEqual(len(load_session(output).blocks), 2)
+        # Inline commands follow the file, in one atomic batch.
+        both = edit_session(
+            str(self.session),
+            ["set_edge_cells v0-v1 7"],
+            commands_file=str(batch),
+            dry_run=True,
+        )
+        self.assertEqual(both["applied"], 3)
+        self.assertIn("set_edge_cells", both["log"][-1])
+        self.assertFalse(both["saved"])
+        with self.assertRaisesRegex(ToolFailure, "does not exist"):
+            edit_session(str(self.session), commands_file=str(self.root / "missing.jsonl"))
+        empty = self.root / "empty.jsonl"
+        empty.write_text("# nothing\n", encoding="utf-8")
+        with self.assertRaisesRegex(ToolFailure, "No commands"):
+            edit_session(str(self.session), commands_file=str(empty))
+
     def test_quality_report(self) -> None:
         edit_session(
             str(self.session), ["set_edge_grading v0-v1 total_ratio 20"], in_place=True,
@@ -188,6 +220,15 @@ class ToolFunctionTests(unittest.TestCase):
         for function, _ in TOOLS:
             self.assertTrue(function.__doc__, function.__name__)
         self.assertIn("edit_session", INSTRUCTIONS)
+        self.assertIn("commands_file", INSTRUCTIONS)
+        # Methodology lives in the repository skill, and the pointer must exist.
+        self.assertIn(".claude/skills/mesh-blocking/SKILL.md", INSTRUCTIONS)
+        skill = Path(__file__).resolve().parents[1] / ".claude" / "skills" / "mesh-blocking" / "SKILL.md"
+        self.assertTrue(skill.is_file(), skill)
+        text = skill.read_text(encoding="utf-8")
+        self.assertTrue(text.startswith("---\nname: mesh-blocking"))
+        for tool in ("edit_session", "quality_report", "render_session", "check_mesh"):
+            self.assertIn(tool, text, tool)
 
 
 @unittest.skipUnless(HAVE_MCP, "mcp is not installed")

@@ -515,10 +515,20 @@ The repository ships a `.mcp.json` that registers the server for Claude Code
 when it is started in this directory, including the `BLOCKMESH_COMMAND` for the
 supplied OpenFOAM container; edit that entry for another installation. The
 tools are `describe_session`, `list_commands`, `edit_session` (atomic command
-batches), `quality_report`, `render_session` (returns the picture inline),
-`validate_session`, `export_block_mesh_dict`, `check_mesh`, and `new_session`.
-Every tool takes the session path, so agents and the GUI can share one file:
-save in the editor, let the agent edit and check, then reopen.
+batches, inline or from a `commands_file` in the same format as
+`blockdrawer-cli apply -f`), `quality_report`, `render_session` (returns the
+picture inline), `validate_session`, `export_block_mesh_dict`, `check_mesh`,
+and `new_session`. Every tool takes the session path, so agents and the GUI
+can share one file: save in the editor, let the agent edit and check, then
+reopen.
+
+The server's instructions cover tool mechanics only. How to choose and build
+a topology - O, C or H grids, wall bands and wakes, far-field placement,
+sizing from a target $y^+$, the validation ladder and the known failure
+signatures - is the repository skill
+[`.claude/skills/mesh-blocking/SKILL.md`](.claude/skills/mesh-blocking/SKILL.md),
+which Claude Code loads as a project skill and any other agent can read as a
+document. It is kept in step with the topology engine under `experiments/`.
 
 ## Tests
 
