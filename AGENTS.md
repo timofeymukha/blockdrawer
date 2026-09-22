@@ -232,7 +232,11 @@ them in the canvas widgets.
   cannot evade the check by disconnecting front counts from wall counts.
   Cavity screening uses the same physical criterion. The component length-ratio
   limit still applies to every component, including core-to-farfield ones.
-  `spanned.py` exposes an opt-in `--span-gaps` construction: mutually facing
+  The outer boundary is explicit: fabricated as a circle or a rectangle whose
+  sides carry their own names and roles, or supplied chain by chain with
+  `--outer NAME:ROLE=PATH`; chain breaks and convex corners of the outer loop
+  are gates, every chain is its own patch, and an outer wall chain is reported
+  as not banded. `spanned.py` exposes an opt-in `--span-gaps` construction: mutually facing
   mouths replace a narrow body-body medial branch with one core strip and
   dissolve its two junctions into valence-five front vertices. Trials include
   gate placement and band rebuilding on an isolated layout, and commit only

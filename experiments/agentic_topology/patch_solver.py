@@ -202,7 +202,7 @@ def _collect_variables(
         balance = layout.anchors.gate_balance
         for position, cut in enumerate(cuts):
             if cut.pinned and (
-                cut.anchor.kind == "reflex"
+                cut.anchor.kind in ("reflex", "chain", "wake")
                 or (cut.anchor.kind == "corner" and not free_corner_gates)
             ):
                 # A sharp wall corner should stay a block corner: an edge that
@@ -210,7 +210,8 @@ def _collect_variables(
                 # constraint is released only when no valid layout exists with
                 # it in place - except at a reflex corner, where the level set
                 # of the wall distance has its mitre and the spoke must run
-                # along the bisector, so that pin is never released.
+                # along the bisector, and at a chain break, where one patch
+                # name ends and another begins; those pins are never released.
                 continue
             previous = cuts[(position - 1) % count]
             following = cuts[(position + 1) % count]
@@ -245,10 +246,11 @@ def _collect_variables(
             bounds = _anchor_bounds(layout, anchor, margin)
             if bounds is None:
                 continue
+            branch = layout.diagram.branches[anchor.branch]
             variables.append(
                 _Variable(
                     "anchor",
-                    _anchor_setter(anchor),
+                    _anchor_setter(anchor, branch.length, branch.closed),
                     _anchor_getter(anchor),
                     bounds,
                     tuple(blocks),
@@ -306,9 +308,16 @@ def _gate_bounds(
     return bounds
 
 
-def _anchor_setter(anchor):
+def _anchor_setter(anchor, length: float, closed: bool):
+    """Write a branch position; a closed branch is cyclic, so it wraps.
+
+    Without the wrap the bounds of the anchor after the seam start beyond the
+    branch length, the position creeps upwards over the iterations and every
+    ring station past the length samples the same loop end point.
+    """
+
     def apply(value: float) -> None:
-        anchor.position = value
+        anchor.position = value % length if closed and length > 0.0 else value
 
     return apply
 

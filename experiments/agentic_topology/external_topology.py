@@ -97,17 +97,30 @@ def build_graph(
     """
     settings = options or layer_module.LayerOptions()
     diagram = layout.diagram
+    notes: list[str] = []
     graph = pg.PatchGraph(
         euler_characteristic=domain.euler_characteristic,
         boundary_roles={chain.name: chain.role for chain in domain.chains()},
     )
-    wall_loops = [chain.points for chain in domain.wall_chains()]
+    # Obstacles for the fronts: every hole as one closed loop - a hole made of
+    # several wall chains must not be mistaken for several other walls - plus
+    # any wall chain of the outer boundary.
+    wall_loops = [loop.points() for loop in domain.holes] + [
+        chain.points for chain in domain.outer.chains if chain.is_wall
+    ]
+    outer_walls = [chain.name for chain in domain.outer.chains if chain.is_wall]
+    if outer_walls:
+        notes.append(
+            "outer wall chain(s) "
+            + ", ".join(outer_walls)
+            + " get no boundary-layer band: the external producer bands whole "
+            "hole loops only"
+        )
     fronts: dict[int, layer_module.Front] = {}
     gate_stations: dict[int, list[float]] = {}
     layer_faces: set[tuple] = set()
     fans: list[dict] = []
     seams: list[dict] = []
-    notes: list[str] = []
     failures: list[dict] = []
 
     for cell_cuts in layout.cuts:
@@ -196,7 +209,9 @@ def build_graph(
             graph.add_vertex(
                 _gate_key(cell_index, cut),
                 point,
-                constraint=pg.Constraint("chain", site.name, station),
+                constraint=pg.Constraint(
+                    "chain", site.chain_at(station).name, station
+                ),
                 provenance="gate",
             )
             if front is None:
@@ -233,6 +248,8 @@ def build_graph(
                     front.gate_indices[following],
                 )
                 wall_kind, wall_points = _path_curve(wall_path, wall_edge_style)
+                station_first = gate_stations[cell_index][index]
+                station_second = gate_stations[cell_index][following]
             else:
                 wall_path = site.curve.section(
                     first.wall_station, second.wall_station, forward=True
@@ -240,13 +257,18 @@ def build_graph(
                 wall_kind, wall_points = _wall_geometry(
                     site, first, second, wall_edge_style
                 )
+                station_first = first.wall_station
+                station_second = second.wall_station
+            # The section lies inside one named chain because every chain
+            # break is a gate; the chain is read at the section's midpoint.
+            chain = site.section_chain(station_first, station_second)
             graph.add_edge(
                 gate_first,
                 gate_second,
                 path=wall_path,
                 kind=wall_kind,
                 points=wall_points,
-                boundary=site.name,
+                boundary=chain.name,
                 role="wall",
                 provenance="supplied point list",
             )

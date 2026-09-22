@@ -636,10 +636,128 @@ def from_internal_case(case, *, name: str | None = None) -> PlanarDomain:
     return from_chains(name or case.name, chains, periodic=periodic)
 
 
+# Anticlockwise from the lower-left corner: bottom, right, top, left.  The
+# names and roles suit a free stream along +x; the CLI can rename any side.
+DEFAULT_RECTANGLE_SIDES = (
+    ("bottom", "farfield"),
+    ("outlet", "outlet"),
+    ("top", "farfield"),
+    ("inlet", "inlet"),
+)
+
+
+@dataclass(frozen=True)
+class FarfieldSpec:
+    """How to fabricate the outer boundary when the caller supplies none.
+
+    ``circle`` gives one chain called ``name``.  ``rectangle`` gives four
+    chains named and given roles by ``sides`` (anticlockwise from the
+    lower-left corner: bottom, right, top, left), so an outer boundary with an
+    inlet, an outlet and two far-field sides is the default rectangle.
+    ``scale`` multiplies the radius of the body frame; ``box`` gives absolute
+    rectangle bounds ``(xmin, ymin, xmax, ymax)`` instead.
+    """
+
+    shape: str = "circle"
+    scale: float = 3.0
+    name: str = "farfield"
+    sides: tuple = DEFAULT_RECTANGLE_SIDES
+    box: tuple | None = None
+
+    def __post_init__(self) -> None:
+        if self.shape not in ("circle", "rectangle"):
+            raise DomainError(f"unknown farfield shape {self.shape!r}")
+        if not math.isfinite(self.scale) or self.scale <= 1.0:
+            raise DomainError("the farfield scale must be finite and larger than 1")
+        if not str(self.name).strip():
+            raise DomainError("the farfield chain needs a name")
+        sides = tuple((str(name), str(role)) for name, role in self.sides)
+        if len(sides) != 4:
+            raise DomainError("a rectangle farfield names exactly four sides")
+        if len({name for name, _role in sides}) != 4:
+            raise DomainError("the four farfield sides need distinct names")
+        for _name, role in sides:
+            if role not in ROLES:
+                raise DomainError(f"farfield side role {role!r} is not one of {ROLES}")
+        object.__setattr__(self, "sides", sides)
+        if self.box is not None:
+            box = tuple(float(value) for value in self.box)
+            if len(box) != 4 or not all(math.isfinite(value) for value in box):
+                raise DomainError("a farfield box is four finite numbers")
+            if box[2] <= box[0] or box[3] <= box[1]:
+                raise DomainError("a farfield box needs xmax > xmin and ymax > ymin")
+            object.__setattr__(self, "box", box)
+
+
+def circle_chain(name: str, center, radius: float, *, count: int = 720) -> Chain:
+    """One anticlockwise ``farfield`` chain sampling a circle, closed exactly."""
+    angles = np.linspace(0.0, 2.0 * math.pi, count + 1)
+    points = np.asarray(center, dtype=np.float64)[None, :] + float(radius) * np.column_stack(
+        (np.cos(angles), np.sin(angles))
+    )
+    points[-1] = points[0]
+    return Chain(name, "farfield", points)
+
+
+def rectangle_chains(box, sides=DEFAULT_RECTANGLE_SIDES) -> list[Chain]:
+    """Four straight chains, anticlockwise from the lower-left corner."""
+    xmin, ymin, xmax, ymax = (float(value) for value in box)
+    corners = [(xmin, ymin), (xmax, ymin), (xmax, ymax), (xmin, ymax)]
+    chains = []
+    for index, (name, role) in enumerate(sides):
+        first = corners[index]
+        second = corners[(index + 1) % 4]
+        chains.append(Chain(name, role, np.asarray([first, second])))
+    return chains
+
+
+def fabricate_outer(loops, spec: FarfieldSpec | None = None):
+    """Chains of a fabricated outer boundary around the body loops.
+
+    Returns ``(chains, circle)`` where ``circle`` is ``(center, radius)`` for a
+    circular far field - so the site stage can keep exact arcs - and ``None``
+    otherwise.  The frame is the arc-length weighted body frame, so the result
+    follows translation, rotation and uniform scaling of the bodies.
+    """
+    import sites as site_module
+
+    settings = spec or FarfieldSpec()
+    center, radius = site_module.domain_frame(loops)
+    outer_radius = radius * float(settings.scale)
+    if settings.shape == "circle":
+        return [circle_chain(settings.name, center, outer_radius)], (center, outer_radius)
+    box = settings.box
+    if box is None:
+        box = (
+            center[0] - outer_radius,
+            center[1] - outer_radius,
+            center[0] + outer_radius,
+            center[1] + outer_radius,
+        )
+    return rectangle_chains(box, settings.sides), None
+
+
+def outer_chains(outer) -> list[Chain]:
+    """Accept ``Chain`` objects or ``(name, role, points[, neighbour])`` tuples."""
+    chains: list[Chain] = []
+    for item in outer:
+        if isinstance(item, Chain):
+            chains.append(item)
+            continue
+        name, role, points, *rest = item
+        neighbour = rest[0] if rest else None
+        chains.append(Chain(str(name), str(role), np.asarray(points, dtype=np.float64), neighbour))
+    if not chains:
+        raise DomainError("an explicit outer boundary needs at least one chain")
+    return chains
+
+
 def from_bodies(
     names,
     loops,
     *,
+    outer=None,
+    farfield: FarfieldSpec | None = None,
     farfield_shape: str = "circle",
     farfield_scale: float = 3.0,
     farfield_name: str = "farfield",
@@ -648,8 +766,11 @@ def from_bodies(
     """Adapt the external-flow ``--curve NAME=PATH`` input to a planar domain.
 
     Bodies become hole loops in a canonical geometric order, so a permuted
-    input yields the same domain.  The trial outer boundary is generated here
-    and is the only fabricated geometry; an internal domain never gets one.
+    input yields the same domain.  The outer boundary is either supplied as
+    ``outer`` - chains in anticlockwise order, joined end to end, each with
+    its own name and role - or fabricated from ``farfield`` (or the older
+    shape/scale/name keywords).  An internal domain never gets a fabricated
+    boundary.
     """
     import sites as site_module
 
@@ -662,25 +783,9 @@ def from_bodies(
         if g2.signed_area(closed) > 0.0:
             closed = closed[::-1].copy()
         holes.append([Chain(names[index], "wall", closed)])
-    outer_radius = radius * float(farfield_scale)
-    if farfield_shape == "circle":
-        angles = np.linspace(0.0, 2.0 * math.pi, 721)
-        points = center[None, :] + outer_radius * np.column_stack(
-            (np.cos(angles), np.sin(angles))
-        )
-        points[-1] = points[0]
-    elif farfield_shape == "rectangle":
-        half = outer_radius
-        points = np.asarray(
-            [
-                [center[0] - half, center[1] - half],
-                [center[0] + half, center[1] - half],
-                [center[0] + half, center[1] + half],
-                [center[0] - half, center[1] + half],
-                [center[0] - half, center[1] - half],
-            ]
-        )
+    if outer is None:
+        spec = farfield or FarfieldSpec(farfield_shape, farfield_scale, farfield_name)
+        chains, _circle = fabricate_outer(loops, spec)
     else:
-        raise DomainError(f"unknown farfield shape {farfield_shape!r}")
-    outer = [Chain(farfield_name, "farfield", points)]
-    return from_chains(name, outer, holes)
+        chains = outer_chains(outer)
+    return from_chains(name, chains, holes)

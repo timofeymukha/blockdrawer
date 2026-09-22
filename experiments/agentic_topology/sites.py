@@ -226,12 +226,33 @@ class CircleCurve(BoundaryCurve):
 
 
 @dataclass(frozen=True)
+class SiteChain:
+    """One named domain chain as an arc-length interval of a site's curve.
+
+    ``start`` is measured in the curve's own anticlockwise parameterisation;
+    the interval wraps around the loop's seam where necessary.
+    """
+
+    name: str
+    role: str
+    start: float
+    length: float
+
+
+@dataclass(frozen=True)
 class Site:
-    """One Voronoi site: a name, a boundary curve and its role."""
+    """One Voronoi site: a name, a closed boundary curve and its chains.
+
+    A site owns one closed loop of the domain.  The loop may consist of
+    several named chains with different roles - a rectangular far field has an
+    inlet, an outlet and two far-field sides - and every block edge written on
+    the loop must lie inside one of them, so the chain breaks become gates.
+    """
 
     index: int
     name: str
     curve: BoundaryCurve
+    chains: tuple[SiteChain, ...] = ()
 
     @property
     def kind(self) -> str:
@@ -240,6 +261,42 @@ class Site:
     @property
     def is_wall(self) -> bool:
         return self.curve.kind == "wall"
+
+    @property
+    def roles(self) -> set[str]:
+        return {chain.role for chain in self.chains} if self.chains else {self.kind}
+
+    @property
+    def chain_breaks(self) -> tuple[float, ...]:
+        """Stations where one chain ends and the next begins; none for one chain."""
+        if len(self.chains) < 2:
+            return ()
+        return tuple(chain.start for chain in self.chains)
+
+    def chain_at(self, station: float) -> SiteChain:
+        """The chain whose interval contains ``station``."""
+        total = self.curve.length()
+        if not self.chains:
+            return SiteChain(self.name, self.kind, 0.0, total)
+        value = float(station) % total
+        best = None
+        for chain in self.chains:
+            offset = (value - chain.start) % total
+            if offset <= chain.length + 1e-9 * total and (
+                best is None or offset < best[0]
+            ):
+                best = (offset, chain)
+        if best is None:  # pragma: no cover - the chains tile the loop
+            return min(self.chains, key=lambda item: (value - item.start) % total)
+        return best[1]
+
+    def section_chain(self, first: float, second: float) -> SiteChain:
+        """The chain holding the forward section from ``first`` to ``second``."""
+        total = self.curve.length()
+        span = (float(second) - float(first)) % total
+        if span <= 0.0:
+            span = total
+        return self.chain_at(float(first) + 0.5 * span)
 
 
 def domain_frame(loops) -> tuple[np.ndarray, float]:
@@ -299,6 +356,86 @@ def canonical_order(loops, center, radius) -> list[int]:
     return [index for *_key, index in sorted(keys)]
 
 
+def _site_chains(curve: BoundaryCurve, loop) -> tuple[SiteChain, ...]:
+    """Map a domain loop's chains onto the site curve's own parameterisation.
+
+    The curve may run the other way round than the loop (holes are stored
+    with the fluid on their left, the curve is anticlockwise), so every chain
+    is located by its midpoint and extended half its length to either side.
+    """
+    chains = tuple(loop.chains)
+    total = curve.length()
+    if len(chains) == 1:
+        return (SiteChain(chains[0].name, chains[0].role, 0.0, total),)
+    result = []
+    for chain in chains:
+        middle = chain.point_at(0.5 * chain.length)
+        station = float(curve.closest(np.asarray([middle])).arclength[0])
+        result.append(
+            SiteChain(
+                chain.name,
+                chain.role,
+                (station - 0.5 * chain.length) % total,
+                float(chain.length),
+            )
+        )
+    return tuple(result)
+
+
+def sites_from_domain(domain, *, circle=None, frame=None) -> tuple[list[Site], float]:
+    """Sites for every hole loop and the outer loop of an explicit domain.
+
+    Holes keep the canonical geometric order of :func:`canonical_order`, so
+    site indices - and with them every vertex key downstream - do not depend
+    on the order the bodies were supplied in.  The outer loop is the last
+    site.  ``circle`` is ``(center, radius)`` when the outer loop samples an
+    exact circle, which is then kept analytic so its edges export as arcs.
+
+    ``frame`` is the body frame ``(center, radius)`` the caller already
+    measured; the returned scale is its diameter.  The pipeline measures it on
+    the supplied point lists exactly as it always has - including their
+    open closing segment - so that no established result moves; without a
+    frame the closed hole loops are measured, which is the geometrically
+    exact reading and differs for bodies whose closing segment is long.
+    """
+    hole_loops = [loop.points() for loop in domain.holes]
+    if not hole_loops:
+        raise ValueError("the external producer needs at least one body")
+    center, radius = frame if frame is not None else domain_frame(hole_loops)
+    scale = 2.0 * radius
+    order = canonical_order(hole_loops, center, radius)
+    sites: list[Site] = []
+    for index, source in enumerate(order):
+        loop = domain.holes[source]
+        roles = {chain.role for chain in loop.chains}
+        if roles != {"wall"}:
+            raise ValueError(
+                "hole loop "
+                + "/".join(chain.name for chain in loop.chains)
+                + f" carries roles {sorted(roles)}; the external producer bands "
+                "whole wall loops only"
+            )
+        name = (
+            loop.chains[0].name
+            if len(loop.chains) == 1
+            else "+".join(chain.name for chain in loop.chains)
+        )
+        curve = PolygonCurve(name, loop.points(), kind="wall")
+        sites.append(Site(index, name, curve, _site_chains(curve, loop)))
+    outer = domain.outer
+    name = (
+        outer.chains[0].name
+        if len(outer.chains) == 1
+        else "+".join(chain.name for chain in outer.chains)
+    )
+    if circle is not None and len(outer.chains) == 1:
+        curve: BoundaryCurve = CircleCurve(name, circle[0], circle[1])
+    else:
+        curve = PolygonCurve(name, outer.points(), kind="farfield")
+    sites.append(Site(len(sites), name, curve, _site_chains(curve, outer)))
+    return sites, scale
+
+
 def build_sites(
     names,
     loops,
@@ -307,30 +444,13 @@ def build_sites(
     farfield_scale: float = 3.0,
     farfield_name: str = "farfield",
 ) -> tuple[list[Site], float]:
-    """Return the canonically ordered site list and the domain scale."""
-    center, radius = domain_frame(loops)
-    scale = 2.0 * radius
-    order = canonical_order(loops, center, radius)
-    sites: list[Site] = []
-    for index, source in enumerate(order):
-        name = names[source]
-        sites.append(Site(index, name, PolygonCurve(name, loops[source], kind="wall")))
-    outer_radius = radius * float(farfield_scale)
-    if farfield_shape == "circle":
-        curve: BoundaryCurve = CircleCurve(farfield_name, center, outer_radius)
-    elif farfield_shape == "rectangle":
-        half = outer_radius
-        corners = [
-            (center[0] - half, center[1] - half),
-            (center[0] + half, center[1] - half),
-            (center[0] + half, center[1] + half),
-            (center[0] - half, center[1] + half),
-        ]
-        curve = PolygonCurve(farfield_name, corners, kind="farfield")
-    else:
-        raise ValueError(f"unknown farfield shape {farfield_shape!r}")
-    sites.append(Site(len(sites), farfield_name, curve))
-    return sites, scale
+    """Canonically ordered sites with a fabricated far field (compatibility)."""
+    import planar_domain as pdm
+
+    spec = pdm.FarfieldSpec(farfield_shape, farfield_scale, farfield_name)
+    chains, circle = pdm.fabricate_outer(loops, spec)
+    domain = pdm.from_bodies(names, loops, outer=chains)
+    return sites_from_domain(domain, circle=circle, frame=domain_frame(loops))
 
 
 def closest_all(sites, queries) -> tuple[np.ndarray, np.ndarray]:

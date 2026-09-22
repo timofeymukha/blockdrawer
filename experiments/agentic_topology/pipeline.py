@@ -43,9 +43,16 @@ import voronoi_graph
 @dataclass(frozen=True)
 class PipelineOptions:
     grid_width: int = 700
+    # The fabricated outer boundary, used when ``run_external`` gets no
+    # explicit ``outer``: a circle (one chain) or a rectangle whose four sides
+    # carry their own names and roles, anticlockwise from the lower-left
+    # corner (bottom, right, top, left); ``farfield_box`` places the rectangle
+    # absolutely instead of scaling the body frame.
     farfield_scale: float = 3.0
     farfield_shape: str = "circle"
     farfield_name: str = "farfield"
+    farfield_sides: tuple = pdm.DEFAULT_RECTANGLE_SIDES
+    farfield_box: tuple | None = None
     wall_edge_style: str = "polyLine"
     coverage_samples: int = 400
     reference_curves: bool = True
@@ -251,24 +258,38 @@ def _describe(error: BaseException) -> str:
 # ---------------------------------------------------------------------------
 
 
-def run_external(names, loops, options: PipelineOptions | None = None):
+def farfield_spec(settings: PipelineOptions) -> pdm.FarfieldSpec:
+    return pdm.FarfieldSpec(
+        settings.farfield_shape,
+        settings.farfield_scale,
+        settings.farfield_name,
+        settings.farfield_sides,
+        settings.farfield_box,
+    )
+
+
+def run_external(names, loops, options: PipelineOptions | None = None, *, outer=None):
+    """Bodies as closed point lists; the outer boundary supplied or fabricated.
+
+    ``outer`` is a sequence of chains - ``planar_domain.Chain`` objects or
+    ``(name, role, points)`` tuples - in anticlockwise order, joined end to
+    end.  Without it the options' far field is fabricated around the bodies.
+    Either way every chain becomes its own patch, and the chain breaks and
+    corners of the outer loop become block vertices.
+    """
     settings = options or PipelineOptions()
     result = PipelineResult(settings, "external")
     try:
-        result.domain = pdm.from_bodies(
-            names,
-            loops,
-            farfield_shape=settings.farfield_shape,
-            farfield_scale=settings.farfield_scale,
-            farfield_name=settings.farfield_name,
-        )
+        circle = None
+        if outer is None:
+            outer, circle = pdm.fabricate_outer(loops, farfield_spec(settings))
+        result.domain = pdm.from_bodies(names, loops, outer=outer)
         result.problems.extend(result.domain.problems())
-        result.sites, result.scale = site_module.build_sites(
-            names,
-            loops,
-            farfield_shape=settings.farfield_shape,
-            farfield_scale=settings.farfield_scale,
-            farfield_name=settings.farfield_name,
+        # The body frame is measured on the supplied point lists, as the
+        # fabricated far field is, so the scale every tolerance follows does
+        # not depend on how the domain closes the loops.
+        result.sites, result.scale = site_module.sites_from_domain(
+            result.domain, circle=circle, frame=site_module.domain_frame(loops)
         )
     except Exception as error:
         result.errors.append({"stage": "domain", "error": _describe(error)})
@@ -818,6 +839,12 @@ LIMITATIONS = [
     "untouched because it lies on the cavity boundary.",
     "The default medial core is one annulus per body: a cell whose ring has "
     "several disjoint components is reported, not decomposed.",
+    "The outer boundary is one site: its chains become patches and its "
+    "corners and chain breaks become gates, but a wall chain on the outer "
+    "boundary gets no boundary-layer band from the external producer.",
+    "The requested band height and the size metric are fractions of the "
+    "domain scale, which grows with the outer boundary's extent; a far-away "
+    "outer boundary needs an explicit --layer-height-ratio.",
     "A band block's first cell follows the local band thickness, so the "
     "first-cell width varies inside a block wherever the clearance does.",
     "Core spokes and sweep ribs are straight; no interior guide curve is "

@@ -49,7 +49,14 @@ import sizing  # noqa: E402
 import spanned  # noqa: E402
 import synthetic_cases as cases  # noqa: E402
 import planar_domain as pdm  # noqa: E402
-from pointlist import parse_curve_argument, read_point_list  # noqa: E402
+from pointlist import (  # noqa: E402
+    parse_box,
+    parse_curve_argument,
+    parse_outer_argument,
+    parse_sides,
+    read_open_point_list,
+    read_point_list,
+)
 
 
 def add_input_arguments(parser: argparse.ArgumentParser) -> None:
@@ -71,7 +78,39 @@ def add_input_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--farfield-shape", choices=("circle", "rectangle"), default="circle"
     )
-    parser.add_argument("--farfield-name", default="farfield")
+    parser.add_argument(
+        "--farfield-name", default="farfield", help="patch name of a circular far field"
+    )
+    parser.add_argument(
+        "--farfield-sides",
+        type=parse_sides,
+        default=pdm.DEFAULT_RECTANGLE_SIDES,
+        metavar="B:ROLE,R:ROLE,T:ROLE,L:ROLE",
+        help=(
+            "names and roles of a rectangular far field's sides, anticlockwise "
+            "from the lower-left corner: bottom, right, top, left "
+            "(default bottom:farfield,outlet:outlet,top:farfield,inlet:inlet)"
+        ),
+    )
+    parser.add_argument(
+        "--farfield-box",
+        type=parse_box,
+        default=None,
+        metavar="XMIN,YMIN,XMAX,YMAX",
+        help="absolute bounds of a rectangular far field instead of --farfield-scale",
+    )
+    parser.add_argument(
+        "--outer",
+        action="append",
+        default=[],
+        type=parse_outer_argument,
+        metavar="NAME:ROLE=PATH",
+        help=(
+            "one chain of an explicit outer boundary as an open point list; "
+            "repeat in anticlockwise order with consecutive chains joined end "
+            "to end; replaces the fabricated far field"
+        ),
+    )
     parser.add_argument(
         "--span-gaps", action="store_true",
         help="try one core strip across narrow body-body gaps (experimental; rejected trials roll back)",
@@ -193,6 +232,8 @@ def build_options(arguments) -> pipeline.PipelineOptions:
         farfield_scale=arguments.farfield_scale,
         farfield_shape=arguments.farfield_shape,
         farfield_name=arguments.farfield_name,
+        farfield_sides=tuple(arguments.farfield_sides),
+        farfield_box=arguments.farfield_box,
         wall_edge_style=arguments.wall_edge_type,
         coverage_samples=arguments.coverage_samples,
         reference_curves=not arguments.no_reference_curves,
@@ -221,8 +262,20 @@ def build_options(arguments) -> pipeline.PipelineOptions:
     )
 
 
+def read_outer(arguments):
+    """The explicit outer boundary chains, or ``None`` for a fabricated one."""
+    outer = getattr(arguments, "outer", [])
+    if not outer:
+        return None
+    chains = []
+    for name, role, path in outer:
+        chains.append((name, role, read_open_point_list(path)))
+    return chains
+
+
 def run_case(arguments) -> pipeline.PipelineResult:
     options = build_options(arguments)
+    outer = read_outer(arguments)
     if arguments.case and arguments.case in cases.INTERNAL_CASES:
         domain = pdm.from_internal_case(cases.INTERNAL_CASES[arguments.case]())
         return pipeline.run_internal(domain, options)
@@ -230,16 +283,25 @@ def run_case(arguments) -> pipeline.PipelineResult:
         if arguments.case not in cases.CASES:
             raise SystemExit(f"unknown case {arguments.case!r}")
         names, loops = cases.CASES[arguments.case]()
-        return pipeline.run_external(names, loops, options)
+        return pipeline.run_external(names, loops, options, outer=outer)
     if not arguments.curve:
         raise SystemExit("supply --case NAME or at least one --curve NAME=PATH")
     names = [name for name, _path in arguments.curve]
     if len(set(names)) != len(names):
         raise SystemExit("curve names must be unique")
-    if arguments.farfield_name in names:
-        raise SystemExit("the farfield name must differ from every curve name")
+    boundary_names = (
+        [name for name, _role, _points in outer]
+        if outer is not None
+        else (
+            [arguments.farfield_name]
+            if arguments.farfield_shape == "circle"
+            else [name for name, _role in arguments.farfield_sides]
+        )
+    )
+    if set(boundary_names) & set(names):
+        raise SystemExit("outer boundary names must differ from every curve name")
     loops = [read_point_list(path) for _name, path in arguments.curve]
-    return pipeline.run_external(names, loops, options)
+    return pipeline.run_external(names, loops, options, outer=outer)
 
 
 def write_artifacts(result, arguments) -> list[Path]:

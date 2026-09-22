@@ -456,6 +456,43 @@ CASES = {
 
 
 # ---------------------------------------------------------------------------
+# Explicit outer boundaries
+# ---------------------------------------------------------------------------
+
+
+def c_shaped_outer(
+    center=(0.0, 0.0),
+    radius: float = 3.0,
+    downstream: float = 5.0,
+    *,
+    count: int = 180,
+    names=("cap", "bottom", "outlet", "top"),
+    roles=("farfield", "farfield", "outlet", "farfield"),
+):
+    """A C-grid style outer boundary: an upstream semicircle, two straight legs
+    and a downstream outlet, as ``(name, role, points)`` chains anticlockwise.
+
+    The cap meets the legs tangentially, so the chain breaks there are not
+    corners: they exercise the rule that a chain break is a gate whatever the
+    geometry does.  The outlet corners are ordinary 90-degree corners.
+    """
+    cx, cy = (float(center[0]), float(center[1]))
+    angles = np.linspace(0.5 * math.pi, 1.5 * math.pi, count + 1)
+    cap = np.column_stack((cx + radius * np.cos(angles), cy + radius * np.sin(angles)))
+    cap[0] = (cx, cy + radius)
+    cap[-1] = (cx, cy - radius)
+    bottom = np.asarray([(cx, cy - radius), (cx + downstream, cy - radius)])
+    outlet = np.asarray([(cx + downstream, cy - radius), (cx + downstream, cy + radius)])
+    top = np.asarray([(cx + downstream, cy + radius), (cx, cy + radius)])
+    return [
+        (names[0], roles[0], cap),
+        (names[1], roles[1], bottom),
+        (names[2], roles[2], outlet),
+        (names[3], roles[3], top),
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Equivalence transforms
 # ---------------------------------------------------------------------------
 

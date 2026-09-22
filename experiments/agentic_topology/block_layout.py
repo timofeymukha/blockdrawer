@@ -84,6 +84,13 @@ class Anchor:
     junction: int | None = None
     hint: tuple[int, float] | None = None
     serial: int = -1
+    # A second ``(site, wall station)`` pin for the cell on the other side of
+    # the branch: a wake anchor pins the trailing edge on the body and the
+    # wake's exit point on the outer boundary.
+    extra_hint: tuple[int, float] | None = None
+    # A fixed anchor is a scaffold element (a wake's ring crossing), not a
+    # design variable of the relaxation.
+    fixed: bool = False
 
     @property
     def key(self) -> tuple:
@@ -94,7 +101,13 @@ class Anchor:
 
     @property
     def movable(self) -> bool:
-        return self.junction is None
+        return self.junction is None and not self.fixed
+
+    def hint_for(self, site: int) -> float | None:
+        for candidate in (self.hint, self.extra_hint):
+            if candidate is not None and candidate[0] == site:
+                return float(candidate[1])
+        return None
 
 
 @dataclass
@@ -387,8 +400,11 @@ def reflex_anchors(diagram: Diagram, cells: list[Cell]) -> list[Anchor]:
     anchors: list[Anchor] = []
     for cell in cells:
         site = diagram.sites[cell.site]
-        if site.curve.kind != "wall":
-            continue
+        # The outer boundary is judged with its own fluid sign: a convex
+        # corner of a rectangular far field gives the fluid 90 degrees, and
+        # the distance level set has a mitre there just as at a wall's
+        # reflex corner, so the corner is a gate with its spoke on the
+        # bisector.  A sampled circle turns far too little to qualify.
         loop = site.curve.loop()
         fluid = math.pi + site.curve.fluid_sign * g2.turning_angles(loop, closed=True)
         stations = g2.cumulative_length(loop)[:-1]
@@ -396,6 +412,24 @@ def reflex_anchors(diagram: Diagram, cells: list[Cell]) -> list[Anchor]:
             anchor = anchor_from_wall(
                 diagram, cell, float(stations[index]), "reflex"
             )
+            if anchor is not None:
+                anchors.append(anchor)
+    return anchors
+
+
+def chain_anchors(diagram: Diagram, cells: list[Cell]) -> list[Anchor]:
+    """Mandatory anchors where one named boundary chain meets the next.
+
+    A block edge carries exactly one patch name, so a loop made of several
+    chains - a far field with an inlet, an outlet and two sides, or a C-shaped
+    boundary whose cap meets its legs tangentially - needs a gate at every
+    chain break whether or not the boundary turns there.
+    """
+    anchors: list[Anchor] = []
+    for cell in cells:
+        site = diagram.sites[cell.site]
+        for station in site.chain_breaks:
+            anchor = anchor_from_wall(diagram, cell, float(station), "chain")
             if anchor is not None:
                 anchors.append(anchor)
     return anchors
@@ -465,8 +499,9 @@ class AnchorSet:
         projected = site.curve.closest(np.asarray([point]))
         clearance = float(projected.distance[0])
         raw = float(projected.arclength[0])
-        if anchor.hint is not None and anchor.hint[0] == cell.site:
-            wall_station = anchor.hint[1] % site.curve.length()
+        hinted = anchor.hint_for(cell.site)
+        if hinted is not None:
+            wall_station = hinted % site.curve.length()
             return (
                 station,
                 wall_station,
@@ -642,7 +677,15 @@ def relax_gates(site: Site, cuts: list[Cut], balance: float) -> None:
         cuts[index].wall_point = site.curve.point_at(cuts[index].wall_station)
 
 
-_PIN_PRIORITY = {"reflex": 5, "corner": 4, "curvature": 3, "turning": 2, "seed": 1}
+_PIN_PRIORITY = {
+    "wake": 7,
+    "chain": 6,
+    "reflex": 5,
+    "corner": 4,
+    "curvature": 3,
+    "turning": 2,
+    "seed": 1,
+}
 
 
 def _pin_priority(cut: Cut) -> int:
@@ -843,6 +886,10 @@ def build_layout(diagram: Diagram, options: LayoutOptions | None = None) -> Layo
     )
     notes: list[str] = []
     for anchor in junction_anchors(diagram):
+        anchors.add(anchor, force=True)
+    # A named boundary chain ends here and another begins: a block edge has
+    # one patch name, so this is a gate whatever the geometry does.
+    for anchor in chain_anchors(diagram, cells):
         anchors.add(anchor, force=True)
     # A reflex corner is where the level set of the wall distance has its
     # mitre; the band spoke has to run along its bisector, so it is always a

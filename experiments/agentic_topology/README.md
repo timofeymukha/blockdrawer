@@ -52,8 +52,26 @@ result can be read either way; the session is written whenever the result is
    reciprocal cyclic pairs and the geometric compatibility of paired chains.
    Normalisation makes translation, rotation, uniform scaling and reversal of the
    whole boundary representation produce the same structure. Two adapters feed
-   it: the repeated `--curve NAME=PATH` external input (which is the only place a
-   far field is fabricated) and an internal-flow case.
+   it: the repeated `--curve NAME=PATH` external input and an internal-flow
+   case.
+
+   **The outer boundary is explicit.** An external case either supplies it -
+   `--outer NAME:ROLE=PATH`, repeated in anticlockwise order with consecutive
+   chains joined end to end, so a C-shaped boundary is an upstream cap, two
+   legs and an outlet - or has it fabricated from `--farfield-shape`: a circle
+   (one chain, `--farfield-name`) or a rectangle whose four sides carry their
+   own names and roles (`--farfield-sides`, default
+   `bottom:farfield,outlet:outlet,top:farfield,inlet:inlet`, anticlockwise from
+   the lower-left corner; `--farfield-box` places it absolutely instead of
+   `--farfield-scale`). Every chain becomes its own patch with its role's
+   patch type. The outer loop is one Voronoi site, and two rules make its
+   chains meshable: every **chain break** is a gate whether or not the boundary
+   turns there, and every **convex corner** of the outer loop is a reflex gate
+   whose spoke follows the mitre of the distance level set, the same rule a
+   wall's reflex corner obeys - the classical O-grid in a box, where two
+   blocks share each corner at 45 degrees. No block edge straddles two patch
+   names. A wall chain on the outer boundary is exported as a wall but gets no
+   band from this producer, which is reported.
 
 2. **Size metric** (`sizing.py`). One scalar field decides every count and every
    grading value: `size(d) = min(core_size, first_width + (growth - 1) * d)`,
@@ -365,7 +383,9 @@ hidden state.
 | `apply --move ID` | apply exactly one candidate and print a before/after comparison |
 | `focus --block bN` | a small diagnostic window and its blocks, optionally rendered |
 
-Re-quantisation is the same `run` with different metric flags -
+The outer boundary is chosen the same way: `--farfield-shape circle|rectangle`,
+`--farfield-scale`, `--farfield-sides`, `--farfield-box`, or an explicit
+`--outer NAME:ROLE=PATH` per chain. Re-quantisation is the same `run` with different metric flags -
 `--first-width-ratio`, `--core-size-ratio`, `--growth`, `--cell-budget` - and
 `--split CELL:CUT` forces an anchor where an agent asks for one. Because the
 run is stateless, that is also how `apply` realises a move.
@@ -404,6 +424,36 @@ which keeps the command line stateless. A refused alternative carries the exact
 reason, including the two conflicting entity ids for a crossing.
 
 ## Results
+
+### Explicit outer boundary
+
+```bash
+python experiments/agentic_topology/research_cli.py run --case single_ellipse \
+  --farfield-shape rectangle --farfield-box=-4,-3,6,3 \
+  --farfield-sides floor:symmetry,out:outlet,roof:symmetry,in:inlet
+python experiments/agentic_topology/research_cli.py run --case single_ellipse \
+  --outer cap:farfield=cap.dat --outer bottom:farfield=bottom.dat \
+  --outer outlet:outlet=outlet.dat --outer top:farfield=top.dat
+```
+
+| case | outer boundary | blocks | outcome |
+| ---- | -------------- | ------ | ------- |
+| `single_ellipse` | circle (default) | 12 | admissible; shape misses unchanged |
+| `single_ellipse` | rectangle, inlet/outlet/top/bottom | 21 | resolved; two 45-degree blocks per corner, four named patches |
+| `single_ellipse` | C-shape: cap, two legs, outlet (`synthetic_cases.c_shaped_outer`) | 24 | admissible and within shape targets; far-field fan-out ratio 31 > 20 |
+| `two_circles` | rectangle | 20 | resolved |
+| every default fixture | circle | unchanged | unchanged block counts and verdicts |
+
+The single-body rectangle used to be inadmissible for a reason unrelated to
+the far field: the relaxation's anchor bounds on a *closed* medial branch
+start after the seam and were never wrapped, so anchor positions crept past
+the branch length and several ring stations sampled the same loop end point.
+Positions on a closed branch now wrap; no default result moved.
+
+The tangent-continuous cap/leg joins of the C-shaped boundary are gates
+because they are chain breaks, and the two outlet corners are reflex gates of
+the outer loop. Its remaining miss is the far-field fan-out length ratio,
+which is the open threshold question below, not a defect of the boundary.
 
 ### Gap spanning checkpoint (opt-in)
 
@@ -742,6 +792,18 @@ installations whose LAPACK/BLAS build is broken.
   intervals beside the feature it repairs. The supplied wall point list is
   untouched, because it lies on the cavity boundary and cavity-boundary edges are
   reused exactly.
+* **The outer boundary is one site.** Its chains become patches and its
+  corners and chain breaks become gates, but a wall chain on the outer
+  boundary gets no boundary-layer band from the external producer: the bands
+  are built for whole hole loops. A cylinder in a channel therefore has walls
+  without bands on the channel; the internal producer's guide-front bands are
+  the construction that fits, and joining the two producers is open.
+* **The band request and the size metric scale with the domain**, whose frame
+  includes the outer boundary. A far-away outer boundary - thirty chords for a
+  C-grid - inflates the requested band height until the clearance cap binds;
+  pass `--layer-height-ratio` explicitly for such cases. Referencing the band
+  to the walls' own scale would change every external result and is a
+  separate decision.
 * The default medial core is one annulus per body; a cell whose ring has several
   disjoint components is reported, not decomposed.
 * A band block's first cell follows the local band thickness, so the first-cell
