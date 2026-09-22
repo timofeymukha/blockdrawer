@@ -149,6 +149,32 @@ class ToolFunctionTests(unittest.TestCase):
         with self.assertRaisesRegex(ToolFailure, "No commands"):
             edit_session(str(self.session), commands_file=str(empty))
 
+    def test_quality_report_summary_and_worst(self) -> None:
+        edit_session(str(self.session), ["add_block v1-v2", "add_block v2-v5"], in_place=True)
+        full = quality_report(str(self.session))
+        self.assertEqual(len(full["blocks"]), 3)
+        brief = quality_report(str(self.session), summary_only=True)
+        self.assertNotIn("blocks", brief)
+        self.assertNotIn("interfaces", brief)
+        self.assertEqual(brief["summary"], full["summary"])
+        self.assertIn("thresholds", brief)
+        worst = quality_report(str(self.session), worst=1)
+        self.assertEqual(len(worst["blocks"]), 1)
+        self.assertLessEqual(len(worst["interfaces"]), 1)
+        self.assertEqual(worst["summary"], full["summary"])
+        self.assertEqual(worst["listed"]["worst"], 1)
+        self.assertEqual(
+            worst["blocks"][0]["non_orthogonality"],
+            max(block["non_orthogonality"] for block in full["blocks"]),
+        )
+        text = quality_report(str(self.session), as_text=True, summary_only=True)["text"]
+        self.assertIn("Quality:", text)
+        self.assertNotIn("Blocks (", text)
+        text = quality_report(str(self.session), as_text=True, worst=2)["text"]
+        self.assertIn("the 2 worst of 3", text)
+        with self.assertRaisesRegex(ToolFailure, "non-negative"):
+            quality_report(str(self.session), worst=-1)
+
     def test_quality_report(self) -> None:
         edit_session(
             str(self.session), ["set_edge_grading v0-v1 total_ratio 20"], in_place=True,
@@ -187,6 +213,15 @@ class ToolFunctionTests(unittest.TestCase):
         _, info = render_session(str(self.session), output=str(output), width=200, height=200)
         self.assertEqual(info["output"], str(output))
         self.assertTrue(output.is_file())
+        # A deliverable picture can be written without coming back inline.
+        quiet = self.root / "quiet.svg"
+        (only,) = render_session(
+            str(self.session), output=str(quiet), width=200, height=200, return_image=False,
+        )
+        self.assertEqual(only["output"], str(quiet))
+        self.assertTrue(quiet.is_file())
+        with self.assertRaisesRegex(ToolFailure, "needs an output"):
+            render_session(str(self.session), return_image=False)
         with self.assertRaisesRegex(ToolFailure, "mutually exclusive"):
             render_session(str(self.session), zoom=["b0"], bounds=[0, 0, 1, 1])
         with self.assertRaisesRegex(ToolFailure, "four numbers"):

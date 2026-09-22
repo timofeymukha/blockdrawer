@@ -153,6 +153,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     quality.add_argument("session", type=Path)
     quality.add_argument("--json", action="store_true")
+    quality.add_argument(
+        "--summary-only", action="store_true",
+        help="headline numbers, warnings and thresholds without the tables",
+    )
+    quality.add_argument(
+        "--worst", type=int, metavar="N",
+        help="list only the N worst blocks and internal edges",
+    )
     quality.add_argument("--min-angle", type=float, help="warn below this corner angle")
     quality.add_argument("--max-angle", type=float, help="warn above this corner angle")
     quality.add_argument(
@@ -337,7 +345,13 @@ def _cmd_quality(args: argparse.Namespace) -> int:
         interface_size_ratio=args.interface_ratio,
     )
     report = assess_quality(model, thresholds)
-    _emit(report.to_data(), format_quality(report), args.json)
+    if args.worst is not None and args.worst < 0:
+        raise CliError("--worst takes a non-negative count")
+    _emit(
+        report.to_data(summary_only=args.summary_only, worst=args.worst),
+        format_quality(report, summary_only=args.summary_only, worst=args.worst),
+        args.json,
+    )
     return 0
 
 

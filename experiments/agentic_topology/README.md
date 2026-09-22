@@ -868,6 +868,20 @@ installations whose LAPACK/BLAS build is broken.
   intervals beside the feature it repairs. The supplied wall point list is
   untouched, because it lies on the cavity boundary and cavity-boundary edges are
   reused exactly.
+* **The engine's reach ends at about six chords of far field, and the wake
+  does not reach it.** Measured on the Aerospatiale A-airfoil (sharp trailing
+  edge, 1593 supplied points, C-shaped outer boundary): admissible at cap
+  radii 4 and 5, admissible with 8 singularities at 6, inadmissible at 8, 10
+  and 15. Two causes. `wake.make_room` demands `ring_separation` times the
+  ring's clearance between the wake band and the neighbouring anchor, a length
+  that grows with the far-field distance while the anchor spacing on the ring
+  does not, so at 15 chords it asks a corner anchor to slide 3.5 along a ring
+  that cannot hold it. Independently, the annular core patch beside the
+  trailing-edge seam is non-convex (a 177-degree corner) at every band height
+  from 0.006 to 0.12, and every cavity template is rejected on the quality
+  floor there. `--layer-height-ratio` also multiplies the domain scale, which
+  the report does not print. The A-airfoil mesh in `cases/a_airfoil` was
+  therefore hand-built; it is the next acceptance fixture.
 * **The wake separatrix is opt-in and straight.** One line per sharp feature,
   from the feature through the body's own ring to the outer boundary. A wake
   that would enter another body's cell - the slat and main trailing edges of

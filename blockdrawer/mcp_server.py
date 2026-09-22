@@ -202,14 +202,25 @@ def quality_report(
     cell_growth_ratio: float | None = None,
     interface_size_ratio: float | None = None,
     as_text: bool = False,
+    summary_only: bool = False,
+    worst: int | None = None,
 ) -> dict[str, Any]:
     """Report per-block and per-interface mesh quality heuristics.
 
-    Corner angles are measured from the first mesh cell, so curved edges and
-    grading count. Thresholds default to angle 30-150 degrees, non-orthogonality
+    Corner angles are measured at the block corners from the first mesh cell,
+    so curved edges and grading count there - but a block with curved spokes
+    hides its interior distortion from these numbers; check_mesh is the
+    authority. Thresholds default to angle 30-150 degrees, non-orthogonality
     65 degrees, cell aspect 100, cell growth 1.3, and interface size jump 2.5.
-    These are screening heuristics; check_mesh is the authority.
+    ``summary_only`` returns the headline numbers, warnings and thresholds
+    without the per-block and per-edge tables; ``worst=N`` lists only the N
+    worst blocks (by non-orthogonality) and internal edges (by size jump).
+    Per-block fields are ``non_orthogonality`` and ``equiangle_skewness``; the
+    summary carries their maxima as ``max_non_orthogonality`` and
+    ``max_equiangle_skewness``.
     """
+    if worst is not None and worst < 0:
+        raise ToolFailure("worst must be a non-negative count")
     model = load_session(path)
     thresholds = QualityThresholds.from_overrides(
         min_angle=min_angle,
@@ -221,8 +232,8 @@ def quality_report(
     )
     report = assess_quality(model, thresholds)
     if as_text:
-        return {"text": format_quality(report)}
-    return report.to_data()
+        return {"text": format_quality(report, summary_only=summary_only, worst=worst)}
+    return report.to_data(summary_only=summary_only, worst=worst)
 
 
 def render_session(
@@ -241,6 +252,7 @@ def render_session(
     show_nodes: bool = True,
     show_curves: bool = True,
     show_legend: bool = True,
+    return_image: bool = True,
 ) -> list:
     """Draw the topology and return the picture (PNG) plus its view bounds.
 
@@ -249,7 +261,8 @@ def render_session(
     (a-b), or vertices with a relative ``margin``; ``bounds`` gives an explicit
     [xmin, ymin, xmax, ymax] region; ``highlight`` emphasizes entities;
     ``preview`` adds interior mesh lines. When ``output`` ends in .svg or .png
-    the file is written as well.
+    the file is written as well. Pass ``return_image=false`` with ``output``
+    to write a deliverable picture without receiving it inline.
     """
     if width < 50 or height < 50:
         raise ToolFailure("width and height must be at least 50 pixels")
@@ -291,6 +304,10 @@ def render_session(
     if output:
         written = render_to_file(model, output, options)
         info["output"] = str(written)
+    if not return_image:
+        if written is None:
+            raise ToolFailure("return_image=false needs an output file to write")
+        return [info]
     if written is not None and written.suffix.lower() == ".png":
         png = written.read_bytes()
     else:

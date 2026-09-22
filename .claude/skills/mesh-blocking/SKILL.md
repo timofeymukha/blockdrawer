@@ -84,12 +84,28 @@ case you are in.
 ## 3. Build outward from the wall
 
 Layers, from the inside out: wall - **collar** (the boundary-layer band, a
-mitred normal offset of one to a few percent of the chord) - near-field marched
-offsets - an algebraic blend - the medial ring or a transition circle - the far
-field. The collar's front, not the wall, is the inner boundary of the core.
+mitred normal offset) - near-field marched offsets - an algebraic blend - the
+medial ring or a transition circle - the far field. The collar's front, not
+the wall, is the inner boundary of the core.
 
-**Use the topology engine first** where it applies (single bodies, several
-disjoint smooth bodies, simply connected internal domains):
+**Size the collar from the boundary layer, not from habit.** Where measured or
+computed profiles exist, the band height is 1.5 to 2 times the largest
+$\delta_{99}$ on the body, usually the suction side near the trailing edge; on
+the A-airfoil at 13 degrees that is 0.15 chords ($\delta_{99} = 0.094c$ at
+$x/c = 0.99$). "One to a few percent of the chord" is only the attached-flow
+default when no profile is available. If a profile is truncated before
+$U = 0.99\,U_e$, fit $\delta^*$, $\theta$ and the shape factor and extrapolate;
+say so.
+
+**Use the topology engine first** where it applies - single bodies, several
+disjoint smooth bodies, simply connected internal domains - **and know its
+measured reach**: on a sharp-edged airfoil it is admissible with a C-shaped
+outer boundary up to about 6 chords and inadmissible at 8, 10 and 15, and the
+wake is refused at every distance (the ring-clearance rule of its wake scales
+with the far-field distance while the anchor spacing does not). A 15-chord
+external-aerodynamics far field is therefore a hand build today; run the
+engine at a small far field anyway to read its acceptance report and its
+diagnosis of the trailing-edge cavity.
 
 ```bash
 python experiments/agentic_topology/research_cli.py run \
@@ -122,6 +138,15 @@ blockdrawer-cli apply case.json --in-place -f build_commands.jsonl
 Through the MCP the same batch is `edit_session` with
 `commands_file="build_commands.jsonl"` and `in_place=true`; inline
 `commands` are for a handful of corrections, not for a generated topology.
+
+Two rules decide a hand-built sharp trailing edge, and neither is visible
+until checkMesh fails. The collar spokes at the trailing-edge end of each side
+must carry the **cross-wake direction** (the direction of the cut through the
+edge), not the corner bisector, or the band blocks fold across the cut. And a
+normal offset of height $h$ from a side that meets the edge at half-wedge
+angle $\beta$ overshoots the cross-wake line by $h \sin\beta$, so the first
+station on each side must be held out from the edge by more than that, with a
+straight front edge, so every band block stays on its own side of the cut.
 
 The commands that carry a hand-built topology: `add_vertex`,
 `add_block_from_vertices`, `set_edge_type spline|polyLine|arc`,
@@ -157,29 +182,57 @@ $$
   far-field arc and whose short edge is a wall segment only means large
   far-field cells, which is normal.
 - **Spacing links** (`add_spacing_link driver follower`) keep cell widths
-  continuous across block interfaces and along the wake: wake rows start with
-  the widths of the band at the cross-wake line and spread downstream to a
-  common transverse spacing at the outlet.
+  continuous across block interfaces. Along the wake the rows start with the
+  band's widths at the cross-wake line; **do not let them spread to a uniform
+  transverse spacing at the outlet**. blockMesh blends the cross-line and the
+  outlet distributions in proportion to streamwise distance, so a uniform
+  outlet opens the first wake row by an order of magnitude within a few
+  chords and produces the worst faces of the mesh (74 degrees and skewness 1.8
+  on the A-airfoil). Grade the outlet's transverse edges so the spacing on the
+  wake centre line stays of the order of the first streamwise wake cell; that
+  alone brought the same mesh to 68 degrees and skewness 0.8.
+- **The wall-to-far-field station map** is the largest lever on near-wall
+  orthogonality in a hand-built O- or C-grid. Distribute the far-field
+  stations by the arc length of the **band front**, not of the wall (a wall
+  arc-length map put spokes 67 degrees off the normal on the A-airfoil, the
+  front map 52) and not by wall turning (which spreads far-field cell sizes by
+  two orders of magnitude).
 - Aspect ratio matters inside the band only; interface size jumps should stay
   below about 2.5 inside the near field.
 
 ## 5. Validate - the ladder
 
 1. `validate_session`: loads, topologically valid, exports.
-2. `quality_report`: corner angles 30 to 150 degrees, non-orthogonality at most
-   65 degrees, corner-cell aspect at most 100, growth at most 1.3, interface
-   size jump at most 2.5. These are measured from the first mesh cell and are a
-   screen, not a verdict.
-3. `render_session` zoomed on every trailing edge, corner, gap and bridge
-   (`zoom`, `margin`, `preview`, `highlight`). Look for folded or sliver
-   blocks and for spline overshoot.
-4. `check_mesh`: `blockMesh` then `checkMesh` must print `Mesh OK`. Read
+2. `quality_report` (`summary_only=true` for the headline lines, `worst=N` for
+   the N worst blocks and interfaces): corner angles 30 to 150 degrees,
+   non-orthogonality at most 65 degrees, corner-cell aspect at most 100,
+   growth at most 1.3, interface size jump at most 2.5. **These are measured
+   at the block corners from the first mesh cell.** A block with curved
+   spokes hides its interior distortion from them entirely: the A-airfoil
+   read 18 degrees here and 68 in checkMesh. Only `check_mesh`, or the
+   engine's sampled shape grid, sees the interior.
+3. For a hand-built layout, check it **before** it becomes a session: the
+   layout module should assert every block strictly convex from its true
+   corner points, no two edges crossing (ray tests on the sampled curves), and
+   the true corner angles at the wall within limits. Nothing in the production
+   tools does this for you.
+4. `render_session` zoomed on every trailing edge, corner, gap and bridge
+   (`zoom`, `margin`, `preview`, `highlight`; `return_image=false` with
+   `output` when the picture is a deliverable rather than something to look
+   at). Look for folded or sliver blocks and for spline overshoot.
+5. `check_mesh`: `blockMesh` then `checkMesh` must print `Mesh OK`. Read
    maximum non-orthogonality, skewness, aspect ratio and every negative-volume
-   or `***` line. This is the authority.
-5. The engine's report, when it built the topology: the shape grid (eight
+   or `***` line. This is the authority. **checkMesh's aspect ratio includes
+   the empty spanwise direction**, so for a pseudo-2D case the $z$ thickness
+   is a quality parameter, not a free choice: with a first cell of
+   $4.5\times10^{-6}c$ only $0.002 < \Delta z < 0.0045$ passed.
+6. The engine's report, when it built the topology: the shape grid (eight
    uniform cells per block side) gives count-independent non-orthogonality,
    skewness and wall misalignment; the structure report gives the length ratio
-   every component forces before any count exists.
+   every component forces before any count exists. These acceptance terms
+   (`admissible`, `untangled`, `within_shape_targets`, `resolved`) exist only
+   for engine output; a hand-built session is judged by `validate_session`,
+   the quality screen and `Mesh OK`.
 
 Failure signatures and their fixes:
 
@@ -217,5 +270,8 @@ vocabulary - valid, untangled, within shape targets, structurally feasible,
   the measured results and the open limits; `research_cli.py run|describe|
   cavities|candidates|apply|focus`.
 - Worked examples, when present: `cases/naca0012_cgrid` (sharp-edge C-grid with
-  a six-block wake) and `cases/30p30n` (three-element C-chain with bridges and
-  pockets, and the diagnosed spline-overshoot defect).
+  a six-block wake), `cases/a_airfoil` (C-grid with the wake deflected 13
+  degrees, band sized from measured profiles, `Mesh OK` at 15 chords, built
+  entirely by a layout module and a command batch) and `cases/30p30n`
+  (three-element C-chain with bridges and pockets, and the diagnosed
+  spline-overshoot defect).

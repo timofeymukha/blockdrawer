@@ -928,6 +928,10 @@ ACCEPTANCE_TERMS = {
 # Emitted into every JSON report.  Keep this in step with the "Remaining
 # limits" section of the research README; it is the same list, shorter.
 LIMITATIONS = [
+    "The engine is admissible up to about six chords of far field on a sharp-"
+    "edged airfoil and inadmissible beyond: the wake's ring-clearance rule "
+    "scales with the far-field distance while anchor spacing does not, and the "
+    "core patch beside a trailing-edge seam is non-convex at every band height.",
     "The wake separatrix is opt-in (--wake). It is one straight scaffold line "
     "from a sharp feature through the body's own ring to the outer boundary; "
     "a wake that would enter another body's cell, cross another medial branch, "

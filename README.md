@@ -516,9 +516,12 @@ when it is started in this directory, including the `BLOCKMESH_COMMAND` for the
 supplied OpenFOAM container; edit that entry for another installation. The
 tools are `describe_session`, `list_commands`, `edit_session` (atomic command
 batches, inline or from a `commands_file` in the same format as
-`blockdrawer-cli apply -f`), `quality_report`, `render_session` (returns the
-picture inline), `validate_session`, `export_block_mesh_dict`, `check_mesh`,
-and `new_session`. Every tool takes the session path, so agents and the GUI
+`blockdrawer-cli apply -f`), `quality_report` (`summary_only` for the headline
+lines, `worst=N` for the worst blocks and interfaces), `render_session`
+(returns the picture inline unless `return_image=false` writes it only),
+`validate_session`, `export_block_mesh_dict`, `check_mesh`, and `new_session`.
+A running server keeps the tool schemas it started with; restart it after
+upgrading BlockDrawer. Every tool takes the session path, so agents and the GUI
 can share one file: save in the editor, let the agent edit and check, then
 reopen.
 

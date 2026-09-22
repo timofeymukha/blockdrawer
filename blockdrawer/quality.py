@@ -118,11 +118,36 @@ class QualityReport:
             "warning_count": len(self.warnings),
         }
 
-    def to_data(self) -> dict[str, Any]:
-        return {
+    def worst_blocks(self, count: int) -> tuple[BlockQuality, ...]:
+        """The ``count`` blocks with the highest non-orthogonality, worst first."""
+        ordered = sorted(
+            self.blocks,
+            key=lambda block: (-block.non_orthogonality, -block.equiangle_skewness, block.block_id),
+        )
+        return tuple(ordered[: max(0, count)])
+
+    def worst_interfaces(self, count: int) -> tuple[InterfaceQuality, ...]:
+        """The ``count`` internal edges with the largest size jump, worst first."""
+        ordered = sorted(
+            self.interfaces, key=lambda interface: (-interface.max_size_ratio, interface.blocks)
+        )
+        return tuple(ordered[: max(0, count)])
+
+    def to_data(
+        self, *, summary_only: bool = False, worst: int | None = None
+    ) -> dict[str, Any]:
+        """Structured report; ``summary_only`` drops the tables, ``worst`` keeps
+        only the N worst blocks and internal edges (the summary stays whole)."""
+        blocks = self.blocks if worst is None else self.worst_blocks(worst)
+        interfaces = self.interfaces if worst is None else self.worst_interfaces(worst)
+        data: dict[str, Any] = {
             "summary": self.summary(),
             "thresholds": asdict(self.thresholds),
-            "blocks": [
+            "warnings": list(self.warnings),
+        }
+        if summary_only:
+            return data
+        data["blocks"] = [
                 {
                     **{
                         key: value for key, value in asdict(block).items()
@@ -135,9 +160,9 @@ class QualityReport:
                         for corner in block.corners
                     ],
                 }
-                for block in self.blocks
-            ],
-            "interfaces": [
+                for block in blocks
+            ]
+        data["interfaces"] = [
                 {
                     "edge": edge_text(interface.edge),
                     "blocks": list(interface.blocks),
@@ -145,10 +170,11 @@ class QualityReport:
                     "max_size_ratio": interface.max_size_ratio,
                     "warnings": list(interface.warnings),
                 }
-                for interface in self.interfaces
-            ],
-            "warnings": list(self.warnings),
-        }
+                for interface in interfaces
+            ]
+        if worst is not None:
+            data["listed"] = {"blocks": len(blocks), "interfaces": len(interfaces), "worst": int(worst)}
+        return data
 
 
 def assess_quality(
@@ -176,9 +202,21 @@ def assess_quality(
     return QualityReport(blocks, interfaces, limits, total_cells, tuple(warnings))
 
 
-def format_quality(report: QualityReport) -> str:
-    """Render a quality report as compact terminal text."""
+def format_quality(
+    report: QualityReport, *, summary_only: bool = False, worst: int | None = None
+) -> str:
+    """Render a quality report as compact terminal text.
+
+    ``summary_only`` prints the headline lines, warnings and thresholds without
+    the per-block and per-edge tables; ``worst`` limits the tables to the N
+    worst blocks (by non-orthogonality) and internal edges (by size jump).
+    """
     summary = report.summary()
+    blocks = report.blocks if worst is None else report.worst_blocks(worst)
+    interfaces = report.interfaces if worst is None else report.worst_interfaces(worst)
+    if summary_only:
+        blocks = ()
+        interfaces = ()
     lines = [
         f"Quality: {summary['blocks']} block(s), {summary['total_cells']} cells, "
         f"{summary['warning_count']} warning(s)",
@@ -197,12 +235,14 @@ def format_quality(report: QualityReport) -> str:
             f"{_num(summary['max_cell_growth_ratio'])}, max size jump across "
             f"internal edges {_num(summary['max_interface_size_ratio'])}"
         )
+    if blocks:
         lines.append("")
         lines.append(
             "Blocks (id | cells | angles min/max | non-orth | skew | "
-            "aspect | growth | cell size min..max):"
+            "aspect | growth | cell size min..max)"
+            + (f", the {len(blocks)} worst of {len(report.blocks)}:" if worst is not None else ":")
         )
-        for block in report.blocks:
+        for block in blocks:
             nx, ny, nz = block.cells
             flag = " !" if block.warnings else ""
             lines.append(
@@ -214,10 +254,13 @@ def format_quality(report: QualityReport) -> str:
                 f"{_num(block.max_cell_growth_ratio)} | "
                 f"{_num(block.min_cell_size)}..{_num(block.max_cell_size)}{flag}"
             )
-    if report.interfaces:
+    if interfaces:
         lines.append("")
-        lines.append("Internal edges (edge | blocks | size jump at each end):")
-        for interface in report.interfaces:
+        lines.append(
+            "Internal edges (edge | blocks | size jump at each end)"
+            + (f", the {len(interfaces)} worst of {len(report.interfaces)}:" if worst is not None else ":")
+        )
+        for interface in interfaces:
             flag = " !" if interface.warnings else ""
             lines.append(
                 f"  {edge_text(interface.edge)} | {','.join(interface.blocks)} | "
