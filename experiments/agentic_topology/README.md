@@ -262,6 +262,34 @@ result can be read either way; the session is written whenever the result is
    section containing the removed gate; selecting the opposite arc can leave
    a clean graph but invert the exported grid.
 
+   **Optional wake separatrix** (`wake.py`, `--wake`). The seam is the wrong
+   element at a trailing edge: the flow leaves along the wake, so the two band
+   blocks beside the edge should continue downstream as a two-sided *wake
+   band* and the far-field core should be cut open along it - the C-grid. The
+   construction keeps the medial scaffold and adds one straight scaffold line
+   from the feature, along the bisector of its fluid sector (or a fixed
+   `--wake-direction`), through the body's own ring to the outer boundary.
+   The ring crossing is an ordinary anchor pinned on both sides - the edge on
+   the body, the exit on the outer boundary - so the annular producer already
+   writes the wake beyond the ring as a far-field spoke and gives the edge its
+   seam. Once the band exists, the seam points are carried downstream
+   parallel to the wake as the *wake fronts*, which cross the ring and the
+   outer boundary; the wedge and the four patches around the anchor are then
+   rewritten into eight: two wake blocks at the edge, two beyond the ring, and
+   the four neighbouring patches ending on the wake fronts. The edge carries
+   four blocks meeting at right angles, the wake band inherits the wall band's
+   normal count through the band spokes, and the wake line lies in the core
+   spoke component. Total index and Euler characteristic are unchanged. A
+   neighbouring ring anchor inside the wake band - a far-field corner whose
+   closest ring point is just behind the edge, because the medial ring turns
+   sharply there - is slid along its branch until the layout's ring separation
+   holds, and the bands are rebuilt once. A wake that would enter another
+   body's cell, cross another medial branch, leave the feature's sector, or
+   meet the outer boundary across a chain break is refused with its reason,
+   and a trial is committed only when the complete result passes coverage,
+   session emission and both sampled grids; otherwise the annular construction
+   stays exactly as it was.
+
 6. **Internal core** (`sweep.py`). A four-sided reading of a simply connected
    domain is searched for: four corners are chosen from the domain's own chain
    joins and high-turning points, and a pair of opposite sides is accepted as the
@@ -385,7 +413,9 @@ hidden state.
 
 The outer boundary is chosen the same way: `--farfield-shape circle|rectangle`,
 `--farfield-scale`, `--farfield-sides`, `--farfield-box`, or an explicit
-`--outer NAME:ROLE=PATH` per chain. Re-quantisation is the same `run` with different metric flags -
+`--outer NAME:ROLE=PATH` per chain; `--wake` (with `--wake-direction DX,DY`
+and `--wake-fluid-angle`) asks for the C-grid wake cut at every sharp
+trailing edge. Re-quantisation is the same `run` with different metric flags -
 `--first-width-ratio`, `--core-size-ratio`, `--growth`, `--cell-budget` - and
 `--split CELL:CUT` forces an anchor where an agent asks for one. Because the
 run is stateless, that is also how `apply` realises a move.
@@ -454,6 +484,52 @@ The tangent-continuous cap/leg joins of the C-shaped boundary are gates
 because they are chain breaks, and the two outlet corners are reflex gates of
 the outer loop. Its remaining miss is the far-field fan-out length ratio,
 which is the open threshold question below, not a defect of the boundary.
+
+### Wake separatrix (opt-in)
+
+```bash
+python experiments/agentic_topology/research_cli.py run --curve tear=tear.dat --wake \
+  --outer cap:farfield=cap.dat --outer bottom:farfield=bottom.dat \
+  --outer outlet:outlet=outlet.dat --outer top:farfield=top.dat
+```
+
+Measured with the test options (raster 420, 240 coverage samples) on the
+teardrop `synthetic_cases.teardrop((0, 0), 0.32, tip_ratio=2.2)`, whose tip
+carries a 306-degree fluid sector:
+
+| body and outer boundary | blocks | singularities | non-orthogonality | wall misalignment | min. scaled Jacobian | worst length ratio | verdict |
+| ----------------------- | ------ | ------------- | ----------------- | ----------------- | -------------------- | ------------------ | ------- |
+| teardrop, circle, seam | 18 | 0 | 63.0 | 63.0 | 0.455 | 6.4 | admissible, shape misses |
+| teardrop, circle, **wake** | 22 | 3 | 43.7 | 5.5 | 0.723 | 12.1 | **resolved** |
+| teardrop, C-shape, seam | 18 | 0 | 78.2 | 63.0 | 0.204 | 26.8 | admissible, shape misses |
+| teardrop, C-shape, **wake** | 22 | 3 | 57.0 | 21.0 | 0.544 | 13.1 | **resolved** |
+
+The three singularities are the two front vertices at the tip (index +1
+each, as with the seam) and the tip itself, which carries four blocks instead
+of the seam's three. On the C-shaped boundary the two outlet corners' anchors
+had to be slid 0.43 and 0.82 along the ring to clear the wake band: their
+closest ring points were just behind the tip, and left in place they made the
+far-field patches beside the wake slivers with a length ratio above 200. The
+wake band is as thick as the band at the tip, 0.037 here, because the
+clearance cap thins the band at a sharp convex feature.
+
+Every other fixture keeps its annular construction under `--wake`, each with
+a reason: the teardrop tips of `sharp_bodies` and `narrow_gap_tip` point at
+the other body, so their wake would cross the ring into that body's cell; on
+30P30N the slat's trailing edge and cusp and the main's trailing edge and cove
+lip all point into the next element, and the flap's trailing edge is *blunt* -
+a second convex corner 0.0048 along the wall - which needs a base template
+rather than a wake from one corner. 30P30N therefore stays at 116 blocks and
+the same four problems with `--wake`. A truncated teardrop with a 0.01 base is
+refused at both corners the same way; the same body with a sharp tip is
+resolved.
+
+Two layout rules came out of this work and hold for every run. A curvature
+peak within two resampling steps of a sharp corner is the corner's own peak
+and is not a separate anchor; and pinned gates crowd each other through the
+unpinned gates between them, so the gate relaxation now measures the whole run
+between consecutive pins. Wake and chain-break pins are never released by
+that relaxation. No default fixture changed under either rule.
 
 ### Gap spanning checkpoint (opt-in)
 
@@ -792,6 +868,13 @@ installations whose LAPACK/BLAS build is broken.
   intervals beside the feature it repairs. The supplied wall point list is
   untouched, because it lies on the cavity boundary and cavity-boundary edges are
   reused exactly.
+* **The wake separatrix is opt-in and straight.** One line per sharp feature,
+  from the feature through the body's own ring to the outer boundary. A wake
+  that would enter another body's cell - the slat and main trailing edges of
+  30P30N, every teardrop tip in `sharp_bodies` and `narrow_gap_tip` - is
+  refused with that reason; a wake ending on another body's front, or a curved
+  wake following the medial branch, is not built. The wake band is as thick as
+  the band at the edge, which the clearance cap makes thin at a sharp tip.
 * **The outer boundary is one site.** Its chains become patches and its
   corners and chain breaks become gates, but a wall chain on the outer
   boundary gets no boundary-layer band from the external producer: the bands
@@ -833,6 +916,7 @@ installations whose LAPACK/BLAS build is broken.
 | `fan_cavity.py` | sharp-feature cavities, templates, validation, atomic application |
 | `external_topology.py` | medial scaffold plus wall bands, written as a patch graph |
 | `spanned.py` | optional gap strips, facing mouths, junction dissolution and structured refusals |
+| `wake.py` | optional wake separatrix: wake anchor, wake bands, C-grid rewrite and structured refusals |
 | `sweep.py` | four-sided detection, guide correspondence, H-grid core |
 | `moves.py` | candidate discrete operations with Euler/index screening |
 | `agent_ops.py` | describe / candidates / compare / focus for an agent |

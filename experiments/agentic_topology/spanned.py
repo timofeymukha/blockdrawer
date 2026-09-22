@@ -309,7 +309,7 @@ def apply(layout, graph: pg.PatchGraph, records: list[dict], *, wall_edge_style=
     for record in result.branches:
         if not record["spanned"]:
             continue
-        before = current.problems()
+        before = {_problem_signature(item) for item in current.problems()}
         try:
             candidate = _span_branch(layout, current, record["branch"], wall_edge_style)
         except pg.GraphError as error:
@@ -317,7 +317,9 @@ def apply(layout, graph: pg.PatchGraph, records: list[dict], *, wall_edge_style=
             record["reason"] = f"could not be spanned: {error}"
             continue
         after = candidate.problems()
-        fresh = [item for item in after if item not in before]
+        # Compared without the session block id: removing faces renumbers
+        # every later block, which would make old problems look new.
+        fresh = [item for item in after if _problem_signature(item) not in before]
         if fresh:
             record["spanned"] = False
             record["reason"] = (
@@ -344,6 +346,12 @@ def apply(layout, graph: pg.PatchGraph, records: list[dict], *, wall_edge_style=
         )
     result.graph = current
     return result
+
+
+def _problem_signature(problem: dict) -> str:
+    import json
+
+    return json.dumps({key: value for key, value in problem.items() if key != "block"}, sort_keys=True, default=str)
 
 
 def _span_branch(layout, graph: pg.PatchGraph, branch_index: int, wall_edge_style: str) -> pg.PatchGraph:

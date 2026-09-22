@@ -315,6 +315,7 @@ def curvature_anchors(
     samples: int = 256,
     prominence: float = 2.5,
     limit: int = 6,
+    corner_turn: float = math.radians(45.0),
 ) -> list[Anchor]:
     """Wall curvature extrema projected outwards onto the cell ring.
 
@@ -349,7 +350,20 @@ def curvature_anchors(
         ]
         peaks.sort(key=lambda index: -smoothed[index])
         stations = g2.cumulative_length(uniform)
+        # A sharp corner is a curvature peak of its own; the resampled peak
+        # lands a step away from the vertex, and the corner anchor already
+        # names that feature.  Skip peaks within two steps of one.
+        total = float(stations[-1])
+        step = total / samples
+        turning = g2.turning_angles(loop, closed=True)
+        corner_stations = g2.cumulative_length(loop)[:-1][np.abs(turning) >= corner_turn]
         for index in peaks[:limit]:
+            station = float(stations[index])
+            if len(corner_stations):
+                gaps = np.abs(corner_stations - station)
+                gaps = np.minimum(gaps, total - gaps)
+                if float(np.min(gaps)) <= 2.0 * step:
+                    continue
             anchor = anchor_from_wall(
                 diagram, cell, float(stations[index]), "curvature"
             )
@@ -616,7 +630,7 @@ def relax_gates(site: Site, cuts: list[Cut], balance: float) -> None:
         candidates = [
             (float(deltas[position]), index)
             for position, index in enumerate(order)
-            if cuts[index].pinned
+            if cuts[index].pinned and _releasable(cuts[index])
         ]
         if not candidates:
             raise LayoutError(
@@ -633,25 +647,44 @@ def relax_gates(site: Site, cuts: list[Cut], balance: float) -> None:
         clearance = np.asarray([cuts[index].clearance for index in order])
         scales = np.minimum(clearance, np.roll(clearance, -1))
         floors = min(max(balance, 0.0), 0.9) * np.minimum(scales, total / count)
-        crowded = [
-            position
-            for position in range(count)
-            if spans[position] < floors[position]
-            and cuts[order[position]].pinned
-            and cuts[order[(position + 1) % count]].pinned
+        # Pinned gates crowd each other when the run between them is too short
+        # for the gates it has to hold: the two pins themselves, plus every
+        # unpinned gate between them, which spreading can only place inside
+        # that run.  Adjacent pins are the special case of an empty run.
+        pinned_positions = [
+            position for position in range(count) if cuts[order[position]].pinned
         ]
+        crowded = []
+        if len(pinned_positions) >= 2 and any(
+            _releasable(cuts[order[position]]) for position in pinned_positions
+        ):
+            for index, position in enumerate(pinned_positions):
+                following = pinned_positions[(index + 1) % len(pinned_positions)]
+                steps = (following - position) % count
+                if steps == 0:
+                    steps = count
+                run = float(sum(spans[(position + k) % count] for k in range(steps)))
+                needed = float(
+                    sum(floors[(position + k) % count] for k in range(steps))
+                )
+                if run < needed:
+                    crowded.append((run, position, following))
         if not crowded:
             break
         # Two pinned feature gates cannot both stay when they crowd each other;
         # the weaker feature gives up its pin and is spread instead.
-        worst = min(crowded, key=lambda position: spans[position])
+        _run, worst, partner = min(crowded)
         first = cuts[order[worst]]
-        second = cuts[order[(worst + 1) % count]]
+        second = cuts[order[partner]]
         weaker = (
             second
             if _pin_priority(second) <= _pin_priority(first)
             else first
         )
+        if not _releasable(weaker):
+            # Both ends of the crowded run are scaffold pins that cannot move;
+            # spreading between them is all that is left.
+            break
         weaker.unpin()
         order, unwrapped, _ = _unwrap_gates(cuts, total)
     if float(np.min(spans - floors)) >= 0.0:
@@ -675,6 +708,16 @@ def relax_gates(site: Site, cuts: list[Cut], balance: float) -> None:
     for position, index in enumerate(order):
         cuts[index].wall_station = float(stations[position] % total)
         cuts[index].wall_point = site.curve.point_at(cuts[index].wall_station)
+
+
+# Pins that name a scaffold element rather than a wall feature - a wake's
+# trailing edge and a chain break of the outer boundary - are never released:
+# the gate has to be exactly there for the construction to exist at all.
+_UNRELEASABLE = frozenset({"wake", "chain"})
+
+
+def _releasable(cut: Cut) -> bool:
+    return cut.anchor.kind not in _UNRELEASABLE
 
 
 _PIN_PRIORITY = {
@@ -913,6 +956,7 @@ def build_layout(diagram: Diagram, options: LayoutOptions | None = None) -> Layo
         scale=diagram.scale,
         prominence=settings.curvature_prominence,
         limit=settings.curvature_limit,
+        corner_turn=settings.corner_turn,
     ):
         anchors.add(anchor)
     cuts = anchors.cuts()

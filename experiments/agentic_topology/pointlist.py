@@ -89,3 +89,14 @@ def parse_box(text: str):
     if len(values) != 4:
         raise argparse.ArgumentTypeError("a farfield box is XMIN,YMIN,XMAX,YMAX")
     return values
+
+
+def parse_direction(text: str):
+    """``DX,DY`` as a non-zero direction."""
+    try:
+        values = tuple(float(item) for item in text.split(","))
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("a direction is DX,DY") from error
+    if len(values) != 2 or not all(math.isfinite(v) for v in values) or values == (0.0, 0.0):
+        raise argparse.ArgumentTypeError("a direction is a finite non-zero DX,DY")
+    return values

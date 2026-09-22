@@ -47,11 +47,13 @@ import pipeline  # noqa: E402
 import session_emit  # noqa: E402
 import sizing  # noqa: E402
 import spanned  # noqa: E402
+import wake  # noqa: E402
 import synthetic_cases as cases  # noqa: E402
 import planar_domain as pdm  # noqa: E402
 from pointlist import (  # noqa: E402
     parse_box,
     parse_curve_argument,
+    parse_direction,
     parse_outer_argument,
     parse_sides,
     read_open_point_list,
@@ -114,6 +116,23 @@ def add_input_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--span-gaps", action="store_true",
         help="try one core strip across narrow body-body gaps (experimental; rejected trials roll back)",
+    )
+    parser.add_argument(
+        "--wake", action="store_true",
+        help=(
+            "cut a wake separatrix from every sharp trailing edge to the outer "
+            "boundary, continuing the band as a two-sided wake band (C-grid); "
+            "rejected trials roll back"
+        ),
+    )
+    parser.add_argument(
+        "--wake-direction", type=parse_direction, default=None, metavar="DX,DY",
+        help="fixed wake direction for every wake instead of each feature's bisector",
+    )
+    parser.add_argument(
+        "--wake-fluid-angle", type=float, default=wake.WakeOptions.fluid_angle,
+        metavar="DEGREES",
+        help="smallest fluid sector a wall vertex needs to carry a wake (default %(default)s)",
     )
     parser.add_argument(
         "--wall-edge-type", choices=("polyLine", "spline"), default="polyLine"
@@ -228,6 +247,11 @@ def build_options(arguments) -> pipeline.PipelineOptions:
         choices.append((feature, template))
     return pipeline.PipelineOptions(
         span=spanned.SpanOptions(enabled=arguments.span_gaps),
+        wake=wake.WakeOptions(
+            enabled=arguments.wake,
+            direction=arguments.wake_direction,
+            fluid_angle=arguments.wake_fluid_angle,
+        ),
         grid_width=arguments.width,
         farfield_scale=arguments.farfield_scale,
         farfield_shape=arguments.farfield_shape,

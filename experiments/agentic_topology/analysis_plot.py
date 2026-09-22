@@ -129,6 +129,7 @@ def draw_legend(canvas: Canvas, title: str, rows) -> None:
 ROLE_FILLS = {
     "layer": (214, 234, 248),
     "core": (250, 240, 220),
+    "wake": (232, 226, 200),
     "block": (235, 235, 245),
 }
 ROLE_OUTLINE = (80, 80, 90)
@@ -154,6 +155,10 @@ def render_result(result, width: int = 1100, *, bounds=None, title: str = None):
         for edge in graph.edges.values():
             if edge.role in ("front",):
                 canvas.polyline(edge.path, (20, 120, 80), 2)
+            elif edge.role == "wake":
+                canvas.polyline(edge.path, (200, 90, 20), 2)
+            elif edge.role == "wake_front":
+                canvas.polyline(edge.path, (120, 160, 60), 2)
     if diagram is not None:
         spanned = set(result.spanning.spanned) if result.spanning is not None else set()
         for branch in diagram.branches:
@@ -196,6 +201,7 @@ def render_result(result, width: int = 1100, *, bounds=None, title: str = None):
             (None, ""),
             (ROLE_FILLS["layer"], "boundary-layer band"),
             (ROLE_FILLS["core"], "core block"),
+            (ROLE_FILLS["wake"], "wake band"),
             (None, "purple dot:  singularity"),
             (None, "red X:       worst sampled cell"),
             (None, "green dot:   cavity replaced"),

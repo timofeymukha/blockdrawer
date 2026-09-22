@@ -236,7 +236,12 @@ them in the canvas widgets.
   sides carry their own names and roles, or supplied chain by chain with
   `--outer NAME:ROLE=PATH`; chain breaks and convex corners of the outer loop
   are gates, every chain is its own patch, and an outer wall chain is reported
-  as not banded. `spanned.py` exposes an opt-in `--span-gaps` construction: mutually facing
+  as not banded. `wake.py` exposes an opt-in `--wake` construction: a straight
+  wake separatrix from each sharp trailing edge through the body's ring to the
+  outer boundary, with the band continued as a two-sided wake band and the
+  far-field core cut open along it; trials are committed only as complete
+  admissible results and refusals keep their reasons under `medial.wakes`.
+  `spanned.py` exposes an opt-in `--span-gaps` construction: mutually facing
   mouths replace a narrow body-body medial branch with one core strip and
   dissolve its two junctions into valence-five front vertices. Trials include
   gate placement and band rebuilding on an isolated layout, and commit only
