@@ -86,6 +86,20 @@ class LayerOptions:
     local_attempts: int = 33
     bisection_steps: int = 10
     curvature_fraction: float = 0.8
+    # Cap the band at ``curvature_fraction`` times the body's inscribed disk.
+    # On a fat body that is its radius of curvature; on a thin airfoil it is
+    # half the thickness and would forbid any realistic band, so a producer
+    # that is handed the band height as an input switches it off and relies
+    # on the block checks instead.
+    inscribed_cap: bool = True
+    # Optional: offset normals from the wall chord over this fraction of the
+    # requested height instead of the plain vertex normals.  A level set at
+    # height h does not see wiggles smaller than h, but a vertex normal of a
+    # dense point list does, amplified by h.  Off by default: the window also
+    # smooths real bends - a cove's band folded with it on - and the C-grid's
+    # levels, judged between fronts after the arc-length mapping, do not need
+    # it.
+    normal_window: float = 0.0
     # Fraction of the distance to the core scaffold a front may reach.
     scaffold_fraction: float = 0.9
     # Arc-length window, in probe heights, within which the wall's own
@@ -632,8 +646,14 @@ def build_front(
     site: int = 0,
     name: str = "",
     allow_scale: bool = False,
+    seam_directions=None,
 ) -> Front:
     """Offset a closed wall loop into the fluid by a clearance-limited height.
+
+    ``seam_directions`` maps a sharp gate order to the two offset directions
+    of its seam points, scaled so that ``wall + height * direction`` lies at
+    ``height`` from the wall side and from whatever else bounds that side -
+    a wake line - instead of the plain one-sided normals.
 
     When the local repairs do not converge the front is not admissible as
     the gates stand, and the right response is usually a cut - the caller
@@ -648,9 +668,22 @@ def build_front(
     the site curves the medial stage already uses.
     """
     augmented, gate_indices = insert_stations(wall_loop, stations, closed=True)
-    normals = -fluid_sign * g2.vertex_normals(augmented, closed=True)
-    upper = max(requested, 1.0e-12) / max(options.clearance_fraction, 1.0e-6)
     angles = fluid_angles(augmented, fluid_sign)
+    if options.normal_window > 0.0:
+        # Every feature vertex - reflex or sharp convex, the same threshold
+        # the mitre rules use - bounds the smoothing window, and the window
+        # never exceeds two percent of the perimeter: the request may be far
+        # above what the clearance allows, and a window of that size would
+        # smooth real bends away.
+        breaks = np.flatnonzero(np.abs(angles - math.pi) > (math.pi - REFLEX_FLUID_ANGLE))
+        window = min(
+            options.normal_window * max(requested, 1.0e-12),
+            0.02 * float(g2.total_length(augmented)),
+        )
+        normals = -fluid_sign * g2.windowed_normals(augmented, window, closed=True, breaks=breaks)
+    else:
+        normals = -fluid_sign * g2.vertex_normals(augmented, closed=True)
+    upper = max(requested, 1.0e-12) / max(options.clearance_fraction, 1.0e-6)
     angles_at = np.concatenate((angles, angles[:1]))
     # The clearance that limits a band is the distance to walls that are not
     # locally adjacent.  The wall's own corners and bends trim the level set
@@ -677,10 +710,12 @@ def build_front(
     cap = np.minimum(requested, options.clearance_fraction * feature)
     # A convex wall's own feature size is its radius of curvature: offsetting
     # much further than that turns a short wall section into a long front
-    # section and the band block stops being a band.
-    cap = np.minimum(
-        cap, np.maximum(options.curvature_fraction * inner, float(floor_height))
-    )
+    # section and the band block stops being a band.  The inscribed disk is
+    # that radius for a fat body but half the thickness for a thin one.
+    if options.inscribed_cap:
+        cap = np.minimum(
+            cap, np.maximum(options.curvature_fraction * inner, float(floor_height))
+        )
     if scaffold is not None:
         # The core scaffold is where the core patches start.  A front that
         # reaches past it turns the core patch inside out, and the gate-by-gate
@@ -763,7 +798,7 @@ def build_front(
         offset, stuck = flatten_offset_loops(
             augmented, offset, gate_indices, closed=True
         )
-        seams = _seam_points(augmented, sharp, heights, fluid_sign)
+        seams = _seam_points(augmented, sharp, heights, fluid_sign, seam_directions)
         usable = not stuck and _front_is_usable(augmented, offset, obstacles)
         hard: list[int] = []
         soft: list[int] = []
@@ -1011,15 +1046,22 @@ def _window_directions(wall: np.ndarray, offset: np.ndarray) -> np.ndarray:
     return delta / np.where(lengths > 0.0, lengths, 1.0)[:, None]
 
 
-def _seam_points(wall: np.ndarray, sharp, heights: np.ndarray, fluid_sign: float):
+def _seam_points(wall: np.ndarray, sharp, heights: np.ndarray, fluid_sign: float, overrides=None):
     """One-sided offset points on each side of a sharp wall vertex."""
     directions = g2.segment_directions(wall)
     seams: dict[int, tuple[np.ndarray, np.ndarray]] = {}
     count = len(wall) - 1
     for order, index in sharp.items():
+        height = float(heights[index])
+        if overrides and order in overrides:
+            first, second = overrides[order]
+            seams[order] = (
+                wall[index] + height * np.asarray(first, dtype=np.float64),
+                wall[index] + height * np.asarray(second, dtype=np.float64),
+            )
+            continue
         incoming = directions[(index - 1) % count]
         outgoing = directions[index % count]
-        height = float(heights[index])
         inward = -fluid_sign * np.array([-incoming[1], incoming[0]])
         outward = -fluid_sign * np.array([-outgoing[1], outgoing[0]])
         seams[order] = (
@@ -1065,9 +1107,18 @@ def _band_failures(
         section = ring_slice(front, first, second).copy()
         section[0] = start
         section[-1] = stop
-        for index in (first, second):
+        # Each spoke ends where the section starts or stops, so the section
+        # segment meeting it there cannot properly cross it - but through
+        # rounding of the intersection parameters it can register as if it
+        # did, and the block would be thinned for nothing.  That segment is
+        # left out; where a seam place stands in for the front point the
+        # spoke and the section share no vertex and the whole section counts.
+        for index, trimmed in (
+            (first, section if order in places else section[1:]),
+            (second, section if following in places else section[:-1]),
+        ):
             spoke = np.asarray([wall[index], front[index]])
-            if g2.paths_cross(section, spoke):
+            if g2.paths_cross(trimmed, spoke):
                 failing.append(order)
         crosses = g2.quad_corner_crosses(quad)
         sides = np.linalg.norm(np.roll(quad, -1, axis=0) - quad, axis=1)

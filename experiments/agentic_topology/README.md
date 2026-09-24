@@ -290,6 +290,51 @@ result can be read either way; the session is written whenever the result is
    session emission and both sampled grids; otherwise the annular construction
    stays exactly as it was.
 
+   **Single-body C-grid** (`cgrid.py`, with `--wake` and a C-shaped far
+   field). For one body with one sharp trailing edge the medial ring is the
+   wrong scaffold: at fifteen chords it sits seven chords out, every core
+   block is a pie slice from a short wall section to a ring section many
+   chords long, and behind the edge the body's level sets curve round while a
+   C-grid's continue along the wake. The C-grid producer takes the annular
+   layout's gates and builds the level sets of the *slit body* - the wall
+   with its wake line - at geometrically growing heights (`CGridOptions.growth`
+   3, up to `reach` 0.35 of the distance to the outer boundary): the band by
+   wall-normal offsets, every higher level by arc-length-fraction mapping of
+   the level below, so a sector never narrows with height. Each level runs
+   from the *out* mitre round the body to the *in* mitre; the mitre points sit
+   at the height from both the wall side and the wake line, the chain of them
+   is the cross-wake line, and the wake band is the stack of levels along the
+   straight wake lines to the outlet. The far field is the outer boundary
+   itself: straight spokes to cap stations placed by the same fractions, and
+   the two outlet corners are single-block corners (+1 each), which with the
+   edge's four blocks (-2) keeps the annulus at total index zero. The result
+   replaces the annular one only when the complete chain - graph checks,
+   coverage, session, both sampled grids - is admissible; otherwise the reason
+   is under `medial.cgrid`. The producer chooses its own gates: it builds a
+   second layout from the same diagram with the options its blocks need -
+   the band height as a geometric input, so a gate pair whose straight band
+   block would have a corner under 30 degrees is cut (`LayoutOptions.band_height`,
+   `band_corner`); wall turning of at most 45 degrees per block
+   (`max_band_turning`), which is what keeps the band's misalignment within
+   the target once the far-field spokes leave the outermost level; and the
+   anchor floor judged against the wall gap as well as the clearance
+   (`floor_by_wall_gap`), since its core is the body's own offsets and the
+   medial ring may be many chords away. A band block that still folds names
+   its wall interval and the patch there is split, as the annular assembly
+   does, up to `band_repairs` times. The annular construction keeps the
+   layout its own options build, so no default fixture moves. Rules that
+   came out of it and hold everywhere: the inscribed-disk cap on the band,
+   which is half the thickness on a thin body, is optional (`inscribed_cap`)
+   and off in the C-grid; a far-field fan-out component - tangential, longest
+   edge on a non-wall outer chain or the medial ring - is reported
+   (`farfield_fanout_ratio`) but no longer fails `sizing_feasible`; and the
+   band's spoke-crossing test leaves out the section segment that ends on the
+   spoke, which under rounding registered as a crossing and thinned the block
+   for nothing. Offset normals from the wall chord over a fraction of the
+   height (`LayerOptions.normal_window`) are available but off: the window
+   also smooths real bends - a cove's band folded with it - and the C-grid's
+   levels, judged between fronts after the arc-length mapping, do not need it.
+
 6. **Internal core** (`sweep.py`). A four-sided reading of a simply connected
    domain is searched for: four corners are chosen from the domain's own chain
    joins and high-turning points, and a pair of opposite sides is accepted as the
@@ -484,6 +529,49 @@ The tangent-continuous cap/leg joins of the C-shaped boundary are gates
 because they are chain breaks, and the two outlet corners are reflex gates of
 the outer loop. Its remaining miss is the far-field fan-out length ratio,
 which is the open threshold question below, not a defect of the boundary.
+
+### A-airfoil at fifteen chords (single-body acceptance)
+
+```bash
+make research-a-airfoil     # downloads the Tohoku coordinates, C-shaped far field, --wake
+```
+
+The Aerospatiale A-airfoil (1593 supplied points, sharp trailing edge, 340
+degree sector) at Re_c 2.1e6 and 13 degrees incidence, chord 1, in a C-shaped
+far field of radius 15 about the trailing edge with the outlet one radius
+downstream, the wake along (cos 13°, sin 13°) and the band at 0.15 chords,
+1.6 times the measured suction-side boundary-layer thickness. Test options
+(raster 420):
+
+| quantity | annular producer before this work | C-grid producer |
+| --- | --- | --- |
+| verdict | inadmissible (177-degree core patch, wake refused) | **resolved** |
+| blocks | 25 | 185 |
+| levels | one ring at 7.5 chords | 0.15, 0.45, 1.35, 4.05, then the cap |
+| gates on the airfoil | 8 | 35 |
+| band height at the gates | 0.0005 to 0.15 | 0.15 everywhere |
+| non-orthogonality (shape grid) | - | 51.0 degrees |
+| wall misalignment | - | 12.4 degrees |
+| minimum scaled Jacobian | - | 0.63 |
+| far-field fan-out ratio (informational) | - | 93 |
+
+With the Makefile's raster of 700 the same case resolves in 125 blocks from
+23 gates (51 degrees of non-orthogonality, 23 degrees of wall misalignment,
+scaled Jacobian 0.63): the gate count still follows the medial ring's
+discretisation through the anchor floor, so the sector count is not yet a
+function of the body alone.
+
+The band used to collapse at the leading edge because one block spanned 98
+degrees of nose turning and its straight corner quad had 7-degree corners;
+the C-grid's own layout cuts a band block whose corners fall below 30 degrees
+at the clearance-limited height and any block turning more than 45 degrees.
+The band was also capped at half the local thickness by the inscribed-disk
+rule, and its blocks were thinned by a spoke-crossing test that, through
+rounding, counted the section's end on the spoke as a crossing. Each of
+those was a separate defect, and each showed only on a thin body. The
+crossing fix is the one change that reaches the annular construction: the
+default corpus is unchanged block for block, and 30P30N goes from 116 to 115
+blocks with its verdict unchanged, one spurious band repair fewer.
 
 ### Wake separatrix (opt-in)
 
@@ -868,20 +956,16 @@ installations whose LAPACK/BLAS build is broken.
   intervals beside the feature it repairs. The supplied wall point list is
   untouched, because it lies on the cavity boundary and cavity-boundary edges are
   reused exactly.
-* **The engine's reach ends at about six chords of far field, and the wake
-  does not reach it.** Measured on the Aerospatiale A-airfoil (sharp trailing
-  edge, 1593 supplied points, C-shaped outer boundary): admissible at cap
-  radii 4 and 5, admissible with 8 singularities at 6, inadmissible at 8, 10
-  and 15. Two causes. `wake.make_room` demands `ring_separation` times the
-  ring's clearance between the wake band and the neighbouring anchor, a length
-  that grows with the far-field distance while the anchor spacing on the ring
-  does not, so at 15 chords it asks a corner anchor to slide 3.5 along a ring
-  that cannot hold it. Independently, the annular core patch beside the
-  trailing-edge seam is non-convex (a 177-degree corner) at every band height
-  from 0.006 to 0.12, and every cavity template is rejected on the quality
-  floor there. `--layer-height-ratio` also multiplies the domain scale, which
-  the report does not print. The A-airfoil mesh in `cases/a_airfoil` was
-  therefore hand-built; it is the next acceptance fixture.
+* **The annular producer's reach ends at about six chords of far field on a
+  single sharp-edged body**; the C-grid producer takes over there with
+  `--wake` and a C-shaped far field, and needs exactly one body, one planned
+  wake and the four-chain cap-leg-outlet-leg boundary. A rectangle or a circle
+  around a single airfoil still gets the annular construction and its wake
+  rewrite. A blunt trailing edge, a wake ending on another body, and the
+  multi-element case remain open. The far-field spokes are straight lines
+  from the outermost level set to the cap, so their angle to that level set
+  is what the sector count allows (51 degrees non-orthogonality on the
+  A-airfoil); curved spokes would improve it.
 * **The wake separatrix is opt-in and straight.** One line per sharp feature,
   from the feature through the body's own ring to the outer boundary. A wake
   that would enter another body's cell - the slat and main trailing edges of
@@ -931,6 +1015,8 @@ installations whose LAPACK/BLAS build is broken.
 | `external_topology.py` | medial scaffold plus wall bands, written as a patch graph |
 | `spanned.py` | optional gap strips, facing mouths, junction dissolution and structured refusals |
 | `wake.py` | optional wake separatrix: wake anchor, wake bands, C-grid rewrite and structured refusals |
+| `cgrid.py` | single-body C-grid: slit-body level sets, mapped levels, wake band, far field on the cap |
+| `fetch_a_airfoil.py` | downloads and normalises the A-airfoil acceptance geometry |
 | `sweep.py` | four-sided detection, guide correspondence, H-grid core |
 | `moves.py` | candidate discrete operations with Euler/index screening |
 | `agent_ops.py` | describe / candidates / compare / focus for an agent |

@@ -436,6 +436,59 @@ def vertex_normals(poly: np.ndarray, *, closed: bool) -> np.ndarray:
     return result / safe[:, None]
 
 
+def windowed_normals(
+    poly: np.ndarray, window: float, *, closed: bool, breaks=()
+) -> np.ndarray:
+    """Unit normals from the chord over an arc-length window at every vertex.
+
+    The tangent at arc length ``s`` is the chord from ``s - w/2`` to
+    ``s + w/2``, which is the length-weighted mean of the segment directions
+    inside the window; it removes the angular jitter of a dense point list
+    that a plain vertex normal amplifies by the offset height, while keeping
+    every bend larger than the window.  ``breaks`` are vertex indices the
+    window must not cross - sharp corners - so a corner's neighbours keep
+    their own side's direction.  The normal is the tangent rotated a quarter
+    turn to the left, like :func:`vertex_normals`.
+    """
+    points = np.asarray(poly, dtype=np.float64)
+    cumulative = cumulative_length(points)
+    total = float(cumulative[-1])
+    count = len(points) - 1 if closed else len(points)
+    stations = cumulative[:count]
+    half = np.full(count, 0.5 * float(window))
+    if len(breaks):
+        break_stations = np.asarray([cumulative[int(index)] for index in breaks], dtype=np.float64)
+        for k in range(count):
+            gaps = np.abs(break_stations - stations[k])
+            if closed:
+                gaps = np.minimum(gaps, total - gaps)
+            gaps = gaps[gaps > 1e-12 * max(total, 1.0)]
+            if len(gaps):
+                half[k] = min(half[k], float(np.min(gaps)))
+    ahead = stations + half
+    behind = stations - half
+    if closed:
+        first = sample_at_arclength(points, np.mod(ahead, total))
+        second = sample_at_arclength(points, np.mod(behind, total))
+    else:
+        first = sample_at_arclength(points, np.clip(ahead, 0.0, total))
+        second = sample_at_arclength(points, np.clip(behind, 0.0, total))
+    tangent = first - second
+    fallback = vertex_normals(points, closed=closed)[:count]
+    norms = np.linalg.norm(tangent, axis=1)
+    normals = np.column_stack((-tangent[:, 1], tangent[:, 0]))
+    safe = norms > 1e-12 * max(total, 1.0)
+    normals[safe] /= norms[safe, None]
+    normals[~safe] = fallback[~safe]
+    # A break vertex keeps its own bisector normal.
+    for index in breaks:
+        index = int(index) % count
+        normals[index] = fallback[index]
+    if closed:
+        normals = np.vstack([normals, normals[:1]])
+    return normals
+
+
 def miter_scale(poly: np.ndarray, *, closed: bool, limit: float = 4.0) -> np.ndarray:
     """Offset length multiplier that keeps a corner offset at constant distance."""
     directions = segment_directions(poly)

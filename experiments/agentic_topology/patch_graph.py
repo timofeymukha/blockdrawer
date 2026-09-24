@@ -752,8 +752,11 @@ def structure_failures(structure: dict, limits: StructureLimits) -> list[dict]:
     """
     found: list[dict] = []
     worst = structure.get("worst") or []
-    if limits.max_length_ratio is not None and worst:
-        record = worst[0]
+    # Far-field fan-out components are reported, not failed; the verdict
+    # falls on the worst component that is not one.
+    judged = [record for record in worst if not record.get("fan_out")]
+    if limits.max_length_ratio is not None and judged:
+        record = judged[0]
         if record["length_ratio"] > limits.max_length_ratio:
             found.append(
                 {
@@ -912,6 +915,21 @@ def sizing_structure(graph: PatchGraph, *, reported: int = 6) -> dict:
         lengths = np.asarray([graph.edges[key].length for key in keys])
         roles = sorted({graph.edges[key].role for key in keys})
         shortest = int(np.argmin(lengths))
+        longest_key = keys[int(np.argmax(lengths))]
+        longest_edge = graph.edges[longest_key]
+        longest_boundary = longest_edge.boundary
+        longest_role = graph.boundary_roles.get(longest_boundary) if longest_boundary else None
+        # Far-field fan-out: a tangential component whose longest edge lies
+        # on a non-wall outer chain or on the medial ring.  The far cells are
+        # simply large there, which every O- and C-grid does; it is grading,
+        # not a defect.
+        fan_out = bool(
+            (
+                longest_role in ("farfield", "inlet", "outlet", "symmetry", "patch")
+                or (longest_boundary is None and longest_edge.role == "ring")
+            )
+            and not (set(roles) & NORMAL_ROLES)
+        )
         longest = int(np.argmax(lengths))
         ratio = (
             float(lengths[longest] / lengths[shortest])
@@ -923,6 +941,8 @@ def sizing_structure(graph: PatchGraph, *, reported: int = 6) -> dict:
                 **physical[index],
                 "edges": len(keys),
                 "roles": roles,
+                "fan_out": fan_out,
+                "longest_boundary_role": longest_role,
                 "minimum_length": float(lengths[shortest]),
                 "maximum_length": float(lengths[longest]),
                 "length_ratio": ratio,
@@ -950,6 +970,10 @@ def sizing_structure(graph: PatchGraph, *, reported: int = 6) -> dict:
             record["ties_band_to_core_depth"] for record in records
         ),
         "worst": records[:reported],
+        # The largest ratio among far-field fan-out components, informational.
+        "farfield_fanout_ratio": max(
+            (record["length_ratio"] for record in records if record["fan_out"]), default=None
+        ),
         # Couplings need not have an extreme length ratio. Keep their full
         # evidence even when they fall outside the short worst-ratio table.
         "coupled": [record for record in records if record["mixes_tangential_and_normal"]],

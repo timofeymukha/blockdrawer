@@ -1,5 +1,5 @@
 .PHONY: run test integration-test check research-test research-30p30n \
-        research-periodic-hill research-cases
+        research-periodic-hill research-cases research-a-airfoil
 
 PYTHON ?= python3
 OPENFOAM_IMAGE ?= /tmp/timofey/code/openfoam-apptainer/openfoam-2606.sif
@@ -40,6 +40,21 @@ research-cases:
 	        --json $(RESEARCH_OUTPUT)/$$case.json \
 	        --output $(RESEARCH_OUTPUT)/$$case.png || true; \
 	done
+
+# The single-airfoil acceptance case: a C-grid at 15 chords with the wake
+# deflected 13 degrees, the band sized from the measured boundary layer.
+research-a-airfoil:
+	$(PYTHON) $(RESEARCH)/fetch_a_airfoil.py
+	$(PYTHON) $(RESEARCH)/research_cli.py run \
+		--curve airfoil=$(RESEARCH)/geometry/A-Airfoil-Normalized.dat \
+		--farfield-shape cshape --farfield-radius 15 --farfield-center 1,0 \
+		--wake --wake-direction 0.9744,0.2250 --layer-height 0.15 \
+		--width 700 \
+		--output $(RESEARCH_OUTPUT)/a-airfoil.png \
+		--json $(RESEARCH_OUTPUT)/a-airfoil.json \
+		--session $(RESEARCH_OUTPUT)/a-airfoil-session.json \
+		--session-render $(RESEARCH_OUTPUT)/a-airfoil-session.png \
+		--block-mesh-dict $(RESEARCH_OUTPUT)/a-airfoil-blockMeshDict
 
 research-30p30n:
 	$(PYTHON) $(RESEARCH)/fetch_30p30n.py

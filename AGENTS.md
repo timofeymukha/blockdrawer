@@ -248,6 +248,16 @@ them in the canvas widgets.
   outer boundary, with the band continued as a two-sided wake band and the
   far-field core cut open along it; trials are committed only as complete
   admissible results and refusals keep their reasons under `medial.wakes`.
+  `cgrid.py` is the single-body C-grid producer: with `--wake` and a C-shaped
+  far field it takes the body's gates from a layout of its own (band blocks
+  without sliver corners at the band height, at most 45 degrees of wall
+  turning per block, the anchor floor judged by the wall gap, a folding band
+  block split and retried), builds the level sets of the body and its wake
+  line at geometrically growing heights, maps every level above the band by
+  arc-length fraction, and joins the outermost level to the cap; it replaces
+  the annular result only as a complete admissible result, and the annular
+  construction keeps the layout its own options build. Its acceptance case is the
+  A-airfoil at fifteen chords (`make research-a-airfoil`, `test_a_airfoil.py`).
   `spanned.py` exposes an opt-in `--span-gaps` construction: mutually facing
   mouths replace a narrow body-body medial branch with one core strip and
   dissolve its two junctions into valence-five front vertices. Trials include

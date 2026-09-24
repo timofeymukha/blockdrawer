@@ -646,6 +646,16 @@ DEFAULT_RECTANGLE_SIDES = (
 )
 
 
+# The C-shaped far field's chains, anticlockwise from the top of the cap: the
+# upstream semicircle, the lower leg, the downstream outlet, the upper leg.
+DEFAULT_CSHAPE_CHAINS = (
+    ("cap", "farfield"),
+    ("bottom", "farfield"),
+    ("outlet", "outlet"),
+    ("top", "farfield"),
+)
+
+
 @dataclass(frozen=True)
 class FarfieldSpec:
     """How to fabricate the outer boundary when the caller supplies none.
@@ -654,8 +664,12 @@ class FarfieldSpec:
     chains named and given roles by ``sides`` (anticlockwise from the
     lower-left corner: bottom, right, top, left), so an outer boundary with an
     inlet, an outlet and two far-field sides is the default rectangle.
-    ``scale`` multiplies the radius of the body frame; ``box`` gives absolute
-    rectangle bounds ``(xmin, ymin, xmax, ymax)`` instead.
+    ``cshape`` gives the C-grid far field: an upstream semicircle about the
+    centre, two horizontal legs and a vertical outlet one radius downstream.
+    ``scale`` multiplies the radius of the body frame; ``radius`` gives the
+    absolute radius instead and ``center`` the absolute centre (the body frame
+    centre by default; a C-grid usually wants the trailing edge); ``box``
+    gives absolute rectangle bounds ``(xmin, ymin, xmax, ymax)``.
     """
 
     shape: str = "circle"
@@ -663,12 +677,24 @@ class FarfieldSpec:
     name: str = "farfield"
     sides: tuple = DEFAULT_RECTANGLE_SIDES
     box: tuple | None = None
+    radius: float | None = None
+    center: tuple | None = None
 
     def __post_init__(self) -> None:
-        if self.shape not in ("circle", "rectangle"):
+        if self.shape not in ("circle", "rectangle", "cshape"):
             raise DomainError(f"unknown farfield shape {self.shape!r}")
         if not math.isfinite(self.scale) or self.scale <= 1.0:
             raise DomainError("the farfield scale must be finite and larger than 1")
+        if self.radius is not None:
+            radius = float(self.radius)
+            if not math.isfinite(radius) or radius <= 0.0:
+                raise DomainError("the farfield radius must be finite and positive")
+            object.__setattr__(self, "radius", radius)
+        if self.center is not None:
+            center = tuple(float(value) for value in self.center)
+            if len(center) != 2 or not all(math.isfinite(value) for value in center):
+                raise DomainError("the farfield centre is two finite numbers")
+            object.__setattr__(self, "center", center)
         if not str(self.name).strip():
             raise DomainError("the farfield chain needs a name")
         sides = tuple((str(name), str(role)) for name, role in self.sides)
@@ -711,6 +737,23 @@ def rectangle_chains(box, sides=DEFAULT_RECTANGLE_SIDES) -> list[Chain]:
     return chains
 
 
+def cshape_chains(center, radius: float, *, count: int = 360, chains=DEFAULT_CSHAPE_CHAINS) -> list[Chain]:
+    """The C-grid far field: cap, lower leg, outlet one radius downstream, upper leg."""
+    cx, cy = (float(center[0]), float(center[1]))
+    radius = float(radius)
+    angles = np.linspace(0.5 * math.pi, 1.5 * math.pi, count + 1)
+    cap = np.column_stack((cx + radius * np.cos(angles), cy + radius * np.sin(angles)))
+    cap[0] = (cx, cy + radius)
+    cap[-1] = (cx, cy - radius)
+    pieces = (
+        cap,
+        np.asarray([(cx, cy - radius), (cx + radius, cy - radius)]),
+        np.asarray([(cx + radius, cy - radius), (cx + radius, cy + radius)]),
+        np.asarray([(cx + radius, cy + radius), (cx, cy + radius)]),
+    )
+    return [Chain(name, role, points) for (name, role), points in zip(chains, pieces)]
+
+
 def fabricate_outer(loops, spec: FarfieldSpec | None = None):
     """Chains of a fabricated outer boundary around the body loops.
 
@@ -723,9 +766,15 @@ def fabricate_outer(loops, spec: FarfieldSpec | None = None):
 
     settings = spec or FarfieldSpec()
     center, radius = site_module.domain_frame(loops)
-    outer_radius = radius * float(settings.scale)
+    if settings.center is not None:
+        center = np.asarray(settings.center, dtype=np.float64)
+    outer_radius = (
+        float(settings.radius) if settings.radius is not None else radius * float(settings.scale)
+    )
     if settings.shape == "circle":
         return [circle_chain(settings.name, center, outer_radius)], (center, outer_radius)
+    if settings.shape == "cshape":
+        return cshape_chains(center, outer_radius), None
     box = settings.box
     if box is None:
         box = (

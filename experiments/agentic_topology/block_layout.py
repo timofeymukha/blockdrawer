@@ -484,12 +484,14 @@ class AnchorSet:
         scale: float,
         ring_separation: float = 0.5,
         gate_balance: float = 0.35,
+        floor_by_wall_gap: bool = False,
     ):
         self.diagram = diagram
         self.cells = cells
         self.scale = scale
         self.ring_separation = ring_separation
         self.gate_balance = gate_balance
+        self.floor_by_wall_gap = floor_by_wall_gap
         self.cell_of_site = {cell.site: index for index, cell in enumerate(cells)}
         self.by_branch: dict[int, list[Anchor]] = {
             branch.index: [] for branch in diagram.branches
@@ -545,15 +547,31 @@ class AnchorSet:
             station, wall_station, _, _, _, clearance, _ = self._measure(
                 cell_index, anchor
             )
-            for other_ring, _wall, other_clearance in self._stations[cell_index]:
+            total = site.curve.length()
+            for other_ring, other_wall, other_clearance in self._stations[cell_index]:
                 ring_gap = _cyclic_gap(station, other_ring, cell.ring_length)
                 if ring_gap <= 1e-9 * self.scale:
                     self.rejected.append((anchor, "coincides with an existing cut"))
                     return False
-                # Separation follows the local feature size: inside a narrow gap
-                # the bisector is short and neighbouring spokes may be close.
-                limit = self.ring_separation * min(clearance, other_clearance)
-                if not force and ring_gap < limit:
+                # The floor protects against a core patch that is tall and
+                # thin: its ring section must not be much shorter than the
+                # clearance.  Separation follows the local feature size, so
+                # inside a narrow gap neighbouring spokes may be close.  A
+                # producer that does not build its core on the ring - the
+                # C-grid, whose levels are the body's own offsets - judges
+                # the floor against the wall gap too, so refining a body's
+                # gates is not refused because the ring is far away.
+                wall_gap = _cyclic_gap(wall_station, other_wall, total)
+                bound = min(clearance, other_clearance)
+                if self.floor_by_wall_gap:
+                    bound = min(bound, wall_gap)
+                limit = self.ring_separation * bound
+                # In wall-gap mode the outer cell keeps only the coincidence
+                # check: its patches taper towards the ring by nature - the
+                # ring is their inner side - and the producer does not build
+                # on them.
+                judged = site.curve.kind == "wall" or not self.floor_by_wall_gap
+                if not force and judged and ring_gap < limit:
                     self.rejected.append(
                         (
                             anchor,
@@ -888,6 +906,23 @@ class Layout:
 class LayoutOptions:
     max_wall_turning: float = math.radians(100.0)
     max_ring_turning: float = math.radians(150.0)
+    # The requested band height, when known: a patch whose band block - the
+    # straight quad of its two gates and their normal offsets at that height -
+    # has a corner below ``band_corner`` is cut, because the front repair would
+    # otherwise thin the band to nothing there (a nose turning 98 degrees in
+    # one block gave 7-degree corners at 0.15 chord).
+    band_height: float | None = None
+    band_corner: float = math.radians(30.0)
+    band_clearance_fraction: float = 0.9
+    # With a band, a patch's wall may turn at most this much: the band's
+    # first cells lean by about half the turning inside the block, and the
+    # wall-misalignment target is 25 degrees.  ``None`` leaves the plain
+    # wall-turning limit; the pipeline sets 45 degrees for a C-grid, whose
+    # far-field spokes need the finer sectors.
+    max_band_turning: float | None = None
+    # Judge the anchor floor against the wall gap as well as the clearance
+    # (see ``AnchorSet``): for a producer whose core is not built on the ring.
+    floor_by_wall_gap: bool = False
     ring_separation: float = 0.5
     gate_balance: float = 0.35
     corner_turn: float = math.radians(45.0)
@@ -917,6 +952,26 @@ def bootstrap_anchors(
     return added
 
 
+def band_block_corner(diagram: Diagram, patch: Patch, height: float) -> float:
+    """Smallest corner angle of the patch's band block at ``height``.
+
+    The block is the straight quad of the two gates and their fluid-normal
+    offsets, which is what the emitted block's corners are; the curved wall
+    between them does not rescue a 7-degree corner.
+    """
+    site = diagram.sites[patch.site]
+    if site.curve.kind != "wall" or len(patch.wall) < 2:
+        return math.pi
+    first = patch.wall[0]
+    second = patch.wall[-1]
+    normal_first = site.curve.fluid_normal(patch.wall_start)
+    normal_second = site.curve.fluid_normal(patch.wall_end)
+    quad = np.asarray([first, second, second + height * normal_second, first + height * normal_first])
+    if abs(g2.signed_area(np.vstack([quad, quad[:1]]))) <= 0.0:
+        return 0.0
+    return float(np.min(g2.quad_corner_angles(quad)))
+
+
 def build_layout(diagram: Diagram, options: LayoutOptions | None = None) -> Layout:
     settings = options or LayoutOptions()
     cells = build_cells(diagram)
@@ -926,6 +981,7 @@ def build_layout(diagram: Diagram, options: LayoutOptions | None = None) -> Layo
         scale=diagram.scale,
         ring_separation=settings.ring_separation,
         gate_balance=settings.gate_balance,
+        floor_by_wall_gap=settings.floor_by_wall_gap,
     )
     notes: list[str] = []
     for anchor in junction_anchors(diagram):
@@ -965,24 +1021,61 @@ def build_layout(diagram: Diagram, options: LayoutOptions | None = None) -> Layo
             bootstrap_anchors(diagram, cells, anchors, cell_index)
     cuts = anchors.cuts()
     patches = build_patches(diagram, cells, cuts)
+    unsplittable: set[tuple] = set()
     for _ in range(settings.max_refinements):
         short = {
             index
             for index, cell_cuts in enumerate(cuts)
             if len(cell_cuts) < settings.minimum_cuts
         }
+        def band_defect(patch: Patch) -> float:
+            if settings.band_height is None:
+                return 0.0
+            # A block touching a sharp feature is the seam's, the wake's or
+            # the cavity stage's business; its one-sided offsets are not a
+            # band block a cut could improve.
+            ends = (cuts[patch.cell][patch.first_cut], cuts[patch.cell][patch.second_cut])
+            if any(cut.anchor.kind in ("corner", "reflex", "wake") for cut in ends):
+                return 0.0
+            # The band is clearance-limited: judge the block at the height
+            # the front can actually reach here, not at the bare request.
+            height = min(settings.band_height, settings.band_clearance_fraction * min(cut.clearance for cut in ends))
+            corner = band_block_corner(diagram, patch, height)
+            return max(0.0, settings.band_corner - corner)
+
+        turning_limit = (
+            min(settings.max_wall_turning, settings.max_band_turning)
+            if settings.band_height is not None and settings.max_band_turning is not None
+            else settings.max_wall_turning
+        )
+
+        def wall_limit_of(patch: Patch) -> float:
+            site = diagram.sites[patch.site]
+            return turning_limit if site.curve.kind == "wall" else settings.max_wall_turning
+
         pending = [
             patch
             for patch in patches
             if patch.cell in short
-            or patch.wall_turning() > settings.max_wall_turning
+            or patch.wall_turning() > wall_limit_of(patch)
             or patch.ring_turning() > settings.max_ring_turning
+            or band_defect(patch) > 0.0
         ]
         if not pending:
             break
-        pending.sort(key=lambda patch: (patch.cell not in short, -patch.wall_turning()))
+        pending.sort(
+            key=lambda patch: (
+                patch.cell not in short,
+                -(patch.wall_turning() + 4.0 * band_defect(patch)),
+            )
+        )
+        # A patch whose split was rejected in this pass is not tried again
+        # until a split elsewhere has changed the cuts; the pass ends when a
+        # split is added, the refinement when a whole pass adds nothing.
         added = False
         for patch in pending:
+            if (patch.cell, patch.first_cut, patch.second_cut) in unsplittable:
+                continue
             for by_turning in (True, False):
                 candidate = split_anchor(
                     diagram, cells, patch, by_turning=by_turning
@@ -991,7 +1084,9 @@ def build_layout(diagram: Diagram, options: LayoutOptions | None = None) -> Layo
                     added = True
                     break
             if added:
+                unsplittable.clear()
                 break
+            unsplittable.add((patch.cell, patch.first_cut, patch.second_cut))
         if not added:
             notes.append(
                 "patch turning could not be reduced further without crowding an "

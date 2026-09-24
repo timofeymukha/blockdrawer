@@ -222,6 +222,30 @@ class ExplicitOuterTests(unittest.TestCase):
         self.assertEqual(outer.section_chain(total - 1.0, 1.0).name, outer.chain_at(0.0).name)
 
 
+class CShapeFarfieldTests(unittest.TestCase):
+    def test_cshape_is_fabricated_about_the_given_centre(self):
+        tear = cases.teardrop((0.0, 0.0), 0.32, tip_ratio=2.2)
+        spec = pdm.FarfieldSpec("cshape", radius=2.0, center=(0.704, 0.0))
+        chains, circle = pdm.fabricate_outer([tear], spec)
+        self.assertIsNone(circle)
+        self.assertEqual([chain.name for chain in chains], ["cap", "bottom", "outlet", "top"])
+        self.assertEqual([chain.role for chain in chains], ["farfield", "farfield", "outlet", "farfield"])
+        self.assertTrue(np.allclose(chains[2].points, [[2.704, -2.0], [2.704, 2.0]]))
+        result = pipeline.run_external(
+            ["tear"], [tear],
+            replace(CAVITY_FAST, farfield_shape="cshape", farfield_radius=2.0, farfield_center=(0.704, 0.0),
+                    layer_height=0.05),
+        )
+        self.assertTrue(result.admissible, result.problems or result.failures)
+        self.assertEqual(sorted(result.model.boundaries), ["bottom", "cap", "outlet", "tear", "top"])
+        self.assertAlmostEqual(result.metric.layer_height, 0.05)
+        self.assertIn("domain_scale", result.analysis["domain"])
+        with self.assertRaises(pdm.DomainError):
+            pdm.FarfieldSpec("cshape", radius=-1.0)
+        with self.assertRaises(pdm.DomainError):
+            pdm.FarfieldSpec("circle", center=(0.0,))
+
+
 class OuterArgumentTests(unittest.TestCase):
     def test_argument_parsers(self):
         name, role, path = parse_outer_argument("cap:farfield=~/cap.dat")

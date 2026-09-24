@@ -99,28 +99,37 @@ say so.
 
 **Use the topology engine first** where it applies - single bodies, several
 disjoint smooth bodies, simply connected internal domains - **and know its
-measured reach**: on a sharp-edged airfoil it is admissible with a C-shaped
-outer boundary up to about 6 chords and inadmissible at 8, 10 and 15, and the
-wake is refused at every distance (the ring-clearance rule of its wake scales
-with the far-field distance while the anchor spacing does not). A 15-chord
-external-aerodynamics far field is therefore a hand build today; run the
-engine at a small far field anyway to read its acceptance report and its
-diagnosis of the trailing-edge cavity.
+measured reach**. A single sharp-edged airfoil in a C-shaped far field is
+the C-grid producer's case: `--wake` with `--farfield-shape cshape
+--farfield-radius R --farfield-center X,Y` (or the same boundary via
+`--outer`) and an explicit `--layer-height`. It chooses the body's gates
+itself - band blocks without sliver corners at the requested height, at most
+45 degrees of wall turning per block, a block whose band still folds cut
+again - and builds the band by wall normals, three more level sets at heights
+growing by three, the wake band along the given direction, and straight
+spokes to the cap; the A-airfoil at fifteen chords comes out `resolved` in
+125 blocks with the band at its full height, 23 degrees of wall misalignment
+and 51 degrees of non-orthogonality. It refuses,
+with the reason under `medial.cgrid`, anything but one body, one wake and the
+cap-leg-outlet-leg boundary; a rectangle or circle around a single airfoil
+falls back to the annular construction, which is admissible only to about
+six chords there. Multi-element bodies and blunt trailing edges are still
+hand builds.
 
 ```bash
 python experiments/agentic_topology/research_cli.py run \
-  --curve body=body.dat --wake \
-  --farfield-shape rectangle --farfield-box=-15,-15,31,15 \
-  --farfield-sides bottom:farfield,outlet:outlet,top:farfield,inlet:inlet \
-  --layer-height-ratio 0.01 \
+  --curve airfoil=airfoil.dat --wake --wake-direction 0.9744,0.2250 \
+  --farfield-shape cshape --farfield-radius 15 --farfield-center 1,0 \
+  --layer-height 0.15 \
   --session out/session.json --json out/report.json --output out/topology.png
 ```
 
 Or supply the outer boundary chain by chain, anticlockwise and joined end to
 end, for a C-shaped far field: `--outer cap:farfield=cap.dat --outer
 bottom:farfield=bottom.dat --outer outlet:outlet=outlet.dat --outer
-top:farfield=top.dat`. The band request scales with the domain, so a far-away
-boundary needs an explicit `--layer-height-ratio`. Read the report's
+top:farfield=top.dat`. Give the band height absolutely with `--layer-height`
+(the ratio form multiplies the whole domain's scale, which the report prints
+as `domain.domain_scale`). Read the report's
 acceptance terms - `topology_valid`, `untangled`, `within_shape_targets`,
 `sizing_feasible`, `admissible`, `resolved` - and the refusal reasons; the
 `describe`, `cavities`, `candidates`, `apply --move` and `focus` subcommands
@@ -247,8 +256,15 @@ Failure signatures and their fixes:
   many layers; span it with one strip or move the ring.
 - **A 3-degree corner in a seam wedge at a trailing edge**: the medial anchor
   is not inside the feature's sector; use the wake construction.
-- **Length ratio far above 20 in one component**: decide whether it is
-  far-field fan-out (acceptable, grade it) or band-to-core coupling (topology).
+- **Length ratio far above 20 in one component**: the report now separates
+  far-field fan-out (`farfield_fanout_ratio`, informational: large far cells
+  are normal) from band-to-core coupling, which still fails `sizing_feasible`
+  and is a topology defect.
+- **A band that thins to nothing on a thin body**: the annular producer capped
+  the band at half the local thickness (the inscribed-disk rule) and a nose
+  block spanning too much turning; the C-grid producer switches the cap off
+  and cuts nose sectors, so run it, or pass more gates, before lowering the
+  requested height.
 - **A gate that slid off a sharp vertex**: the sharp vertex must be a block
   corner; pin it and re-spread the neighbouring gates.
 

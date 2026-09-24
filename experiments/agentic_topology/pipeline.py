@@ -36,6 +36,7 @@ import session_emit
 import sites as site_module
 import sizing
 import spanned
+import cgrid
 import sweep as sweep_module
 import voronoi_graph
 import wake
@@ -54,6 +55,8 @@ class PipelineOptions:
     farfield_name: str = "farfield"
     farfield_sides: tuple = pdm.DEFAULT_RECTANGLE_SIDES
     farfield_box: tuple | None = None
+    farfield_radius: float | None = None
+    farfield_center: tuple | None = None
     wall_edge_style: str = "polyLine"
     coverage_samples: int = 400
     reference_curves: bool = True
@@ -67,6 +70,8 @@ class PipelineOptions:
     # the default results are unchanged; a different sizing now leaves the
     # band, and every block shape, where it was.
     layer_height_ratio: float | None = sizing.DEFAULT_LAYER_HEIGHT_RATIO
+    # An absolute band height in the geometry's units overrides the ratio.
+    layer_height: float | None = None
     forced_splits: tuple = ()
     layout: block_layout.LayoutOptions = field(
         default_factory=block_layout.LayoutOptions
@@ -88,6 +93,7 @@ class PipelineOptions:
     structure: pg.StructureLimits = field(default_factory=pg.StructureLimits)
     span: spanned.SpanOptions = field(default_factory=spanned.SpanOptions)
     wake: wake.WakeOptions = field(default_factory=wake.WakeOptions)
+    cgrid: cgrid.CGridOptions = field(default_factory=cgrid.CGridOptions)
 
 
 @dataclass
@@ -110,6 +116,7 @@ class PipelineResult:
     span_notes: list = field(default_factory=list)
     wakes: wake.WakeResult | None = None
     wake_notes: list = field(default_factory=list)
+    cgrid: dict | None = None
     cavity: object | None = None
     graph: pg.PatchGraph | None = None
     metric: sizing.SizeMetric | None = None
@@ -269,6 +276,8 @@ def farfield_spec(settings: PipelineOptions) -> pdm.FarfieldSpec:
         settings.farfield_name,
         settings.farfield_sides,
         settings.farfield_box,
+        settings.farfield_radius,
+        settings.farfield_center,
     )
 
 
@@ -307,6 +316,7 @@ def run_external(names, loops, options: PipelineOptions | None = None, *, outer=
         result.errors.append({"stage": "voronoi_graph", "error": _describe(error)})
     if result.diagram is not None:
         try:
+            result.metric = _metric(result.domain, settings)
             result.layout = block_layout.build_layout(result.diagram, settings.layout)
             result.solve = patch_solver.solve(result.layout, settings.solver)
             _apply_forced_splits(result, settings)
@@ -323,11 +333,177 @@ def run_external(names, loops, options: PipelineOptions | None = None, *, outer=
         except Exception as error:
             result.errors.append({"stage": "bands", "error": _describe(error)})
     _finish(result, settings)
-    if result.layout is not None and result.metric is not None:
+    if settings.wake.enabled:
+        result = _try_cgrid(result, settings)
+    if (
+        result.layout is not None
+        and result.metric is not None
+        and not (result.cgrid or {}).get("applied")
+    ):
         result = _try_wakes(result, settings)
     if settings.span.enabled and result.layout is not None and result.metric is not None:
         result = _try_spanning(result, settings)
     return result
+
+
+def _cgrid_layout(result: PipelineResult, settings: PipelineOptions):
+    """The gate layout the C-grid is built from.
+
+    The C-grid takes only the body's gate stations from the layout; its core
+    is the body's own offsets, not the medial ring.  So the gates are chosen
+    by what the C-grid's blocks need - a band block without sliver corners at
+    the band height, wall turning of at most 45 degrees per block so the
+    far-field spokes stay near the normal - and the anchor floor is judged
+    against the wall gap, not against a ring that may be many chords away.
+    The annular result keeps the layout its own options built.
+    """
+    options = replace(
+        settings.layout,
+        band_height=result.metric.layer_height if settings.layer.enabled else None,
+        max_band_turning=(
+            settings.layout.max_band_turning
+            if settings.layout.max_band_turning is not None
+            else math.radians(45.0)
+        ),
+        floor_by_wall_gap=True,
+    )
+    layout = block_layout.build_layout(result.diagram, options)
+    solve = patch_solver.solve(layout, settings.solver)
+    return layout, solve
+
+
+def _build_cgrid(trial: PipelineResult, plan: dict, settings: PipelineOptions):
+    """Build the C-grid, cutting the gate layout where its band block fails.
+
+    The same repair the annular assembly has: a band block that folds or is
+    not convex names its wall interval, the patch there is split, the layout
+    relaxed, and the C-grid built again - at most ``band_repairs`` times.  A
+    failure at a sharp feature, or one that names no interval, is final.
+    """
+    repairs = 0
+    while True:
+        try:
+            built = cgrid.build(
+                trial.layout, trial.domain, trial.metric, plan,
+                layer_options=settings.layer, options=settings.cgrid,
+                wall_edge_style=settings.wall_edge_style,
+            )
+            return built, repairs
+        except cgrid.CGridError as error:
+            if repairs >= settings.band_repairs or error.sharp or not error.intervals:
+                raise
+            progressed = False
+            for start, end in error.intervals:
+                patch = _patch_at_wall(trial.layout, plan["cell"], start, end)
+                if patch is not None and patch_solver.split_patch(trial.layout, patch, settings.solver):
+                    progressed = True
+            if not progressed:
+                raise
+            patch_solver.relax(trial.layout, settings.solver)
+            trial.layout.refresh()
+            repairs += 1
+            trial.solve.splits += 1
+            trial.solve.history.append(
+                {
+                    "attempt": "C-grid band repair",
+                    "patches": len(trial.layout.patches),
+                    "reason": "a boundary-layer band block was inadmissible",
+                }
+            )
+
+
+def _patch_at_wall(layout, cell_index: int, start: float, end: float):
+    """The patch of ``cell_index`` whose wall section holds the interval's middle."""
+    site = layout.diagram.sites[layout.cells[cell_index].site]
+    total = site.curve.length()
+    middle = (start + 0.5 * ((end - start) % total)) % total
+    for patch in layout.patches:
+        if patch.cell != cell_index:
+            continue
+        span = (patch.wall_end - patch.wall_start) % total
+        if span <= 0.0:
+            span = total
+        if (middle - patch.wall_start) % total <= span:
+            return patch
+    return None
+
+
+def _try_cgrid(result: PipelineResult, settings: PipelineOptions) -> PipelineResult:
+    """Replace the annular result by the single-body C-grid when it applies.
+
+    One body with one wake and a cap-leg-outlet-leg outer boundary: the
+    C-grid is built from the same gates and committed only when the complete
+    result - graph, coverage, session, both sampled grids - is admissible.
+    Otherwise the annular result stays and the reason is recorded.
+    """
+    record: dict = {"attempted": False, "applied": False}
+    if result.domain is not None and result.domain.hole_count != 1:
+        record["reason"] = "the C-grid producer takes exactly one body"
+        result.cgrid = record
+        result.analysis = build_analysis(result)
+        return result
+    if result.layout is None or result.metric is None or result.diagram is None:
+        record["reason"] = "the C-grid requires a successful domain and layout stage"
+        result.cgrid = record
+        result.analysis = build_analysis(result)
+        return result
+    try:
+        layout, solve = _cgrid_layout(result, settings)
+        plans = [item for item in wake.plan(layout, settings.wake) if item.get("planned")]
+    except Exception as error:
+        record["reason"] = f"wake planning failed: {_describe(error)}"
+        result.cgrid = record
+        result.analysis = build_analysis(result)
+        return result
+    if result.domain is None or result.domain.hole_count != 1:
+        record["reason"] = "the C-grid producer takes exactly one body"
+    elif len(plans) != 1:
+        record["reason"] = f"the C-grid needs exactly one planned wake, found {len(plans)}"
+    elif result.errors or result.layout is None:
+        # The C-grid takes only the gate stations from the annular layout;
+        # the annular relaxation's own patch verdicts do not concern it.
+        record["reason"] = "the C-grid requires a successful domain and layout stage"
+    if "reason" in record:
+        result.cgrid = record
+        result.analysis = build_analysis(result)
+        return result
+    record["attempted"] = True
+    trial = PipelineResult(
+        settings, "external", domain=result.domain, scale=result.scale,
+        sites=result.sites, diagram=result.diagram, layout=layout,
+        solve=solve, metric=result.metric, problems=list(result.domain.problems()),
+    )
+    try:
+        built, repairs = _build_cgrid(trial, plans[0], settings)
+        record["band_repairs"] = repairs
+        trial.graph = built.graph
+        trial.assembly = external_topology.AssemblyResult(
+            built.graph, {plans[0]["cell"]: built.fronts[0]}, set(), notes=list(built.notes),
+        )
+        _finish(trial, replace(settings, evaluate_grid=True))
+        record.update(built.record)
+        record["notes"] = built.notes
+        if not trial.admissible:
+            record["problems"] = trial.problems
+            record["errors"] = trial.errors
+            record["coverage"] = trial.coverage
+            record["grid"] = {
+                "shape_inverted": None if trial.shape is None else trial.shape.inverted_cells,
+                "counts_inverted": None if trial.grid is None else trial.grid.inverted_cells,
+                "worst_cells": [] if trial.shape is None else trial.shape.worst_cells[:4],
+            }
+            raise pg.GraphError("the C-grid failed coverage, export or sampled-grid validation")
+    except Exception as error:
+        record["reason"] = f"C-grid reverted: {_describe(error)}"
+        result.cgrid = record
+        result.analysis = build_analysis(result)
+        return result
+    record["applied"] = True
+    plans[0]["applied"] = True
+    trial.wakes = wake.WakeResult(trial.graph, [dict(plans[0])], [f"wake built into the C-grid with {built.record['levels']} level(s)"])
+    trial.cgrid = record
+    trial.analysis = build_analysis(trial)
+    return trial
 
 
 def _rewrite(trial: PipelineResult, graph, settings: PipelineOptions):
@@ -386,7 +562,7 @@ def _try_wakes(result: PipelineResult, settings: PipelineOptions) -> PipelineRes
             settings, "external", domain=result.domain, scale=result.scale,
             sites=result.sites, diagram=result.diagram,
             layout=copy.deepcopy(original_layout), solve=result.solve, metric=result.metric,
-            problems=list(result.domain.problems()),
+            problems=list(result.domain.problems()), cgrid=result.cgrid,
         )
         try:
             if not settings.layer.enabled:
@@ -471,7 +647,7 @@ def _try_spanning(result: PipelineResult, settings: PipelineOptions) -> Pipeline
             sites=result.sites, diagram=result.diagram,
             layout=copy.deepcopy(original_layout), solve=result.solve, metric=result.metric,
             problems=list(result.domain.problems()), wakes=result.wakes,
-            wake_notes=list(result.wake_notes),
+            wake_notes=list(result.wake_notes), cgrid=result.cgrid,
         )
         try:
             if not settings.layer.enabled:
@@ -663,11 +839,14 @@ def run_internal(domain: pdm.PlanarDomain, options: PipelineOptions | None = Non
 
 
 def _metric(domain: pdm.PlanarDomain, settings: PipelineOptions) -> sizing.SizeMetric:
-    height = (
-        None
-        if settings.layer_height_ratio is None
-        else float(settings.layer_height_ratio) * domain.scale
-    )
+    if settings.layer_height is not None:
+        height = float(settings.layer_height)
+    else:
+        height = (
+            None
+            if settings.layer_height_ratio is None
+            else float(settings.layer_height_ratio) * domain.scale
+        )
     return sizing.SizeMetric(
         settings.sizing,
         domain.scale,
@@ -817,6 +996,9 @@ def build_analysis(result: PipelineResult) -> dict:
         analysis["domain"] = {
             "name": domain.name,
             "scale": result.scale,
+            # The frame diameter of the whole domain, outer boundary included:
+            # the length --layer-height-ratio and the sizing ratios multiply.
+            "domain_scale": domain.scale,
             "holes": domain.hole_count,
             "euler_characteristic": domain.euler_characteristic,
             "simply_connected": domain.simply_connected,
@@ -928,10 +1110,10 @@ ACCEPTANCE_TERMS = {
 # Emitted into every JSON report.  Keep this in step with the "Remaining
 # limits" section of the research README; it is the same list, shorter.
 LIMITATIONS = [
-    "The engine is admissible up to about six chords of far field on a sharp-"
-    "edged airfoil and inadmissible beyond: the wake's ring-clearance rule "
-    "scales with the far-field distance while anchor spacing does not, and the "
-    "core patch beside a trailing-edge seam is non-convex at every band height.",
+    "The annular producer is admissible up to about six chords of far field on "
+    "a single sharp-edged body; beyond that the C-grid producer applies, and "
+    "only with --wake, exactly one body, one planned wake and a cap-leg-outlet-"
+    "leg outer boundary. Its far-field spokes are straight.",
     "The wake separatrix is opt-in (--wake). It is one straight scaffold line "
     "from a sharp feature through the body's own ring to the outer boundary; "
     "a wake that would enter another body's cell, cross another medial branch, "
@@ -1048,6 +1230,7 @@ def _medial_section(result: PipelineResult) -> dict | None:
         "spanning_notes": list(result.span_notes)
         + ([] if result.spanning is None else result.spanning.notes),
         "wakes": None if result.wakes is None else result.wakes.records,
+        "cgrid": result.cgrid,
         "wake_options": {
             "enabled": result.options.wake.enabled,
             "fluid_angle": result.options.wake.fluid_angle,

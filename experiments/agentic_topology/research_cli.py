@@ -78,7 +78,16 @@ def add_input_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--width", type=int, default=700, help="medial raster width")
     parser.add_argument("--farfield-scale", type=float, default=3.0)
     parser.add_argument(
-        "--farfield-shape", choices=("circle", "rectangle"), default="circle"
+        "--farfield-shape", choices=("circle", "rectangle", "cshape"), default="circle",
+        help="fabricated outer boundary: a circle, a rectangle, or the C-grid cap, legs and outlet",
+    )
+    parser.add_argument(
+        "--farfield-radius", type=float, default=None, metavar="R",
+        help="absolute radius of a circle or C-shaped far field instead of --farfield-scale",
+    )
+    parser.add_argument(
+        "--farfield-center", type=parse_direction, default=None, metavar="X,Y",
+        help="absolute centre of a circle or C-shaped far field (default: the body frame centre)",
     )
     parser.add_argument(
         "--farfield-name", default="farfield", help="patch name of a circular far field"
@@ -171,6 +180,10 @@ def add_input_arguments(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
+        "--layer-height", type=float, default=None, metavar="LENGTH",
+        help="absolute boundary-layer band height in the geometry's units; overrides --layer-height-ratio",
+    )
+    parser.add_argument(
         "--max-length-ratio",
         type=float,
         default=pg.StructureLimits.max_length_ratio,
@@ -258,6 +271,9 @@ def build_options(arguments) -> pipeline.PipelineOptions:
         farfield_name=arguments.farfield_name,
         farfield_sides=tuple(arguments.farfield_sides),
         farfield_box=arguments.farfield_box,
+        farfield_radius=arguments.farfield_radius,
+        farfield_center=arguments.farfield_center,
+        layer_height=arguments.layer_height,
         wall_edge_style=arguments.wall_edge_type,
         coverage_samples=arguments.coverage_samples,
         reference_curves=not arguments.no_reference_curves,
@@ -319,6 +335,8 @@ def run_case(arguments) -> pipeline.PipelineResult:
         else (
             [arguments.farfield_name]
             if arguments.farfield_shape == "circle"
+            else [name for name, _role in pdm.DEFAULT_CSHAPE_CHAINS]
+            if arguments.farfield_shape == "cshape"
             else [name for name, _role in arguments.farfield_sides]
         )
     )
