@@ -55,6 +55,18 @@ case you are in.
   seam wedge or a fan at a production trailing edge: it collapses the
   body-normal lines into a downstream fan. Engine: `--wake`; refusals list the
   reason under `medial.wakes`.
+- **Sharp trailing edge upstream of another body** (tandem foils, a slat
+  ahead of a main element): the wake band crosses the gap and ends on the
+  downstream body's band. Its centreline is that body's spoke at the
+  stagnation gate, and its two fronts continue as two band spokes beside that
+  gate, so the wake wraps the nose exactly as an embedded C-grid does; the
+  count across the wake is then the count along those two nose pieces, which
+  the engine reports as a wake-landing coupling, not a defect. Engine: the
+  same `--wake`; the plan record's `target` says `body` or `outer`. With a
+  circle far field two teardrop foils in tandem get both wakes; with a C-shaped
+  far field the annular construction still fails at the downstream foil's
+  tail, where the far-field chain gates crowd it - that is the far-field
+  limit, not the wake's.
 - **Blunt base** (two convex corners within about one percent of the
   perimeter): a base template - the base is a wall edge whose block continues
   downstream as the wake core, and the two corner spokes bound the wake band.
@@ -113,8 +125,10 @@ and 51 degrees of non-orthogonality. It refuses,
 with the reason under `medial.cgrid`, anything but one body, one wake and the
 cap-leg-outlet-leg boundary; a rectangle or circle around a single airfoil
 falls back to the annular construction, which is admissible only to about
-six chords there. Multi-element bodies and blunt trailing edges are still
-hand builds.
+six chords there. Two foils in tandem build in a circle far field with both
+wakes (`make research-tandem`), admissible but a degree of non-orthogonality
+short of resolved at the medial junctions; multi-element bodies with coves
+and blunt trailing edges are still hand builds.
 
 ```bash
 python experiments/agentic_topology/research_cli.py run \

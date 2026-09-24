@@ -127,6 +127,33 @@ def narrow_gap_tip():
     )
 
 
+def tandem_foils(
+    angle: float = math.radians(10.0),
+    gap: float = 0.4,
+    tip_ratio: float = 3.0,
+) -> tuple[list[str], list[np.ndarray]]:
+    """Two sharp-tailed foils in tandem, the rear one turned by ``angle``.
+
+    Both foils have chord one: a teardrop of radius ``1 / (1 + tip_ratio)``
+    with the tip ``tip_ratio`` radii behind the centre.  The front foil lies
+    on the x axis with its tail at the origin; the rear foil's nose sits
+    ``gap`` chords behind that tail, and the rear foil is turned nose-up by
+    ``angle`` about its nose, so the front foil's wake, leaving the tail along
+    the x axis, arrives at the rear foil's nose.  The rung between the single
+    airfoil and 30P30N: the front wake ends on another body's band, and the
+    rear wake leaves for the far field at an angle.
+    """
+    radius = 1.0 / (1.0 + tip_ratio)
+    front = teardrop((-radius * tip_ratio, 0.0), radius, tip_ratio=tip_ratio)
+    # Turn about the nose: place the centre so that the rotated nose lands
+    # at (gap, 0).
+    nose_local = np.asarray([-radius, 0.0])
+    rotation = np.asarray([[math.cos(-angle), -math.sin(-angle)], [math.sin(-angle), math.cos(-angle)]])
+    centre = np.asarray([gap, 0.0]) - rotation @ nose_local
+    rear = teardrop(tuple(centre), radius, tip_ratio=tip_ratio, angle=-angle)
+    return ["front", "rear"], [front, rear]
+
+
 def peanut(
     center,
     radius: float,
@@ -452,6 +479,7 @@ CASES = {
     "narrow_gap_tip": narrow_gap_tip,
     "peanut_body": peanut_body,
     "skimming_tail": skimming_tail,
+    "tandem_foils": tandem_foils,
 }
 
 

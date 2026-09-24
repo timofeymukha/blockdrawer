@@ -245,9 +245,17 @@ them in the canvas widgets.
   are gates, every chain is its own patch, and an outer wall chain is reported
   as not banded. `wake.py` exposes an opt-in `--wake` construction: a straight
   wake separatrix from each sharp trailing edge through the body's ring to the
-  outer boundary, with the band continued as a two-sided wake band and the
-  far-field core cut open along it; trials are committed only as complete
-  admissible results and refusals keep their reasons under `medial.wakes`.
+  outer boundary - or, when the ring crossing lies on the branch between two
+  bodies, to the other body's band, where the stagnation gate is pinned and
+  the two wake fronts land a band width to either side as new band spokes -
+  with the band continued as a two-sided wake band and the far-field core cut
+  open along it; wakes are tried in passes so an upstream wake can follow a
+  downstream one; trials are committed only as complete admissible results
+  and refusals keep their reasons under `medial.wakes`. Feature anchors take
+  the closest ring point unless the outward ray's spoke is squarer by fifteen
+  degrees (corners always take the ray), and gates are cut until
+  neighbouring spoke lengths are within a factor of four; both rules moved
+  the default corpus and are documented as a re-baseline in the README.
   `cgrid.py` is the single-body C-grid producer: with `--wake` and a C-shaped
   far field it takes the body's gates from a layout of its own (band blocks
   without sliver corners at the band height, at most 45 degrees of wall

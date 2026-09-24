@@ -121,14 +121,50 @@ class WakeConstructionTests(unittest.TestCase):
         baseline = run_teardrop(CAVITY_FAST, outer=c_outer())
         self.assertGreater(result.graph.summary()["faces"], baseline.graph.summary()["faces"])
 
-    def test_wake_into_another_body_is_refused_with_a_reason(self):
+    def test_wake_into_another_body_lands_on_its_band(self):
+        """A wake that crosses the ring into another body's cell ends on that
+        body's band: the stagnation gate is pinned where the wake ray meets
+        the wall, and the two wake fronts become band spokes beside it."""
         result = run_case("sharp_bodies", WAKE)
-        self.assertTrue(result.admissible)
-        self.assertEqual(result.wakes.applied, [])
+        self.assertTrue(result.admissible, result.problems or result.failures)
         record = next(item for item in result.wakes.records if item["site"] == "tip")
-        self.assertIn("another body", record["reason"])
+        self.assertTrue(record["applied"], record.get("reason"))
+        self.assertEqual(record["target"]["kind"], "body")
+        self.assertEqual(record["target"]["site"], "disk")
+        landing = record["landing_stations"]
+        total = result.domain.holes[1].length
+        self.assertLess(0.0, (landing["gate"] - landing["in"]) % total)
+        self.assertLess((landing["gate"] - landing["in"]) % total, (landing["out"] - landing["in"]) % total)
+        graph = result.graph
+        wake_edges = [edge for edge in graph.edges.values() if edge.role == "wake"]
+        self.assertEqual(len(wake_edges), 2)
+        landings = [key for key in graph.vertices if key[0] == "wake" and key[1] == record["target"]["cell"]]
+        self.assertEqual(len(landings), 4)
         baseline = run_case("sharp_bodies", CAVITY_FAST)
-        self.assertEqual(result.graph.summary(), baseline.graph.summary())
+        self.assertNotEqual(result.graph.summary(), baseline.graph.summary())
+
+    def test_tandem_foils_get_both_wakes(self):
+        """The rung between the single airfoil and 30P30N: the front foil's
+        wake ends on the rear foil's band, the rear foil's wake leaves for the
+        far field, and the two are accepted in either order."""
+        names, loops = cases.tandem_foils()
+        key = ("tandem", repr(WAKE))
+        if key not in _RUNS:
+            _RUNS[key] = pipeline.run_external(names, loops, WAKE)
+        result = _RUNS[key]
+        self.assertTrue(result.admissible, result.problems or result.failures)
+        by_site = {item["site"]: item for item in result.wakes.records}
+        self.assertTrue(by_site["front"]["applied"], by_site["front"].get("reason"))
+        self.assertTrue(by_site["rear"]["applied"], by_site["rear"].get("reason"))
+        self.assertEqual(by_site["front"]["target"]["kind"], "body")
+        self.assertEqual(by_site["front"]["target"]["site"], "rear")
+        self.assertEqual(by_site["rear"]["target"]["kind"], "outer")
+        # The front wake lands at the rear nose, on the axis.
+        point = by_site["front"]["target"]["point"]
+        self.assertAlmostEqual(point[1], 0.0, places=6)
+        self.assertLess(point[0], 0.45)
+        wake_faces = [face for face in result.graph.faces if face.role == "wake"]
+        self.assertEqual(len(wake_faces), 8)
 
     def test_blunt_base_is_refused_at_both_corners(self):
         """Two convex corners a hundredth of the perimeter apart are one base."""

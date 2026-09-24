@@ -879,14 +879,40 @@ def wall_direction_components(graph: PatchGraph, components=None) -> list[dict]:
     records = []
     if components is None:
         components = constraint_components(graph)
+    # Edges of the wake band's faces: a component through them runs across
+    # the wake.
+    wake_edges: set = set()
+    for face in graph.faces:
+        if face.role != "wake":
+            continue
+        corners = list(face.corners)
+        for first, second in zip(corners, corners[1:] + corners[:1]):
+            try:
+                wake_edges.add(graph.edge_key(first, second))
+            except Exception:  # pragma: no cover - a face always has its edges
+                continue
     for index, keys in enumerate(components):
         tangent = [key for key in keys if key in tangents]
         normal = [key for key in keys if key in normals]
+        tangential_chains = sorted({name for key in tangent for name in tangents[key]})
+        normal_chains = sorted({name for key in normal for name in normals[key]})
+        # A wake band that lands on another body carries the upstream band's
+        # normal count across the domain and around the downstream nose: the
+        # count across the wake is the count along the nose pieces, as in
+        # every C-grid the count across the wake cut is the count along the
+        # surface.  That is the construction, not a defect, and is reported
+        # apart from a coupling of one wall's own tangent and normal.
+        wake_landing = bool(
+            tangent and normal
+            and not set(tangential_chains) & set(normal_chains)
+            and any(key in wake_edges for key in keys)
+        )
         records.append({
             "component": index,
-            "couples_wall_tangential_and_normal": bool(tangent and normal),
-            "wall_tangential_chains": sorted({name for key in tangent for name in tangents[key]}),
-            "wall_normal_chains": sorted({name for key in normal for name in normals[key]}),
+            "couples_wall_tangential_and_normal": bool(tangent and normal) and not wake_landing,
+            "wake_landing_coupling": wake_landing,
+            "wall_tangential_chains": tangential_chains,
+            "wall_normal_chains": normal_chains,
             "wall_tangential_edge": [list(vertex) for vertex in tangent[0]] if tangent else None,
             "wall_normal_edge": [list(vertex) for vertex in normal[0]] if normal else None,
         })
@@ -965,6 +991,10 @@ def sizing_structure(graph: PatchGraph, *, reported: int = 6) -> dict:
         ),
         "wall_tangential_normal_couplings": sum(
             record["couples_wall_tangential_and_normal"] for record in records
+        ),
+        # Couplings a wake landing on another body makes on purpose.
+        "wake_landing_couplings": sum(
+            record.get("wake_landing_coupling", False) for record in records
         ),
         "band_core_depth_couplings": sum(
             record["ties_band_to_core_depth"] for record in records

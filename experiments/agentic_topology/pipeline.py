@@ -548,77 +548,100 @@ def _try_wakes(result: PipelineResult, settings: PipelineOptions) -> PipelineRes
     accepted: list[dict] = []
     notes: list[str] = []
     original_layout = result.layout
-    for record in records:
-        if not record["planned"]:
-            continue
-        if result.errors or result.solve.failures or not result.solve.converged:
-            record["planned"] = False
-            record["reason"] = "a wake requires a successful domain and medial layout stage"
-            continue
-        trial_records = [dict(item) for item in accepted + [record]]
-        for item in trial_records:
-            item["applied"] = False
-        trial = PipelineResult(
-            settings, "external", domain=result.domain, scale=result.scale,
-            sites=result.sites, diagram=result.diagram,
-            layout=copy.deepcopy(original_layout), solve=result.solve, metric=result.metric,
-            problems=list(result.domain.problems()), cgrid=result.cgrid,
+    # A wake refused in one pass is tried again after another was accepted:
+    # an upstream wake ending on a downstream body may fail only because the
+    # downstream body's own trailing edge still carries the seam wedge that
+    # its wake replaces.
+    queue = [record for record in records if record["planned"]]
+    passes = 0
+    while queue and passes < 3:
+        passes += 1
+        deferred: list[dict] = []
+        progressed = False
+        for record in queue:
+            outcome = _try_one_wake(result, settings, record, accepted, original_layout)
+            if outcome is None:
+                deferred.append(record)
+                continue
+            result, notes = outcome
+            progressed = True
+        if not progressed:
+            break
+        queue = deferred
+    for record in queue:
+        record["planned"] = False
+        record.setdefault("reason", "the wake was not accepted")
+    result.wakes = wake.WakeResult(result.graph, records, notes)
+    result.analysis = build_analysis(result)
+    return result
+
+
+def _try_one_wake(result, settings, record, accepted, original_layout):
+    """One wake trial; ``None`` when refused (the record carries the reason)."""
+    if result.errors or result.solve.failures or not result.solve.converged:
+        record["planned"] = False
+        record["reason"] = "a wake requires a successful domain and medial layout stage"
+        return None
+    trial_records = [dict(item) for item in accepted + [record]]
+    for item in trial_records:
+        item["applied"] = False
+    trial = PipelineResult(
+        settings, "external", domain=result.domain, scale=result.scale,
+        sites=result.sites, diagram=result.diagram,
+        layout=copy.deepcopy(original_layout), solve=result.solve, metric=result.metric,
+        problems=list(result.domain.problems()), cgrid=result.cgrid,
+    )
+    try:
+        if not settings.layer.enabled:
+            raise pg.GraphError("a wake continues a boundary-layer band; bands are disabled")
+        trial.wake_notes = wake.prepare(trial.layout, trial_records)
+        trial.assembly = external_topology.build_graph(
+            trial.layout, trial.domain, trial.metric, options=settings.layer,
+            wall_edge_style=settings.wall_edge_style, allow_scale=True,
         )
-        try:
-            if not settings.layer.enabled:
-                raise pg.GraphError("a wake continues a boundary-layer band; bands are disabled")
-            trial.wake_notes = wake.prepare(trial.layout, trial_records)
+        if trial.assembly.failures:
+            record["failures"] = trial.assembly.failures
+            raise pg.GraphError("the wake layout could not build every wall band")
+        # The band heights at the trailing edges are known now: slide any
+        # ring anchor out of the wake bands and rebuild once if needed.
+        moved = wake.make_room(trial.layout, trial_records, trial.assembly.fronts, settings.wake)
+        if moved:
+            trial.wake_notes.extend(moved)
             trial.assembly = external_topology.build_graph(
                 trial.layout, trial.domain, trial.metric, options=settings.layer,
                 wall_edge_style=settings.wall_edge_style, allow_scale=True,
             )
             if trial.assembly.failures:
                 record["failures"] = trial.assembly.failures
-                raise pg.GraphError("the wake layout could not build every wall band")
-            # The band heights at the trailing edges are known now: slide any
-            # ring anchor out of the wake bands and rebuild once if needed.
-            moved = wake.make_room(trial.layout, trial_records, trial.assembly.fronts, settings.wake)
-            if moved:
-                trial.wake_notes.extend(moved)
-                trial.assembly = external_topology.build_graph(
-                    trial.layout, trial.domain, trial.metric, options=settings.layer,
-                    wall_edge_style=settings.wall_edge_style, allow_scale=True,
-                )
-                if trial.assembly.failures:
-                    record["failures"] = trial.assembly.failures
-                    raise pg.GraphError("the wake layout could not build every wall band after making room")
-            written = wake.apply(
-                trial.layout, trial.assembly.graph, trial_records, trial.assembly.fronts,
-                wall_edge_style=settings.wall_edge_style,
-            )
-            refused = [item for item in written.records if not item["applied"]]
-            if refused:
-                record["failures"] = refused
-                raise pg.GraphError(refused[0]["reason"])
-            trial.graph = written.graph
-            trial.wakes = written
-            _finish(trial, replace(settings, evaluate_grid=True))
-            if not trial.admissible:
-                record["problems"] = trial.problems
-                record["errors"] = trial.errors
-                record["coverage"] = trial.coverage
-                record["grid"] = {
-                    "shape_inverted": None if trial.shape is None else trial.shape.inverted_cells,
-                    "counts_inverted": None if trial.grid is None else trial.grid.inverted_cells,
-                }
-                raise pg.GraphError("the complete wake failed coverage, export or sampled-grid validation")
-        except Exception as error:
-            record["planned"] = False
-            record["applied"] = False
-            record["reason"] = f"wake reverted, including its anchor: {_describe(error)}"
-            continue
-        record.update(written.records[-1])
-        accepted.append(dict(record))
-        notes = written.notes
-        result = trial
-    result.wakes = wake.WakeResult(result.graph, records, notes)
-    result.analysis = build_analysis(result)
-    return result
+                raise pg.GraphError("the wake layout could not build every wall band after making room")
+        written = wake.apply(
+            trial.layout, trial.assembly.graph, trial_records, trial.assembly.fronts,
+            wall_edge_style=settings.wall_edge_style,
+        )
+        refused = [item for item in written.records if not item["applied"]]
+        if refused:
+            record["failures"] = refused
+            raise pg.GraphError(refused[0]["reason"])
+        trial.graph = written.graph
+        trial.wakes = written
+        _finish(trial, replace(settings, evaluate_grid=True))
+        if not trial.admissible:
+            record["problems"] = trial.problems
+            record["errors"] = trial.errors
+            record["coverage"] = trial.coverage
+            record["grid"] = {
+                "shape_inverted": None if trial.shape is None else trial.shape.inverted_cells,
+                "counts_inverted": None if trial.grid is None else trial.grid.inverted_cells,
+            }
+            raise pg.GraphError("the complete wake failed coverage, export or sampled-grid validation")
+    except Exception as error:
+        record["applied"] = False
+        record["reason"] = f"wake reverted, including its anchor: {_describe(error)}"
+        return None
+    record.update(written.records[-1])
+    record.pop("reason", None)
+    accepted.append(dict(record))
+    return trial, written.notes
 
 
 def _try_spanning(result: PipelineResult, settings: PipelineOptions) -> PipelineResult:

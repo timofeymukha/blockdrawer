@@ -262,6 +262,29 @@ result can be read either way; the session is written whenever the result is
    section containing the removed gate; selecting the opposite arc can leave
    a clean graph but invert the exported grid.
 
+   **Anchors and graded gates.** A wall feature's anchor is the ring point
+   its spoke should end on. The closest ring point is the default, since the
+   spoke meets the ring squarely there, but it is not outward in general:
+   beside a second body the ring passes close behind a foil and the closest
+   ring point of its nose lay behind its tail, so the spoke would have run
+   through the body; in front of a far ring every nose station has the same
+   closest point; and a convex corner is the closest wall point of a whole
+   ring arc, so its closest ring point was arbitrary. So the outward ray -
+   the bisector of the two outward normals at the station - is cast to the
+   ring as well, and its crossing replaces the closest point when its
+   straight spoke is squarer to wall and ring by at least fifteen degrees
+   (`RAY_MARGIN`); a convex or reflex corner always takes the ray, the outer
+   boundary always keeps the closest point. And the spoke lengths at a
+   patch's two gates may differ by at most a factor of four
+   (`LayoutOptions.max_clearance_ratio`): leaving a narrow gap the clearance
+   grows quickly, and one block spanning a sliver of a spoke and a slab had a
+   band whose graded cells inverted; cutting until neighbouring spokes are
+   within the factor grades the gates out of the gap. Four rather than three
+   because a medial junction beside the gap of `two_circles` has 3.8 times
+   the gap's clearance, and a cut there was accepted or refused by the
+   raster's noise on the ring floor, which broke invariance under rotation. These two rules moved
+   the default corpus, deliberately: see *Corpus re-baseline* under Results.
+
    **Optional wake separatrix** (`wake.py`, `--wake`). The seam is the wrong
    element at a trailing edge: the flow leaves along the wake, so the two band
    blocks beside the edge should continue downstream as a two-sided *wake
@@ -283,12 +306,31 @@ result can be read either way; the session is written whenever the result is
    neighbouring ring anchor inside the wake band - a far-field corner whose
    closest ring point is just behind the edge, because the medial ring turns
    sharply there - is slid along its branch until the layout's ring separation
-   holds, and the bands are rebuilt once. A wake that would enter another
-   body's cell, cross another medial branch, leave the feature's sector, or
-   meet the outer boundary across a chain break is refused with its reason,
-   and a trial is committed only when the complete result passes coverage,
-   session emission and both sampled grids; otherwise the annular construction
-   stays exactly as it was.
+   holds, and the bands are rebuilt once. A wake whose ring crossing lies on
+   the branch between two bodies ends on the other body's band instead of
+   the outer boundary (`target.kind` is `body`): the wake anchor pins the
+   trailing edge on one body and the stagnation station - where the wake ray
+   meets the wall - on the other, so the annular producer gives the second
+   body a gate there whose spoke is the wake line beyond the ring; the two
+   wake fronts cross the ring and land on that body's front a band width to
+   either side of its front vertex, placed along the front rather than by
+   continuing the straight fronts, since the wake meets the body along its
+   normal, not along the wake direction; each landing point gets a band
+   spoke to the wall, so the wake band wraps the nose as an embedded C-grid
+   does, in twelve faces. Optional anchors that would crowd the wake anchor
+   on the ring, or the landing gates on the wall, are dropped when the wake
+   anchor is pinned. The count across the wake is then the count along the
+   two nose pieces, as in every C-grid the count across the wake cut is the
+   count along the surface; the structure report lists it as a
+   `wake_landing_coupling`, not as a wall coupling. Wakes are tried in
+   passes: one refused because the downstream body's own trailing edge still
+   carried its seam wedge is tried again once that body's wake is accepted.
+   A wake that would cross another medial branch, leave the feature's
+   sector, meet the outer boundary across a chain break, or land where the
+   downstream body has no room beside the stagnation gate is refused with
+   its reason, and a trial is committed only when the complete result passes
+   coverage, session emission and both sampled grids; otherwise the annular
+   construction stays exactly as it was.
 
    **Single-body C-grid** (`cgrid.py`, with `--wake` and a C-shaped far
    field). For one body with one sharp trailing edge the medial ring is the
@@ -601,16 +643,17 @@ far-field patches beside the wake slivers with a length ratio above 200. The
 wake band is as thick as the band at the tip, 0.037 here, because the
 clearance cap thins the band at a sharp convex feature.
 
-Every other fixture keeps its annular construction under `--wake`, each with
-a reason: the teardrop tips of `sharp_bodies` and `narrow_gap_tip` point at
-the other body, so their wake would cross the ring into that body's cell; on
-30P30N the slat's trailing edge and cusp and the main's trailing edge and cove
-lip all point into the next element, and the flap's trailing edge is *blunt* -
-a second convex corner 0.0048 along the wall - which needs a base template
-rather than a wake from one corner. 30P30N therefore stays at 116 blocks and
-the same four problems with `--wake`. A truncated teardrop with a 0.01 base is
-refused at both corners the same way; the same body with a sharp tip is
-resolved.
+When this was measured every other fixture kept its annular construction
+under `--wake`, each with a reason: the teardrop tips of `sharp_bodies` and
+`narrow_gap_tip` point at the other body, so their wake would cross the ring
+into that body's cell - a wake that now ends on that body's band, see *Tandem
+foils* below; on 30P30N the slat's trailing edge and cusp and the main's
+trailing edge and cove lip all point into the next element, and the flap's
+trailing edge is *blunt* - a second convex corner 0.0048 along the wall -
+which needs a base template rather than a wake from one corner. 30P30N
+therefore stayed at 116 blocks and the same four problems with `--wake`. A
+truncated teardrop with a 0.01 base is refused at both corners the same way;
+the same body with a sharp tip is resolved.
 
 Two layout rules came out of this work and hold for every run. A curvature
 peak within two resampling steps of a sharp corner is the corner's own peak
@@ -618,6 +661,68 @@ and is not a separate anchor; and pinned gates crowd each other through the
 unpinned gates between them, so the gate relaxation now measures the whole run
 between consecutive pins. Wake and chain-break pins are never released by
 that relaxation. No default fixture changed under either rule.
+
+### Tandem foils (two-body wake landing)
+
+```bash
+make research-tandem      # --case tandem_foils --wake, circle far field
+```
+
+`synthetic_cases.tandem_foils`: two sharp-tailed foils of chord one (teardrops
+with the tip three radii behind the centre, 39-degree tips), the front one on
+the axis with its tail at the origin, the rear one's nose 0.4 chords behind
+that tail and the rear foil turned ten degrees nose-up about its nose, so the
+front foil's wake, leaving the tail along the axis, arrives at the rear nose.
+The rung between the single airfoil and 30P30N: an upstream wake that ends on
+a downstream body, and a downstream wake that leaves at an angle.
+
+| far field | blocks | front wake | rear wake | verdict |
+| --- | --- | --- | --- | --- |
+| circle, default scale, no wake | 61 | - | - | admissible; 84.5 degrees non-orthogonality and 70.5 degrees misalignment at the front tail's seam |
+| circle, default scale, `--wake` | 61 | **on the rear foil's band** | to the far field | **admissible**, sizing feasible; 71.0 degrees of non-orthogonality in one core block at the upper medial junction, a degree over the target |
+| C-shape, radius 4 about (1, 0), `--wake` | 70 | refused | applied | admissible, not resolved |
+
+Before the anchor rule above the circle case did not build at all: the gates
+on the front foil advanced 1.72 times around its wall, because the closest
+ring points of its nose stations lay on the branch between the bodies, behind
+its tail. With the C-shaped far field the front wake is refused at the layout
+stage - "the wall of 'rear' is too short for 6 separated gates in one run":
+the four chain breaks of the far field have their closest rear-foil points at
+its tail, and with the rear wake pinned there the run between the pins cannot
+hold them. That is the annular far field's limit, the one the single-body
+C-grid escapes by building its outer core as level sets; a hull-level-set far
+field for several bodies is the next step, not a wake defect. `sharp_bodies`
+under `--wake` now lands the tip's wake on the disk obliquely (42 blocks,
+admissible, 85 degrees of non-orthogonality at the landing); `narrow_gap_tip`
+refuses it with the reason that the blocker has no room beside the landing
+gate for a band 0.034 wide, its front section on one side being 0.020 long.
+
+### Corpus re-baseline (outward anchors, clearance-graded gates)
+
+The anchor rule and the clearance-jump rule moved six default fixtures. Every
+fixture is admissible after the change, `skimming_tail` for the first time
+and `four_bodies` now resolved; `concave_and_convex` keeps its 42 blocks with
+a poorer apex block in the cove, which the pocket construction planned for
+30P30N is meant to replace. Default options; before is the committed state
+`89aa41b`.
+
+| fixture | blocks before → after | admissible | resolved | non-orthogonality | wall misalignment | min. scaled Jacobian |
+| --- | --- | --- | --- | --- | --- | --- |
+| `single_ellipse` | 12 → 12 | yes → yes | no → no | 38.4 → 38.4 | 29.5 → 29.5 | 0.78 → 0.78 |
+| `two_circles` | 32 → 32 | yes → yes | yes → yes | 64.9 → 64.9 | 6.9 → 6.9 | 0.43 → 0.43 |
+| `three_rotated_ellipses` | 89 → 87 | yes → yes | no → no | 74.6 → 79.6 | 23.2 → 19.8 | 0.27 → 0.18 |
+| `concave_and_convex` | 34 → 42 | yes → yes | no → no | 81.5 → 88.3 | 31.3 → 39.0 | 0.15 → 0.03 |
+| `four_bodies` | 53 → 56 | yes → yes | no → **yes** | 65.2 → 64.2 | 14.5 → 16.7 | 0.42 → 0.43 |
+| `sharp_bodies` | 33 → 45 | yes → yes | no → no | 75.7 → 75.7 | 15.3 → 9.5 | 0.25 → 0.25 |
+| `narrow_gap_tip` | 41 → 57 | yes → yes | no → no | 69.3 → 69.8 | 15.8 → 21.7 | 0.35 → 0.35 |
+| `peanut_body` | 24 → 24 | yes → yes | no → no | 76.4 → 75.9 | 40.3 → 40.3 | 0.23 → 0.24 |
+| `skimming_tail` | 26 → 56 | **no → yes** | no → no | - → 67.4 | - → 67.4 | - → 0.38 |
+| `straight_channel` | 48 → 48 | yes → yes | yes → yes | 0 → 0 | 0 → 0 | 1.0 → 1.0 |
+| `periodic_hill` | 33 → 33 | yes → yes | yes → yes | 29.2 → 29.2 | 21.2 → 21.2 | 0.87 → 0.87 |
+
+30P30N goes from 116 blocks with an invalid topology to 112 blocks whose
+topology is valid but whose counted grid has 14 inverted cells; inadmissible
+either way. The A-airfoil C-grid is unchanged at 125 blocks, resolved.
 
 ### Gap spanning checkpoint (opt-in)
 
@@ -658,7 +763,7 @@ OpenFOAM 2606 also accepts that session: `blockMesh` produces 3,145 cells,
 non-orthogonality 59.58 degrees, skewness 0.495 and aspect ratio 80.71. The
 production suite runs 410 tests (27 integration tests skipped there); those
 27 pass separately against OpenFOAM. The research suite runs 113 tests with
-the existing one expected failure for `skimming_tail`.
+the former expected failure for `skimming_tail`, which now passes.
 
 The physical coupling audit corrects a false rejection at the previous
 checkpoint. The mouth puts a cross-gap `core_rung`, the merged `ring`, and a

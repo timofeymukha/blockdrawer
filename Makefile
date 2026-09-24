@@ -1,5 +1,5 @@
 .PHONY: run test integration-test check research-test research-30p30n \
-        research-periodic-hill research-cases research-a-airfoil
+        research-periodic-hill research-cases research-a-airfoil research-tandem
 
 PYTHON ?= python3
 OPENFOAM_IMAGE ?= /tmp/timofey/code/openfoam-apptainer/openfoam-2606.sif
@@ -34,7 +34,7 @@ research-periodic-hill:
 research-cases:
 	for case in single_ellipse two_circles three_rotated_ellipses \
 	            concave_and_convex four_bodies sharp_bodies \
-	            narrow_gap_tip peanut_body skimming_tail \
+	            narrow_gap_tip peanut_body skimming_tail tandem_foils \
 	            straight_channel periodic_hill; do \
 	    $(PYTHON) $(RESEARCH)/research_cli.py run --case $$case \
 	        --json $(RESEARCH_OUTPUT)/$$case.json \
@@ -55,6 +55,16 @@ research-a-airfoil:
 		--session $(RESEARCH_OUTPUT)/a-airfoil-session.json \
 		--session-render $(RESEARCH_OUTPUT)/a-airfoil-session.png \
 		--block-mesh-dict $(RESEARCH_OUTPUT)/a-airfoil-blockMeshDict
+
+# Two sharp-tailed foils in tandem, the rear one turned ten degrees: the
+# front foil's wake ends on the rear foil's band, the rear foil's wake leaves
+# for the far field.  The rung between the single airfoil and 30P30N.
+research-tandem:
+	$(PYTHON) $(RESEARCH)/research_cli.py run --case tandem_foils --wake \
+		--output $(RESEARCH_OUTPUT)/tandem_foils.png \
+		--json $(RESEARCH_OUTPUT)/tandem_foils.json \
+		--session $(RESEARCH_OUTPUT)/tandem_foils-session.json \
+		--session-render $(RESEARCH_OUTPUT)/tandem_foils-session.png
 
 research-30p30n:
 	$(PYTHON) $(RESEARCH)/fetch_30p30n.py

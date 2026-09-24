@@ -452,19 +452,120 @@ def chain_anchors(diagram: Diagram, cells: list[Cell]) -> list[Anchor]:
 def anchor_from_wall(
     diagram: Diagram, cell: Cell, wall_station: float, kind: str
 ) -> Anchor | None:
-    """Project a wall station outwards onto the cell ring, keeping the gate."""
+    """Anchor a wall station on the cell ring where its spoke is squarest.
+
+    Two candidates: the closest ring point, where the spoke meets the ring
+    squarely, and the first ring crossing of the station's outward ray -
+    the bisector of the two outward normals: the normal on a smooth wall,
+    the exterior bisector at a convex corner, the mitre direction at a
+    reflex one - where the spoke leaves the wall squarely.  The one whose
+    straight spoke deviates least from both normals, judged by the larger
+    of its two deviations, is taken.  Near a ring that follows the wall the
+    two agree; beside a second body, where the ring passes close behind a
+    foil and the closest ring point of its nose lay behind its tail, and in
+    front of a far ring, where every nose station has the same closest ring
+    point, the ray wins.  A convex or reflex corner always takes the ray,
+    since its closest point is one of a whole arc; the outer boundary always
+    keeps the closest point, since its ring is in front of every station.
+    """
     site = diagram.sites[cell.site]
     point = site.curve.point_at(wall_station)
-    best: tuple[float, int, float] | None = None
+    closest: tuple[float, int, float] | None = None
     for step in cell.steps:
         branch = diagram.branches[step.branch]
         result = g2.closest_on_polyline(branch.path, np.asarray([point]))
         distance = float(result.distance[0])
-        if best is None or distance < best[0]:
-            best = (distance, step.branch, float(result.arclength[0]))
-    if best is None:
+        if closest is None or distance < closest[0]:
+            closest = (distance, step.branch, float(result.arclength[0]))
+    if closest is None:
         return None
-    return Anchor(best[1], best[2], kind, None, (cell.site, wall_station))
+    direction = outward_direction(site, wall_station)
+    if site.curve.kind != "wall" or direction is None:
+        return Anchor(closest[1], closest[2], kind, None, (cell.site, wall_station))
+    hit: tuple[float, int, float] | None = None
+    for step in cell.steps:
+        branch = diagram.branches[step.branch]
+        for t, arclength in _ray_polyline_hits(point, direction, branch.path):
+            if hit is None or t < hit[0]:
+                hit = (t, step.branch, arclength)
+    if hit is None:
+        chosen = closest
+    elif kind in ("corner", "reflex"):
+        chosen = hit
+    else:
+        # The closest point is the default; the ray replaces it only when it
+        # is clearly squarer.  Where both are nearly square the choice is
+        # immaterial to the spoke but not to the gate's exact station, and a
+        # band front at a blunt tip is sensitive to that.
+        closest_deviation = _spoke_deviation(diagram, point, direction, closest[1], closest[2])
+        ray_deviation = _spoke_deviation(diagram, point, direction, hit[1], hit[2])
+        chosen = hit if ray_deviation + RAY_MARGIN < closest_deviation else closest
+    return Anchor(chosen[1], chosen[2], kind, None, (cell.site, wall_station))
+
+
+# The outward ray replaces the closest ring point as a station's anchor only
+# when its spoke is squarer by at least this much.
+RAY_MARGIN = math.radians(15.0)
+
+
+def _spoke_deviation(diagram: Diagram, point, direction, branch_index: int, arclength: float) -> float:
+    """The larger of the straight spoke's angles to the wall and ring normals."""
+    path = diagram.branches[branch_index].path
+    ring_point = g2.sample_at_arclength(path, [arclength])[0]
+    spoke = ring_point - point
+    length = float(np.linalg.norm(spoke))
+    if length <= 0.0:
+        return math.pi
+    spoke = spoke / length
+    total = g2.total_length(path)
+    step = max(1.0e-3 * total, 1.0e-12)
+    before, after = g2.sample_at_arclength(
+        path, [max(arclength - step, 0.0), min(arclength + step, total)]
+    )
+    tangent = after - before
+    norm = float(np.linalg.norm(tangent))
+    ring_deviation = 0.0 if norm <= 0.0 else abs(math.asin(max(-1.0, min(1.0, float(np.dot(spoke, tangent / norm))))))
+    wall_deviation = math.acos(max(-1.0, min(1.0, float(np.dot(spoke, direction)))))
+    return max(wall_deviation, ring_deviation)
+
+
+def outward_direction(site: Site, wall_station: float) -> np.ndarray | None:
+    """Unit bisector of the outward (fluid-side) normals just before and after a station."""
+    total = site.curve.length()
+    step = 1.0e-6 * total
+    before = site.curve.fluid_normal((wall_station - step) % total)
+    after = site.curve.fluid_normal((wall_station + step) % total)
+    direction = before + after
+    norm = float(np.linalg.norm(direction))
+    if norm <= 1.0e-9:
+        direction = before
+        norm = float(np.linalg.norm(direction))
+        if norm <= 0.0:
+            return None
+    return direction / norm
+
+
+def _ray_polyline_hits(origin, direction, poly) -> list[tuple[float, float]]:
+    """Ray crossings of a polyline as ``(distance along the ray, arc length)``."""
+    poly = np.asarray(poly, dtype=np.float64)
+    if len(poly) < 2:
+        return []
+    origin = np.asarray(origin, dtype=np.float64)
+    direction = np.asarray(direction, dtype=np.float64)
+    a = poly[:-1]
+    e = poly[1:] - poly[:-1]
+    denominator = direction[0] * e[:, 1] - direction[1] * e[:, 0]
+    w = a - origin[None, :]
+    safe = np.where(np.abs(denominator) > 0.0, denominator, 1.0)
+    t = (w[:, 0] * e[:, 1] - w[:, 1] * e[:, 0]) / safe
+    u = (w[:, 0] * direction[1] - w[:, 1] * direction[0]) / safe
+    lengths = np.linalg.norm(e, axis=1)
+    scale = float(np.max(np.abs(poly))) + 1.0
+    valid = (np.abs(denominator) > 1e-14 * scale) & (t > 1e-12 * scale) & (u >= 0.0) & (u < 1.0)
+    cumulative = np.concatenate(([0.0], np.cumsum(lengths)))
+    return [
+        (float(t[i]), float(cumulative[i] + u[i] * lengths[i])) for i in np.flatnonzero(valid)
+    ]
 
 
 class AnchorSet:
@@ -923,6 +1024,17 @@ class LayoutOptions:
     # Judge the anchor floor against the wall gap as well as the clearance
     # (see ``AnchorSet``): for a producer whose core is not built on the ring.
     floor_by_wall_gap: bool = False
+    # The spoke lengths at a patch's two gates may differ by at most this
+    # factor.  Leaving a narrow gap the clearance grows quickly, and one
+    # block spanning a spoke of a fiftieth of the body and one of half of
+    # it has a band that is a sliver at one end and a slab at the other;
+    # its graded cells invert.  Cutting until neighbouring spokes are within
+    # the factor grades the gates out of the gap geometrically.  Four, not
+    # three: a medial junction beside a gap between two circles has 3.8
+    # times the gap's clearance, and a cut there was accepted or refused by
+    # the raster's noise on the ring floor, which broke invariance under
+    # rotation; a jump of four is the narrow-gap case this rule is for.
+    max_clearance_ratio: float = 4.0
     ring_separation: float = 0.5
     gate_balance: float = 0.35
     corner_turn: float = math.radians(45.0)
@@ -1053,6 +1165,14 @@ def build_layout(diagram: Diagram, options: LayoutOptions | None = None) -> Layo
             site = diagram.sites[patch.site]
             return turning_limit if site.curve.kind == "wall" else settings.max_wall_turning
 
+        def clearance_jump(patch: Patch) -> float:
+            if diagram.sites[patch.site].curve.kind != "wall":
+                return 1.0
+            ends = (cuts[patch.cell][patch.first_cut], cuts[patch.cell][patch.second_cut])
+            low = min(cut.clearance for cut in ends)
+            high = max(cut.clearance for cut in ends)
+            return high / low if low > 0.0 else 1.0
+
         pending = [
             patch
             for patch in patches
@@ -1060,6 +1180,7 @@ def build_layout(diagram: Diagram, options: LayoutOptions | None = None) -> Layo
             or patch.wall_turning() > wall_limit_of(patch)
             or patch.ring_turning() > settings.max_ring_turning
             or band_defect(patch) > 0.0
+            or clearance_jump(patch) > settings.max_clearance_ratio
         ]
         if not pending:
             break

@@ -1850,9 +1850,13 @@ class RegressionFixtureTests(unittest.TestCase):
             ) or bool(result.problems)
             self.assertTrue(located, (result.failures, result.problems))
 
-    @unittest.expectedFailure
-    def test_the_skimming_tail_is_not_yet_admissible(self):
-        """Flip this test when both bands fit into the slot."""
+    def test_the_skimming_tail_is_admissible(self):
+        """Both bands fit into the slot since gates are graded out of it.
+
+        The clearance-jump rule cuts a patch whose two spokes differ by more
+        than a factor of four, so the hull's band beside the tail is no
+        longer one block from a sliver of a spoke to a slab; this fixture was
+        the one expected failure of the suite until then."""
         result = run_case("skimming_tail", CAVITY_FAST)
         self.assertTrue(result.admissible, (result.failures, result.problems[:2]))
 
