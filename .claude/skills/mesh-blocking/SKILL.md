@@ -67,6 +67,15 @@ case you are in.
   far field the annular construction still fails at the downstream foil's
   tail, where the far-field chain gates crowd it - that is the far-field
   limit, not the wake's.
+- **Several bodies with a far field many chords away**: add `--hull`. The
+  engine then builds the near field inside the cluster's level set (the
+  hull, six band heights out) with the annular construction and grows the
+  far field as level sets of the whole cluster beyond it, cut open along the
+  wake that leaves the cluster; the medial ring no longer sits at half the
+  far-field distance and the far field's chain breaks no longer gate the
+  bodies. Tandem foils at fifteen chords in a C-shaped far field build this
+  way with both wakes (`make research-tandem-15c`); the reason for a refusal
+  is under `medial.hull`.
 - **Blunt base** (two convex corners within about one percent of the
   perimeter): a base template - the base is a wall edge whose block continues
   downstream as the wake core, and the two corner spokes bound the wake band.

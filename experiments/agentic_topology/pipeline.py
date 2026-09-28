@@ -37,6 +37,7 @@ import sites as site_module
 import sizing
 import spanned
 import cgrid
+import hull as hull_module
 import sweep as sweep_module
 import voronoi_graph
 import wake
@@ -94,6 +95,10 @@ class PipelineOptions:
     span: spanned.SpanOptions = field(default_factory=spanned.SpanOptions)
     wake: wake.WakeOptions = field(default_factory=wake.WakeOptions)
     cgrid: cgrid.CGridOptions = field(default_factory=cgrid.CGridOptions)
+    # Hull far field for several bodies: the near field is the annular
+    # construction inside the cluster's level set, the far field its level
+    # sets beyond it (``hull.py``).
+    hull: hull_module.HullOptions = field(default_factory=hull_module.HullOptions)
 
 
 @dataclass
@@ -117,6 +122,7 @@ class PipelineResult:
     wakes: wake.WakeResult | None = None
     wake_notes: list = field(default_factory=list)
     cgrid: dict | None = None
+    hull: dict | None = None
     cavity: object | None = None
     graph: pg.PatchGraph | None = None
     metric: sizing.SizeMetric | None = None
@@ -308,6 +314,10 @@ def run_external(names, loops, options: PipelineOptions | None = None, *, outer=
         result.errors.append({"stage": "domain", "error": _describe(error)})
         result.analysis = build_analysis(result)
         return result
+    if settings.hull.enabled:
+        built = _try_hull(result, names, loops, settings)
+        if built is not None:
+            return built
     try:
         result.diagram = voronoi_graph.build_diagram(
             result.sites, scale=result.scale, grid_width=settings.grid_width
@@ -344,6 +354,104 @@ def run_external(names, loops, options: PipelineOptions | None = None, *, outer=
     if settings.span.enabled and result.layout is not None and result.metric is not None:
         result = _try_spanning(result, settings)
     return result
+
+
+def _try_hull(result: PipelineResult, names, loops, settings: PipelineOptions):
+    """The hull far field: near field inside the cluster's level set, levels beyond.
+
+    Returns the complete admissible result, or ``None`` with the reason
+    recorded under ``result.hull`` so the annular construction runs instead.
+    """
+    record: dict = {"attempted": False, "applied": False}
+    result.hull = record
+    if result.domain is None or result.domain.hole_count < 2:
+        record["reason"] = "the hull far field is for two or more bodies; one body is the C-grid's case"
+        return None
+    try:
+        metric = _metric(result.domain, settings)
+        # The requested band height follows the domain scale by default, far
+        # field included; the hull is a near-field construct, so it is capped
+        # by the body frame's radius.
+        _centre, radius = site_module.domain_frame(loops)
+        height = min(settings.hull.height_ratio * metric.layer_height, float(radius))
+        hull_points = None
+        for _attempt in range(4):
+            try:
+                hull_points = hull_module.cluster_level_set(loops, height, resolution=settings.hull.resolution)
+                break
+            except hull_module.HullError as error:
+                record.setdefault("notes", []).append(f"height {height:.4g}: {error}")
+                height *= 1.5
+        if hull_points is None:
+            raise hull_module.HullError("no single hull around every body up to five times the requested height")
+        record.update({"attempted": True, "hull_height": float(height), "hull_points": len(hull_points) - 1})
+        # The near field is built as the C-grid builds its band: the band
+        # height is a geometric input of the layout (sliver-free band
+        # blocks, at most 45 degrees of wall turning per block) and the
+        # inscribed-disk cap is off, since this producer is handed the band
+        # height.  The hull carries the outer boundary's chains, at the same
+        # fractions, so a closed far field maps chain onto chain.
+        near_settings = replace(
+            settings,
+            hull=replace(settings.hull, enabled=False),
+            layer_height=metric.layer_height,
+            layout=replace(
+                settings.layout,
+                band_height=metric.layer_height if settings.layer.enabled else None,
+                max_band_turning=settings.layout.max_band_turning if settings.layout.max_band_turning is not None else math.radians(45.0),
+            ),
+            layer=replace(settings.layer, inscribed_cap=False),
+        )
+        hull_points = hull_module.align_start(hull_points, result.sites[-1].curve.point_at(0.0))
+        hull_chains = hull_module.mirrored_chains(hull_points, result.sites[-1])
+        record["hull_chains"] = [name for name, _role, _points in hull_chains]
+        near = run_external(names, loops, near_settings, outer=hull_chains)
+        record["near"] = {
+            "blocks": None if near.graph is None else len(near.graph.faces),
+            "admissible": near.admissible,
+            "wakes": None if near.wakes is None else [
+                {"site": item["site"], "applied": item["applied"], "target": (item.get("target") or {}).get("kind"), "reason": item.get("reason")}
+                for item in near.wakes.records
+            ],
+        }
+        if not near.admissible:
+            record["near"]["problems"] = near.problems[:4]
+            record["near"]["failures"] = near.failures[:4]
+            record["near"]["errors"] = near.errors[:4]
+            raise hull_module.HullError("the near field inside the hull is not admissible")
+        outer_site = result.sites[-1]
+        built = hull_module.extend(
+            near, result.domain, outer_site, loops, hull_points=hull_points, hull_height=height,
+            options=settings.hull, wall_edge_style=settings.wall_edge_style,
+        )
+        trial = PipelineResult(
+            settings, "external", domain=result.domain, scale=result.scale, sites=result.sites,
+            diagram=near.diagram, layout=near.layout, solve=near.solve, metric=metric,
+            problems=list(result.domain.problems()), assembly=near.assembly, wakes=near.wakes,
+            cavity=near.cavity, cgrid=near.cgrid,
+        )
+        trial.graph = built.graph
+        trial.wake_notes = list(near.wake_notes)
+        _finish(trial, replace(settings, evaluate_grid=True))
+        record.update(built.record)
+        record["notes"] = record.get("notes", []) + built.notes
+        if not trial.admissible:
+            record["problems"] = trial.problems[:6]
+            record["errors"] = trial.errors[:4]
+            record["coverage"] = trial.coverage
+            record["grid"] = {
+                "shape_inverted": None if trial.shape is None else trial.shape.inverted_cells,
+                "counts_inverted": None if trial.grid is None else trial.grid.inverted_cells,
+                "worst_cells": [] if trial.shape is None else trial.shape.worst_cells[:4],
+            }
+            raise hull_module.HullError("the hull far field failed coverage, export or sampled-grid validation")
+    except Exception as error:
+        record["reason"] = f"hull far field reverted: {_describe(error)}"
+        return None
+    record["applied"] = True
+    trial.hull = record
+    trial.analysis = build_analysis(trial)
+    return trial
 
 
 def _cgrid_layout(result: PipelineResult, settings: PipelineOptions):
@@ -1254,6 +1362,7 @@ def _medial_section(result: PipelineResult) -> dict | None:
         + ([] if result.spanning is None else result.spanning.notes),
         "wakes": None if result.wakes is None else result.wakes.records,
         "cgrid": result.cgrid,
+        "hull": result.hull,
         "wake_options": {
             "enabled": result.options.wake.enabled,
             "fluid_angle": result.options.wake.fluid_angle,

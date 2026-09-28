@@ -41,6 +41,7 @@ import agent_ops  # noqa: E402
 import analysis_plot  # noqa: E402
 import block_layout  # noqa: E402
 import fan_cavity  # noqa: E402
+import hull as hull_module  # noqa: E402
 import patch_graph as pg  # noqa: E402
 import layers as layer_module  # noqa: E402
 import pipeline  # noqa: E402
@@ -134,6 +135,18 @@ def add_input_arguments(parser: argparse.ArgumentParser) -> None:
             "rejected trials roll back"
         ),
     )
+    parser.add_argument(
+        "--hull", action="store_true",
+        help=(
+            "for two or more bodies, build the far field from the level sets of "
+            "the whole cluster: the annular near field inside the cluster's level "
+            "set at --hull-height-ratio band heights, level sets growing by "
+            "--hull-growth beyond it, spokes to the outer boundary; falls back to "
+            "the annular construction with the reason under medial.hull"
+        ),
+    )
+    parser.add_argument("--hull-height-ratio", type=float, default=6.0, help="hull height in band heights")
+    parser.add_argument("--hull-growth", type=float, default=2.0, help="height ratio between hull level sets")
     parser.add_argument(
         "--wake-direction", type=parse_direction, default=None, metavar="DX,DY",
         help="fixed wake direction for every wake instead of each feature's bisector",
@@ -260,6 +273,11 @@ def build_options(arguments) -> pipeline.PipelineOptions:
         choices.append((feature, template))
     return pipeline.PipelineOptions(
         span=spanned.SpanOptions(enabled=arguments.span_gaps),
+        hull=hull_module.HullOptions(
+            enabled=arguments.hull,
+            height_ratio=arguments.hull_height_ratio,
+            growth=arguments.hull_growth,
+        ),
         wake=wake.WakeOptions(
             enabled=arguments.wake,
             direction=arguments.wake_direction,

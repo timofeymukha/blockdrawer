@@ -266,6 +266,16 @@ them in the canvas widgets.
   the annular result only as a complete admissible result, and the annular
   construction keeps the layout its own options build. Its acceptance case is the
   A-airfoil at fifteen chords (`make research-a-airfoil`, `test_a_airfoil.py`).
+  `hull.py` is the opt-in `--hull` far field for two or more bodies: the
+  hull is the cluster's wall-distance level set at six band heights (capped
+  by the body frame), carrying the outer boundary's chains at the same
+  fractions; the near field is the annular construction with the hull as its
+  outer boundary and the C-grid's band settings; beyond it the cluster's
+  level sets at growing heights carry the hull's vertices outward and join
+  the outer boundary by spokes - cut open along one exit wake's band to the
+  outlet, C-grid style, or closed and mapped chain onto chain. The whole
+  graph is validated with the real domain; refusals keep their reason under
+  `medial.hull` and the annular construction runs instead.
   `spanned.py` exposes an opt-in `--span-gaps` construction: mutually facing
   mouths replace a narrow body-body medial branch with one core strip and
   dissolve its two junctions into valence-five front vertices. Trials include

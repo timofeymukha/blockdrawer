@@ -1,5 +1,6 @@
 .PHONY: run test integration-test check research-test research-30p30n \
-        research-periodic-hill research-cases research-a-airfoil research-tandem
+        research-periodic-hill research-cases research-a-airfoil research-tandem \
+        research-tandem-15c
 
 PYTHON ?= python3
 OPENFOAM_IMAGE ?= /tmp/timofey/code/openfoam-apptainer/openfoam-2606.sif
@@ -65,6 +66,18 @@ research-tandem:
 		--json $(RESEARCH_OUTPUT)/tandem_foils.json \
 		--session $(RESEARCH_OUTPUT)/tandem_foils-session.json \
 		--session-render $(RESEARCH_OUTPUT)/tandem_foils-session.png
+
+# The same tandem at fifteen chords in a C-shaped far field, through the hull
+# far field: the annular near field inside the cluster's level set, level
+# sets beyond it, the rear wake's band to the outlet.
+research-tandem-15c:
+	$(PYTHON) $(RESEARCH)/research_cli.py run --case tandem_foils --wake --hull \
+		--farfield-shape cshape --farfield-radius 15 --farfield-center 1,0 \
+		--layer-height 0.15 \
+		--output $(RESEARCH_OUTPUT)/tandem_foils-15c.png \
+		--json $(RESEARCH_OUTPUT)/tandem_foils-15c.json \
+		--session $(RESEARCH_OUTPUT)/tandem_foils-15c-session.json \
+		--session-render $(RESEARCH_OUTPUT)/tandem_foils-15c-session.png
 
 research-30p30n:
 	$(PYTHON) $(RESEARCH)/fetch_30p30n.py

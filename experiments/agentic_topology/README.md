@@ -377,6 +377,43 @@ result can be read either way; the session is written whenever the result is
    also smooths real bends - a cove's band folded with it - and the C-grid's
    levels, judged between fronts after the arc-length mapping, do not need it.
 
+   **Hull far field** (`hull.py`, `--hull`, two or more bodies). The annular
+   construction is right between bodies and wrong far from them: with the
+   far field at fifteen chords its one medial ring sits seven chords out,
+   every core block is a pie slice, and the far field's chain breaks gate
+   the bodies at whatever wall point happens to be closest - which is what
+   refused the tandem's front wake in a C-shaped far field. The hull producer
+   does for a cluster what the C-grid does for one body. The *hull* is the
+   level set of the cluster's wall distance - all bodies together - at
+   `HullOptions.height_ratio` band heights (six, so the medial ring inside
+   it, at half that, still allows the full band; capped by the body frame's
+   radius), extracted by marching squares on a distance raster and projected
+   onto the exact level set; below half the widest gap it is several curves
+   and the height is raised. The hull carries the outer boundary's chains
+   at the same fractions of the perimeter. The near field is then the
+   annular construction run with the hull as its outer boundary, with the
+   C-grid's band settings (band height as a layout input, 45 degrees of wall
+   turning per block, inscribed-disk cap off), so bands, seams, cavities and
+   wakes - one ending on a downstream body, one leaving through the hull -
+   are all the existing producer's. Beyond the hull the level sets of the
+   cluster at geometrically growing heights (`growth` 2 from the hull, up to
+   `reach` 0.35 of the way to the outer boundary) are exact level sets of the
+   same distance field - every level set beyond the hull is the hull offset
+   by the height difference, since a distance function's level sets are
+   parallel - with the hull's vertices carried outward by arc-length
+   fraction, the blocks between levels judged for convexity, and the
+   outermost level joined to the outer boundary by straight spokes. With a
+   wake leaving the cluster the levels are the *slit hull*'s: cut where they
+   lie inside the wake band's offset, ending on mitre points at the band's
+   edge lines, the wake band's two halves and one strip per level and side
+   running to the outlet, the levels mapped onto the cap and two wake-side
+   blocks covering the legs, exactly the C-grid's far field with the wake
+   band's own width in place of the trailing edge. Without one the far field
+   is closed and each hull chain maps onto the outer chain of its name. The
+   hull edges become interior fronts, and the whole graph is validated with
+   the real domain; otherwise the annular construction runs and the reason
+   is under `medial.hull`.
+
 6. **Internal core** (`sweep.py`). A four-sided reading of a simply connected
    domain is searched for: four corners are chosen from the domain's own chain
    joins and high-turning points, and a pair of opposite sides is accepted as the
@@ -696,6 +733,26 @@ under `--wake` now lands the tip's wake on the disk obliquely (42 blocks,
 admissible, 85 degrees of non-orthogonality at the landing); `narrow_gap_tip`
 refuses it with the reason that the blocker has no room beside the landing
 gate for a band 0.034 wide, its front section on one side being 0.020 long.
+
+### Hull far field (opt-in, two or more bodies)
+
+```bash
+make research-tandem-15c    # --case tandem_foils --wake --hull, C-shape of radius 15
+python experiments/agentic_topology/research_cli.py run --case two_circles \
+  --farfield-shape rectangle --farfield-scale 8 --hull
+```
+
+| case | annular construction | hull far field |
+| --- | --- | --- |
+| tandem foils, C-shape of radius 15 about (1, 0), `--wake` | 73 blocks, inadmissible; the front wake refused at the layout stage by the far-field chain gates crowding the rear tail; 112 s | **116 blocks, admissible**, both wakes (front on the rear foil's band, rear through the hull to the outlet), hull at 0.9, levels at 1.8 and 3.6, then the cap; one core block at the rear edge's seam at 70.5 degrees of non-orthogonality, half a degree over the target; 16 s |
+| two circles, rectangle at scale 8 | 45 blocks, admissible, 78 degrees | **83 blocks, resolved**: 47 degrees of non-orthogonality, scaled Jacobian 0.68, hull at 1.34 and one level at 2.67 |
+| two circles, circle at scale 8 | 42 blocks, admissible, 78 degrees | 88 blocks, admissible; 79 degrees in one far-field sector where the peanut-shaped level maps onto the round boundary |
+
+The near field is the annular producer's own: the hull is just its outer
+boundary, so the 51 to 63 near-field blocks are the same bands, wakes and
+core patches as before, built in a fraction of the time because the medial
+scaffold no longer reaches seven chords out. The default corpus does not
+use the hull and is unchanged.
 
 ### Corpus re-baseline (outward anchors, clearance-graded gates)
 
