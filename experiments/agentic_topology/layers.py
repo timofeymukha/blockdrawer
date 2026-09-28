@@ -195,6 +195,7 @@ def far_clearance(
     upper: float,
     window: float = 2.0,
     steps: int = 26,
+    rounded=(),
 ) -> np.ndarray:
     """Height at which the level set owned by each wall vertex collapses.
 
@@ -254,6 +255,24 @@ def far_clearance(
         fits = best >= 0.98 * middle
         low = np.where(fits, middle, low)
         high = np.where(fits, high, middle)
+    # The wall inside a rounded reflex corner's mitre shadow has no level-set
+    # point of its own: its plain offset lands on the other flank, which the
+    # probe reads as a collapse a fraction of the corner's clearance away.
+    # Those vertices are the mitre's, so they carry the corner's clearance;
+    # left at their own value, the slope limit would drag the corner's height
+    # down to it - the cove's band thinned to a third at its apex.  Sharp
+    # reflex corners keep their shadow's own values: in 30P30N's coves the
+    # inherited clearance let the lip's band cross the next element's spokes.
+    for index in sorted(set(int(item) for item in rounded)):
+        if not angles[index] < REFLEX_FLUID_ANGLE:
+            continue
+        cot = 1.0 / math.tan(max(0.5 * float(angles[index]), 1.0e-3))
+        shadow_reach = 1.5 * float(low[index]) * cot
+        gaps = np.abs(stations[:count] - stations[index])
+        if closed:
+            gaps = np.minimum(gaps, total - gaps)
+        shadow = gaps <= shadow_reach
+        low = np.where(shadow, np.maximum(low, low[index]), low)
     return low
 
 
@@ -668,7 +687,7 @@ def build_front(
     the site curves the medial stage already uses.
     """
     augmented, gate_indices = insert_stations(wall_loop, stations, closed=True)
-    angles = fluid_angles(augmented, fluid_sign)
+    angles = effective_fluid_angles(augmented, fluid_sign)
     if options.normal_window > 0.0:
         # Every feature vertex - reflex or sharp convex, the same threshold
         # the mitre rules use - bounds the smoothing window, and the window
@@ -698,6 +717,7 @@ def build_front(
         upper=upper,
         window=options.shadow_window,
         steps=options.feature_steps,
+        rounded=[run["middle"] for run in tight_concave_runs(augmented, fluid_sign)],
     )
     inner = local_feature_size(
         wall_loops, augmented, -normals, upper=upper, steps=options.feature_steps
@@ -1151,3 +1171,73 @@ def fluid_angles(loop: np.ndarray, fluid_sign: float) -> np.ndarray:
     """Fluid-side angle at every vertex of a closed boundary loop, in radians."""
     turning = g2.turning_angles(loop, closed=True)
     return math.pi + fluid_sign * turning
+
+
+# A run of concave vertices shorter than this fraction of the perimeter that
+# turns through at least a reflex corner's worth is a *rounded reflex
+# corner*: for any band taller than its radius the level set there is the
+# mitre of the run, so it is treated as one reflex vertex at its turning
+# midpoint - anchored, mitred, and exempt from the smooth-bend cap that would
+# otherwise thin the band to a fraction of the bend's radius.
+TIGHT_BEND_FRACTION = 0.03
+
+
+def tight_concave_runs(loop: np.ndarray, fluid_sign: float, *, fraction: float = TIGHT_BEND_FRACTION) -> list[dict]:
+    """Rounded reflex corners of a closed loop: ``{"middle", "start", "end", "turning"}``.
+
+    A run is a maximal cyclic stretch of consecutive vertices that turn towards
+    the fluid; it qualifies when its arc length is at most ``fraction`` of the
+    perimeter and its total turning at least ``pi - REFLEX_FLUID_ANGLE``, the
+    turning at which a sharp vertex counts as reflex.  ``middle`` is the vertex
+    where the cumulative turning reaches half; the run's vertices already
+    sharper than the reflex threshold are left to the sharp-corner rules and
+    make no run.
+    """
+    angles = fluid_angles(loop, fluid_sign)
+    count = len(loop) - 1
+    if count < 3:
+        return []
+    turning = np.maximum(math.pi - angles[:count], 0.0)
+    stations = g2.cumulative_length(loop)
+    total = float(stations[-1])
+    # A vertex is tight when its local radius of curvature - the mean of its
+    # two segments over its turning - is below the run length allowed: a
+    # gently concave stretch around a tight bend is not part of the corner.
+    lengths = np.diff(stations)
+    mean_length = 0.5 * (lengths + np.roll(lengths, 1))
+    radius = np.where(turning > 1.0e-9, mean_length / np.where(turning > 1.0e-9, turning, 1.0), math.inf)
+    concave = (turning > 1.0e-9) & (angles[:count] >= REFLEX_FLUID_ANGLE) & (radius < fraction * total)
+    if not np.any(concave) or np.all(concave):
+        return []
+    # Start each run after a non-concave vertex.
+    start = next(i for i in range(count) if not concave[i])
+    runs = []
+    index = (start + 1) % count
+    steps = 0
+    while steps < count:
+        if concave[index]:
+            run = []
+            while concave[index] and steps < count:
+                run.append(index)
+                index = (index + 1) % count
+                steps += 1
+            arc = (stations[run[-1]] - stations[run[0]]) % total
+            total_turning = float(np.sum(turning[run]))
+            if total_turning >= math.pi - REFLEX_FLUID_ANGLE and arc <= fraction * total:
+                cumulative = np.cumsum(turning[run])
+                middle = run[int(np.searchsorted(cumulative, 0.5 * total_turning))]
+                runs.append({"middle": int(middle), "start": int(run[0]), "end": int(run[-1]), "turning": total_turning})
+        else:
+            index = (index + 1) % count
+            steps += 1
+    return runs
+
+
+def effective_fluid_angles(loop: np.ndarray, fluid_sign: float) -> np.ndarray:
+    """Fluid angles with every rounded reflex corner folded into its middle vertex."""
+    angles = fluid_angles(loop, fluid_sign)
+    for run in tight_concave_runs(loop, fluid_sign):
+        angles[run["middle"]] = math.pi - run["turning"]
+    if len(angles) > len(loop) - 1:
+        angles[-1] = angles[0]
+    return angles

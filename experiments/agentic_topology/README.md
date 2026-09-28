@@ -285,6 +285,26 @@ result can be read either way; the session is written whenever the result is
    raster's noise on the ring floor, which broke invariance under rotation. These two rules moved
    the default corpus, deliberately: see *Corpus re-baseline* under Results.
 
+   **Rounded reflex corners.** A run of concave vertices whose local radius
+   of curvature is below three percent of the perimeter and whose turning
+   adds up to at least a reflex corner's worth (`layers.tight_concave_runs`)
+   is one reflex corner at its turning midpoint: for any band taller than
+   its radius the level set there is the run's mitre, so the midpoint gets
+   the reflex anchor with its bisector spoke, the band is mitred there, and
+   the run is exempt from the smooth-bend cap that would otherwise thin the
+   band to a fraction of the bend's radius. The wall inside a rounded
+   corner's mitre shadow carries the corner's far clearance, since its own
+   offset point lands on the other flank and the probe read that as a
+   collapse; left at its own value the slope limit dragged the corner's band
+   down to a third. Sharp reflex corners keep their shadow's own values: in
+   30P30N's coves the inherited clearance let a lip's band cross the next
+   element's spokes. The cove of `concave_and_convex` bottoms out in a bend
+   of radius 0.03 turning 91 degrees, which the plain rules saw as a smooth
+   bend and capped at 0.02; it now carries a full band, and its worst block
+   goes from a scaled Jacobian of 0.03 to 0.40. The 45 degrees of wall
+   misalignment that remain beside the apex are the mitre's own: the two
+   band blocks beside a reflex corner meet the wall at half its fluid angle.
+
    **Optional wake separatrix** (`wake.py`, `--wake`). The seam is the wrong
    element at a trailing edge: the flow leaves along the wake, so the two band
    blocks beside the edge should continue downstream as a two-sided *wake
@@ -758,17 +778,17 @@ use the hull and is unchanged.
 
 The anchor rule and the clearance-jump rule moved six default fixtures. Every
 fixture is admissible after the change, `skimming_tail` for the first time
-and `four_bodies` now resolved; `concave_and_convex` keeps its 42 blocks with
-a poorer apex block in the cove, which the pocket construction planned for
-30P30N is meant to replace. Default options; before is the committed state
-`89aa41b`.
+and `four_bodies` now resolved; `concave_and_convex` keeps its 42 blocks,
+its cove apex now a rounded reflex corner with a full band (the row shows
+the state after that rule too). Default options; before is the committed
+state `89aa41b`.
 
 | fixture | blocks before → after | admissible | resolved | non-orthogonality | wall misalignment | min. scaled Jacobian |
 | --- | --- | --- | --- | --- | --- | --- |
 | `single_ellipse` | 12 → 12 | yes → yes | no → no | 38.4 → 38.4 | 29.5 → 29.5 | 0.78 → 0.78 |
 | `two_circles` | 32 → 32 | yes → yes | yes → yes | 64.9 → 64.9 | 6.9 → 6.9 | 0.43 → 0.43 |
 | `three_rotated_ellipses` | 89 → 87 | yes → yes | no → no | 74.6 → 79.6 | 23.2 → 19.8 | 0.27 → 0.18 |
-| `concave_and_convex` | 34 → 42 | yes → yes | no → no | 81.5 → 88.3 | 31.3 → 39.0 | 0.15 → 0.03 |
+| `concave_and_convex` | 34 → 42 | yes → yes | no → no | 81.5 → 66.3 | 31.3 → 44.8 | 0.15 → 0.40 |
 | `four_bodies` | 53 → 56 | yes → yes | no → **yes** | 65.2 → 64.2 | 14.5 → 16.7 | 0.42 → 0.43 |
 | `sharp_bodies` | 33 → 45 | yes → yes | no → no | 75.7 → 75.7 | 15.3 → 9.5 | 0.25 → 0.25 |
 | `narrow_gap_tip` | 41 → 57 | yes → yes | no → no | 69.3 → 69.8 | 15.8 → 21.7 | 0.35 → 0.35 |

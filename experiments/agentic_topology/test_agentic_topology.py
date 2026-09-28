@@ -2231,3 +2231,40 @@ class AcceptanceRestructureTests(unittest.TestCase):
             coarse.correspondence.columns, fine.correspondence.columns
         )
         self.assertEqual(coarse.shape.described(), fine.shape.described())
+
+
+class RoundedReflexCornerTests(unittest.TestCase):
+    """A tight concave bend is one reflex corner at its turning midpoint."""
+
+    def test_the_cove_apex_is_a_rounded_reflex_corner(self):
+        names, loops = cases.concave_and_convex()
+        loop = g2.close_loop(np.asarray(loops[0]), 0.0)
+        sign = 1.0 if g2.signed_area(loop) > 0.0 else -1.0
+        runs = layer_module.tight_concave_runs(loop, sign)
+        self.assertEqual(len(runs), 1)
+        run = runs[0]
+        self.assertGreater(math.degrees(run["turning"]), 60.0)
+        # The middle sits at the apex, on the axis of the dimple.
+        self.assertAlmostEqual(float(loop[run["middle"]][1]), 0.0, delta=0.02)
+        effective = layer_module.effective_fluid_angles(loop, sign)
+        self.assertLess(effective[run["middle"]], layer_module.REFLEX_FLUID_ANGLE)
+        plain = layer_module.fluid_angles(loop, sign)
+        self.assertGreaterEqual(plain[run["middle"]], layer_module.REFLEX_FLUID_ANGLE)
+
+    def test_smooth_and_sharp_bodies_have_no_rounded_corners(self):
+        for name in ("single_ellipse", "two_circles", "peanut_body", "sharp_bodies"):
+            with self.subTest(name=name):
+                names, loops = cases.CASES[name]()
+                for points in loops:
+                    loop = g2.close_loop(np.asarray(points), 0.0)
+                    sign = 1.0 if g2.signed_area(loop) > 0.0 else -1.0
+                    self.assertEqual(layer_module.tight_concave_runs(loop, sign), [])
+
+    def test_the_apex_carries_a_gate_and_keeps_its_band(self):
+        result = run_case("concave_and_convex")
+        self.assertTrue(result.admissible, result.problems or result.failures)
+        cuts = result.layout.cuts[0]
+        self.assertIn("reflex", [cut.anchor.kind for cut in cuts])
+        front = result.assembly.fronts[0]
+        apex = int(np.argmin(np.linalg.norm(front.wall - np.asarray([-0.25, 0.0]), axis=1)))
+        self.assertGreater(float(front.heights[apex]), 0.05)

@@ -266,6 +266,11 @@ them in the canvas widgets.
   the annular result only as a complete admissible result, and the annular
   construction keeps the layout its own options build. Its acceptance case is the
   A-airfoil at fifteen chords (`make research-a-airfoil`, `test_a_airfoil.py`).
+  A tight concave bend - concave vertices of local radius under three
+  percent of the perimeter turning through a reflex corner's worth together -
+  is a rounded reflex corner: anchored and mitred at its turning midpoint
+  (`layers.tight_concave_runs`, `effective_fluid_angles`), and the wall in
+  a rounded corner's mitre shadow carries the corner's far clearance.
   `hull.py` is the opt-in `--hull` far field for two or more bodies: the
   hull is the cluster's wall-distance level set at six band heights (capped
   by the body frame), carrying the outer boundary's chains at the same

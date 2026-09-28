@@ -420,7 +420,9 @@ def reflex_anchors(diagram: Diagram, cells: list[Cell]) -> list[Anchor]:
         # reflex corner, so the corner is a gate with its spoke on the
         # bisector.  A sampled circle turns far too little to qualify.
         loop = site.curve.loop()
-        fluid = math.pi + site.curve.fluid_sign * g2.turning_angles(loop, closed=True)
+        # A rounded reflex corner - a tight concave bend - counts as a reflex
+        # vertex at its turning midpoint (``layers.effective_fluid_angles``).
+        fluid = layer_module.effective_fluid_angles(loop, site.curve.fluid_sign)[: len(loop) - 1]
         stations = g2.cumulative_length(loop)[:-1]
         for index in np.nonzero(fluid < layer_module.REFLEX_FLUID_ANGLE)[0]:
             anchor = anchor_from_wall(
