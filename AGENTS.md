@@ -249,7 +249,10 @@ them in the canvas widgets.
   bodies, to the other body's band, where the stagnation gate is pinned and
   the two wake fronts land a band width to either side as new band spokes -
   with the band continued as a two-sided wake band and the far-field core cut
-  open along it; wakes are tried in passes so an upstream wake can follow a
+  open along it - or, for a blunt base (two convex corners within two percent
+  of the perimeter), one record with two fixed anchors and three strips: the
+  base itself going on as the wake's core strip between the flank bands;
+  wakes are tried in passes so an upstream wake can follow a
   downstream one; trials are committed only as complete admissible results
   and refusals keep their reasons under `medial.wakes`. Feature anchors take
   the closest ring point unless the outward ray's spoke is squarer by fifteen
@@ -276,8 +279,10 @@ them in the canvas widgets.
   by the body frame), carrying the outer boundary's chains at the same
   fractions; the near field is the annular construction with the hull as its
   outer boundary and the C-grid's band settings; beyond it the cluster's
-  level sets at growing heights carry the hull's vertices outward and join
-  the outer boundary by spokes - cut open along one exit wake's band to the
+  level sets at growing heights carry the hull's vertices outward - by
+  arc-length fraction between the kinks where the nearest body changes, so
+  no vertex crosses the waist between two bodies - and join the outer
+  boundary by spokes - cut open along one exit wake's band to the
   outlet, C-grid style, or closed and mapped chain onto chain. The whole
   graph is validated with the real domain; refusals keep their reason under
   `medial.hull` and the annular construction runs instead.

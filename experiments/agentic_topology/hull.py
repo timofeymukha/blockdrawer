@@ -265,12 +265,13 @@ def align_start(hull_points: np.ndarray, target) -> np.ndarray:
     return np.vstack([rolled, rolled[:1]])
 
 
-def mirrored_chains(hull_points: np.ndarray, outer) -> list[tuple[str, str, np.ndarray]]:
+def mirrored_chains(hull_points: np.ndarray, outer, walls=None) -> list[tuple[str, str, np.ndarray]]:
     """The hull split into chains named and rolled like the outer boundary's.
 
-    Each outer chain break is placed on the hull at the same fraction of the
-    perimeter, measured from the outer's start; the far field then maps every
-    hull chain onto the outer chain of the same name, and a closed far field
+    Each outer chain break is placed on the hull by the kink-anchored map
+    (``map_stations``) from the outer boundary onto the hull - by plain
+    fraction of the perimeter without ``walls`` - so the far field maps every
+    hull chain onto the outer chain of the same name and a closed far field
     stays chain-consistent block by block.
     """
     loop = np.asarray(hull_points, dtype=np.float64)
@@ -283,12 +284,121 @@ def mirrored_chains(hull_points: np.ndarray, outer) -> list[tuple[str, str, np.n
         name = chains[0].name if chains else "farfield"
         role = chains[0].role if chains else "farfield"
         return [(name, role, loop)]
+    starts = [chain.start % outer_total for chain in chains]
+    if walls is not None:
+        outer_loop = outer.curve.loop()
+        hull_starts = [st % total for st in map_stations(outer_loop, starts, loop, [np.asarray(w, dtype=np.float64) for w in walls], origin=loop[0])]
+    else:
+        hull_starts = [(st / outer_total) * total % total for st in starts]
     result = []
-    for chain in chains:
-        start = (chain.start / outer_total) * total % total
-        end = ((chain.start + chain.length) / outer_total) * total % total
+    for index, chain in enumerate(chains):
+        start = hull_starts[index]
+        end = hull_starts[(index + 1) % len(chains)]
         piece = g2.loop_section(loop, start, end, forward=True)
         result.append((chain.name, chain.role, np.asarray(piece)))
+    return result
+
+
+def _owner_switches(walls, loop: np.ndarray):
+    """Stations where a closed loop's nearest body changes, with the transitions.
+
+    Every level set of the cluster has a kink where the nearest body switches
+    - the exterior medial axis between two bodies crosses it there - and the
+    kinks of one level correspond to those of another in cyclic order.
+    Returns ``[(station, from_body, to_body), ...]`` in loop order.
+    """
+    points = np.asarray(loop, dtype=np.float64)[:-1]
+    distances = np.column_stack([g2.distance_to_polyline(g2.close_loop(wall, 0.0), points) for wall in walls])
+    owners = np.argmin(distances, axis=1)
+    stations = g2.cumulative_length(np.asarray(loop, dtype=np.float64))
+    total = float(stations[-1])
+    switches = []
+    count = len(points)
+    for i in range(count):
+        j = (i + 1) % count
+        if owners[i] != owners[j]:
+            station = 0.5 * (stations[i] + (stations[j] if j else total))
+            switches.append((float(station % total), int(owners[i]), int(owners[j])))
+    return switches, total
+
+
+def map_stations(hull_loop: np.ndarray, hull_stations, level_loop: np.ndarray, walls, *, origin=None):
+    """Stations on a level loop corresponding to stations on the hull.
+
+    Between consecutive kinks each hull piece maps onto the level piece with
+    the same body transition by arc-length fraction, so a level vertex never
+    lands across a kink from its hull vertex, which twisted the far-field
+    sectors at the waist between two bodies.  When the two loops' transition
+    sequences differ - a body no longer reaches the level set - the whole
+    loops map by fraction from ``origin`` (the level point closest to it, or
+    the hull start).
+    """
+    hull = np.asarray(hull_loop, dtype=np.float64)
+    level = np.asarray(level_loop, dtype=np.float64)
+    hull_switches, hull_total = _owner_switches(walls, hull)
+    level_switches, level_total = _owner_switches(walls, level)
+    stations = [float(v) % hull_total for v in hull_stations]
+    hull_seq = [(a, b) for _s, a, b in hull_switches]
+    level_seq = [(a, b) for _s, a, b in level_switches]
+    aligned = None
+    if hull_seq and len(hull_seq) == len(level_seq):
+        for shift in range(len(level_seq)):
+            if level_seq[shift:] + level_seq[:shift] == hull_seq:
+                aligned = shift
+                break
+    if aligned is None:
+        anchor = hull[0] if origin is None else np.asarray(origin, dtype=np.float64)
+        start = float(g2.closest_on_polyline(level, anchor[None, :]).arclength[0])
+        return [(start + (st / hull_total) * level_total) % level_total for st in stations]
+    hull_kinks = [item[0] for item in hull_switches]
+    level_kinks = [level_switches[(aligned + i) % len(level_switches)][0] for i in range(len(level_switches))]
+    result = []
+    for st in stations:
+        # The hull piece the station lies in: from kink j forward to kink j+1.
+        offsets = [(st - kink) % hull_total for kink in hull_kinks]
+        j = int(np.argmin(offsets))
+        piece_hull = (hull_kinks[(j + 1) % len(hull_kinks)] - hull_kinks[j]) % hull_total or hull_total
+        piece_level = (level_kinks[(j + 1) % len(level_kinks)] - level_kinks[j]) % level_total or level_total
+        fraction = offsets[j] / piece_hull
+        result.append((level_kinks[j] + fraction * piece_level) % level_total)
+    return result
+
+
+def _owner_switches_open(walls, path: np.ndarray):
+    """Stations along an open path where the nearest body changes."""
+    points = np.asarray(path, dtype=np.float64)
+    distances = np.column_stack([g2.distance_to_polyline(g2.close_loop(wall, 0.0), points) for wall in walls])
+    owners = np.argmin(distances, axis=1)
+    stations = g2.cumulative_length(points)
+    switches = []
+    for i in range(len(points) - 1):
+        if owners[i] != owners[i + 1]:
+            switches.append((float(0.5 * (stations[i] + stations[i + 1])), int(owners[i]), int(owners[i + 1])))
+    return switches, float(stations[-1])
+
+
+def map_open(path_from: np.ndarray, stations_from, path_to: np.ndarray, walls):
+    """Stations on one open path corresponding to stations on another.
+
+    The ends correspond, and so does every kink where the nearest body
+    changes, when both paths change bodies in the same order; each piece
+    between anchors maps by arc-length fraction.  Otherwise the whole paths
+    map by fraction.
+    """
+    switches_from, total_from = _owner_switches_open(walls, path_from)
+    switches_to, total_to = _owner_switches_open(walls, path_to)
+    anchors_from = [0.0] + [item[0] for item in switches_from] + [total_from]
+    anchors_to = [0.0] + [item[0] for item in switches_to] + [total_to]
+    if [item[1:] for item in switches_from] != [item[1:] for item in switches_to]:
+        anchors_from, anchors_to = [0.0, total_from], [0.0, total_to]
+    result = []
+    for st in stations_from:
+        st = min(max(float(st), 0.0), total_from)
+        j = max(int(np.searchsorted(anchors_from, st, side="right")) - 1, 0)
+        j = min(j, len(anchors_from) - 2)
+        piece_from = anchors_from[j + 1] - anchors_from[j]
+        fraction = (st - anchors_from[j]) / piece_from if piece_from > 0.0 else 0.0
+        result.append(anchors_to[j] + fraction * (anchors_to[j + 1] - anchors_to[j]))
     return result
 
 
@@ -348,6 +458,8 @@ def extend(near, domain, outer, loops, *, hull_points: np.ndarray, hull_height: 
     # closed far field - every level a loop, joined chain by chain to the
     # outer boundary.
     exits_records = [item for item in near.wakes.applied if (item.get("target") or {}).get("kind") == "outer"]
+    if any(item.get("kind") == "base" for item in exits_records):
+        raise HullError("a blunt base's wake leaving the cluster is not built in the hull far field yet")
     if len(exits_records) > 1:
         raise HullError(f"the hull far field takes at most one wake leaving the cluster, found {len(exits_records)}")
     if not exits_records:
@@ -468,10 +580,21 @@ def extend(near, domain, outer, loops, *, hull_points: np.ndarray, hull_height: 
     heights = heights[:len(level_polys)]
 
     base_points = [graph_near.vertices[v].point for v in base_keys]
+    base_path = g2.loop_section(hull_loop, s_out, s_in, forward=True)
+    base_stations = [((station[v] - s_out) % hull_total) for v in base_keys]
+    base_stations[0], base_stations[-1] = 0.0, float(g2.total_length(base_path))
     level_points = []
+    fraction_stations = []
     for poly_k in level_polys:
-        total = g2.total_length(poly_k)
-        level_points.append([g2.sample_at_arclength(poly_k, [f * total])[0] for f in fractions])
+        # The open base maps onto the open level: ends onto the mitres, the
+        # kinks where the nearest body changes onto each other, the pieces
+        # between by arc-length fraction.
+        stations_k = map_open(base_path, base_stations, poly_k, walls)
+        stations_k[0], stations_k[-1] = 0.0, float(g2.total_length(poly_k))
+        if any(b <= a for a, b in zip(stations_k, stations_k[1:])):
+            raise HullError("the hull's vertices do not map onto a level in order")
+        fraction_stations.append(stations_k)
+        level_points.append([g2.sample_at_arclength(poly_k, [st])[0] for st in stations_k])
     # Drop levels whose blocks against the level below are not convex.
     kept = 0
     while kept < len(level_polys):
@@ -486,7 +609,7 @@ def extend(near, domain, outer, loops, *, hull_points: np.ndarray, hull_height: 
         raise HullError("the first level above the hull gives non-convex blocks: " + "; ".join(notes[-1:]))
     levels = kept
     level_polys, level_points, heights = level_polys[:levels], level_points[:levels], heights[:levels]
-    fraction_stations = [[f * g2.total_length(poly_k) for f in fractions] for poly_k in level_polys]
+    fraction_stations = fraction_stations[:levels]
 
     def level_piece(k: int, n: int) -> np.ndarray:
         a, b = fraction_stations[k - 1][n], fraction_stations[k - 1][n + 1]
@@ -558,7 +681,10 @@ def extend(near, domain, outer, loops, *, hull_points: np.ndarray, hull_height: 
         graph.add_vertex(key_outer(label), outer.curve.point_at(st),
                          constraint=pg.Constraint("chain", outer.chain_at(st + 1e-9 * total_outer).name, st), provenance="outer corner")
         outer_station[key_outer(label)] = st
-    cap_stations = [(cap.start + f * cap.length) % total_outer for f in fractions]
+    cap_path = outer.curve.section(cap.start, (cap.start + cap.length) % total_outer, forward=True)
+    cap_local = map_open(level_polys[-1], fraction_stations[-1], cap_path, walls)
+    cap_stations = [(cap.start + st) % total_outer for st in cap_local]
+    cap_stations[0], cap_stations[-1] = j_top, j_bot
     outer_keys = []
     for n, st in enumerate(cap_stations):
         if n == 0:
@@ -720,12 +846,13 @@ def _extend_closed(near, domain, outer, walls, hull_loop, hull_height, settings,
         raise HullError("no admissible level set above the hull")
     heights = heights[:len(level_polys)]
     base_points = [graph_near.vertices[v].point for v in base_keys]
+    base_stations = [station[v] for v in base_keys]
     level_points = []
     level_stations = []
     for poly_k in level_polys:
-        total = float(g2.total_length(poly_k))
-        origin = float(g2.closest_on_polyline(poly_k, base_points[0][None, :]).arclength[0])
-        stations_k = [(origin + f * total) % total for f in fractions]
+        stations_k = map_stations(hull_loop, base_stations, poly_k, walls, origin=base_points[0])
+        if any((b - a) % float(g2.total_length(poly_k)) <= 0.0 for a, b in zip(stations_k, stations_k[1:])):
+            raise HullError("the hull's vertices do not map onto a level in order")
         level_stations.append(stations_k)
         level_points.append([g2.sample_at_arclength(poly_k, [st])[0] for st in stations_k])
     kept = 0
@@ -753,7 +880,15 @@ def _extend_closed(near, domain, outer, walls, hull_loop, hull_height, settings,
     for k in range(1, levels + 1):
         for n in range(count):
             graph.add_vertex(key_level(k, n), level_points[k - 1][n], constraint=pg.Constraint("guide", f"front:hull:{k}", float(n)), provenance="level set")
-    outer_stations = [(f * outer_total) % outer_total for f in fractions]
+    outer_loop = outer.curve.loop()
+    outer_stations = [st % outer_total for st in map_stations(hull_loop, base_stations, outer_loop, walls, origin=outer_loop[0])]
+    # The hull's chain breaks were placed by the inverse of this map, so they
+    # land on the outer chain breaks again up to the maps' sampling; snap.
+    breaks = [chain.start % outer_total for chain in outer.chains]
+    outer_stations = [
+        next((value for value in breaks if min(abs(st - value), outer_total - abs(st - value)) <= 1.0e-3 * outer_total), st)
+        for st in outer_stations
+    ]
     for n, st in enumerate(outer_stations):
         graph.add_vertex(key_outer(n), outer.curve.point_at(st), constraint=pg.Constraint("chain", outer.chain_at(st + 1e-9 * outer_total).name, st), provenance="far-field station")
 

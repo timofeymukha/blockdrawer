@@ -1,6 +1,6 @@
 .PHONY: run test integration-test check research-test research-30p30n \
         research-periodic-hill research-cases research-a-airfoil research-tandem \
-        research-tandem-15c
+        research-tandem-15c research-blunt-foil
 
 PYTHON ?= python3
 OPENFOAM_IMAGE ?= /tmp/timofey/code/openfoam-apptainer/openfoam-2606.sif
@@ -35,7 +35,7 @@ research-periodic-hill:
 research-cases:
 	for case in single_ellipse two_circles three_rotated_ellipses \
 	            concave_and_convex four_bodies sharp_bodies \
-	            narrow_gap_tip peanut_body skimming_tail tandem_foils \
+	            narrow_gap_tip peanut_body skimming_tail tandem_foils blunt_foil \
 	            straight_channel periodic_hill; do \
 	    $(PYTHON) $(RESEARCH)/research_cli.py run --case $$case \
 	        --json $(RESEARCH_OUTPUT)/$$case.json \
@@ -78,6 +78,15 @@ research-tandem-15c:
 		--json $(RESEARCH_OUTPUT)/tandem_foils-15c.json \
 		--session $(RESEARCH_OUTPUT)/tandem_foils-15c-session.json \
 		--session-render $(RESEARCH_OUTPUT)/tandem_foils-15c-session.png
+
+# One foil with a blunt trailing edge in a circle far field: the base
+# template continues the base downstream as the wake's core strip.
+research-blunt-foil:
+	$(PYTHON) $(RESEARCH)/research_cli.py run --case blunt_foil --wake --layer-height 0.05 \
+		--output $(RESEARCH_OUTPUT)/blunt_foil.png \
+		--json $(RESEARCH_OUTPUT)/blunt_foil.json \
+		--session $(RESEARCH_OUTPUT)/blunt_foil-session.json \
+		--session-render $(RESEARCH_OUTPUT)/blunt_foil-session.png
 
 research-30p30n:
 	$(PYTHON) $(RESEARCH)/fetch_30p30n.py

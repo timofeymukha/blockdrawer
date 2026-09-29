@@ -352,6 +352,25 @@ result can be read either way; the session is written whenever the result is
    coverage, session emission and both sampled grids; otherwise the annular
    construction stays exactly as it was.
 
+   **Blunt base.** Two convex corners within two percent of the perimeter of
+   each other are one base, and the base gets its own template rather than
+   a wake from one corner: one record for the pair, a wake line from each
+   corner along the base's outward normal (or the fixed direction, within
+   sixty degrees of it), two fixed anchors where those lines cross the ring,
+   and beyond the base three strips to the outer boundary - the base strip
+   between the two wake lines, which carries the base as its wall edge so
+   the base's boundary layer is the strip's own grading, and a wake band on
+   each side that continues the flank band with its normal count. The band
+   block over the base, the core patch above it and the corners' seam wedges
+   are replaced by ten faces; each corner ends up with three blocks meeting
+   at it. The corner's flank-side front point is where the wake band's outer
+   edge leaves the flank front, and the core patch beside it meets that
+   turn with an angle of 180 degrees less the flank's angle to the wake -
+   the same corner the sharp edge's wake makes - which is why a thin
+   trailing edge's neighbouring core block sits near 70 degrees of
+   non-orthogonality in the annular construction; the C-grid avoids it with
+   its cross-wake line.
+
    **Single-body C-grid** (`cgrid.py`, with `--wake` and a C-shaped far
    field). For one body with one sharp trailing edge the medial ring is the
    wrong scaffold: at fifteen chords it sits seven chords out, every core
@@ -421,8 +440,15 @@ result can be read either way; the session is written whenever the result is
    same distance field - every level set beyond the hull is the hull offset
    by the height difference, since a distance function's level sets are
    parallel - with the hull's vertices carried outward by arc-length
-   fraction, the blocks between levels judged for convexity, and the
-   outermost level joined to the outer boundary by straight spokes. With a
+   fraction between *kinks*: every level set of the cluster has a kink
+   where the nearest body changes, the exterior medial axis crossing it,
+   and the kinks of one level correspond to those of the next in cyclic
+   order, so each piece between kinks maps onto its counterpart and a
+   vertex never lands across the waist from its hull vertex (which twisted
+   the far-field sectors between two bodies); the outer boundary's own
+   kinks place the mirrored chain breaks the same way. The blocks between
+   levels are judged for convexity, and the outermost level is joined to
+   the outer boundary by straight spokes. With a
    wake leaving the cluster the levels are the *slit hull*'s: cut where they
    lie inside the wake band's offset, ending on mitre points at the band's
    edge lines, the wake band's two halves and one strip per level and side
@@ -719,6 +745,29 @@ unpinned gates between them, so the gate relaxation now measures the whole run
 between consecutive pins. Wake and chain-break pins are never released by
 that relaxation. No default fixture changed under either rule.
 
+### Blunt trailing edge (base template)
+
+```bash
+make research-blunt-foil     # --case blunt_foil --wake, circle far field
+```
+
+`synthetic_cases.blunt_foil`: a teardrop of chord one cut off square where
+the flanks are 0.02 apart, corners of 250.5 degrees. Default options with
+`--layer-height 0.05`:
+
+| case | blocks | verdict |
+| --- | --- | --- |
+| blunt foil, circle | 24 | admissible, base applied; 25.6 degrees of wall misalignment in one upper-surface band block, half a degree over |
+| truncated teardrop of `test_wake` (base 0.01), circle, test options | 27 | **resolved**, base applied |
+| blunt foil, C-shape of radius 4 | 30 | admissible, base applied; the core block beside the lower wake band at 79 degrees, the corner property above |
+| blunt foil with a 14-degree edge, C-shape | - | refused at the layout stage: the far field's chain gates advance twice round the outer boundary, the annular far-field limit the hull removes for clusters; a base leaving the hull is not built there yet |
+
+Before the template both corners were refused as "blunt trailing edge",
+and the layout could not even keep both corners as gates: two pinned
+corners a base width apart crowd each other, and the relaxation released
+one, leaving a stray corner gate a tenth of the chord along the flank. The
+base's two wake anchors are fixed, so both corners stay.
+
 ### Tandem foils (two-body wake landing)
 
 ```bash
@@ -764,9 +813,10 @@ python experiments/agentic_topology/research_cli.py run --case two_circles \
 
 | case | annular construction | hull far field |
 | --- | --- | --- |
-| tandem foils, C-shape of radius 15 about (1, 0), `--wake` | 73 blocks, inadmissible; the front wake refused at the layout stage by the far-field chain gates crowding the rear tail; 112 s | **116 blocks, admissible**, both wakes (front on the rear foil's band, rear through the hull to the outlet), hull at 0.9, levels at 1.8 and 3.6, then the cap; one core block at the rear edge's seam at 70.5 degrees of non-orthogonality, half a degree over the target; 16 s |
-| two circles, rectangle at scale 8 | 45 blocks, admissible, 78 degrees | **83 blocks, resolved**: 47 degrees of non-orthogonality, scaled Jacobian 0.68, hull at 1.34 and one level at 2.67 |
-| two circles, circle at scale 8 | 42 blocks, admissible, 78 degrees | 88 blocks, admissible; 79 degrees in one far-field sector where the peanut-shaped level maps onto the round boundary |
+| tandem foils, C-shape of radius 15 about (1, 0), `--wake` | 73 blocks, inadmissible; the front wake refused at the layout stage by the far-field chain gates crowding the rear tail; 112 s | **128 blocks, admissible**, both wakes (front on the rear foil's band, rear through the hull to the outlet), hull at 0.9, levels at 1.8 and 3.6, then the cap; one core block at the rear edge's seam at 70.5 degrees of non-orthogonality, half a degree over the target; 19 s |
+| two circles, rectangle at scale 8 | 45 blocks, admissible, 78 degrees | **88 blocks, resolved** |
+| two circles, circle at scale 8 | 42 blocks, admissible, 78 degrees | **88 blocks, resolved** once the levels map between the kinks; by plain fraction the peanut-shaped level twisted one sector onto the round boundary to 79 degrees |
+| 30P30N main and flap, C-shape of radius 15, `--wake`, band 0.02 | 75 blocks, inadmissible | **179 blocks, admissible**, closed far field with four levels (0.24 to 1.92); neither wake applies yet (the main's passes over the flap, the flap's base leaves the hull), and the near field's worst block is at 89 degrees |
 
 The near field is the annular producer's own: the hull is just its outer
 boundary, so the 51 to 63 near-field blocks are the same bands, wakes and

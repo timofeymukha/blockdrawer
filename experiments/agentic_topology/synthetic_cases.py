@@ -127,6 +127,33 @@ def narrow_gap_tip():
     )
 
 
+def blunt_foil(
+    tip_ratio: float = 3.0,
+    base: float = 0.02,
+    count: int = 200,
+) -> tuple[list[str], list[np.ndarray]]:
+    """One foil of chord one with a blunt trailing edge of width ``base``.
+
+    A teardrop whose tail is cut off square where the flanks are ``base``
+    apart, so the trailing edge is a short wall segment between two convex
+    corners, as on most real sections.  The corner sectors are wider than
+    the sharp-feature threshold, so without a base template each corner is
+    a seam; the base template continues the base downstream as the wake's
+    core strip with the two flank bands beside it.  The single-foil O-grid
+    test for that template.
+    """
+    radius = 1.0 / (1.0 + tip_ratio)
+    tear = teardrop((-radius * tip_ratio, 0.0), radius, tip_ratio=tip_ratio, count=count)
+    tip, arc = tear[-1], tear[:-1]
+    half = math.asin(1.0 / tip_ratio)
+    depth = 0.5 * base / math.tan(half)
+    lower = np.asarray([tip[0] - depth, -0.5 * base])
+    upper = np.asarray([tip[0] - depth, 0.5 * base])
+    # The arc runs anticlockwise from the upper contact point round the nose
+    # to the lower one; the tail closes lower corner -> upper corner.
+    return ["foil"], [np.vstack([arc, lower[None, :], upper[None, :]])]
+
+
 def tandem_foils(
     angle: float = math.radians(10.0),
     gap: float = 0.4,
@@ -480,6 +507,7 @@ CASES = {
     "peanut_body": peanut_body,
     "skimming_tail": skimming_tail,
     "tandem_foils": tandem_foils,
+    "blunt_foil": blunt_foil,
 }
 
 

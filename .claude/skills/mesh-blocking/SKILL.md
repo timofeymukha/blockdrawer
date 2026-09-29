@@ -76,9 +76,14 @@ case you are in.
   bodies. Tandem foils at fifteen chords in a C-shaped far field build this
   way with both wakes (`make research-tandem-15c`); the reason for a refusal
   is under `medial.hull`.
-- **Blunt base** (two convex corners within about one percent of the
-  perimeter): a base template - the base is a wall edge whose block continues
-  downstream as the wake core, and the two corner spokes bound the wake band.
+- **Blunt base** (two convex corners within about two percent of the
+  perimeter): the base template - the base is a wall edge whose block
+  continues downstream as the wake's core strip, and the two corners' wake
+  lines bound it with a wake band continuing each flank band outside. Engine:
+  `--wake` builds it (`make research-blunt-foil`); the record's `kind` is
+  `base`. The core block beside each wake band meets the flank front at 180
+  degrees less the edge angle, so a thin trailing edge leaves that block near
+  70 degrees of non-orthogonality in the annular construction.
   The engine refuses a wake from a single base corner; build the base by hand
   until the template exists.
 - **Multi-element bodies** (slat, main, flap): the *effective airfoil* is a

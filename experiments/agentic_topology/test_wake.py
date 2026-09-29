@@ -166,21 +166,49 @@ class WakeConstructionTests(unittest.TestCase):
         wake_faces = [face for face in result.graph.faces if face.role == "wake"]
         self.assertEqual(len(wake_faces), 8)
 
-    def test_blunt_base_is_refused_at_both_corners(self):
-        """Two convex corners a hundredth of the perimeter apart are one base."""
+    def test_blunt_base_continues_as_the_wake_core_strip(self):
+        """Two convex corners a hundredth of the perimeter apart are one base,
+        and the base template writes it: one record for the pair, two pinned
+        wake anchors, the base going on downstream as the core strip with the
+        two flank bands beside it."""
         tear = cases.teardrop((0.0, 0.0), 0.32, tip_ratio=4.0)
         tip, arc = tear[-1], tear[:-1]
         half, depth = math.asin(0.25), 0.02
         blunt = np.vstack([arc, [[tip[0] - depth, -depth * math.tan(half)], [tip[0] - depth, depth * math.tan(half)]]])
         result = pipeline.run_external(["blunt"], [blunt], WAKE)
         self.assertTrue(result.admissible, result.problems or result.failures)
-        self.assertEqual(len(result.wakes.records), 2)
-        for record in result.wakes.records:
-            self.assertFalse(record["planned"])
-            self.assertIn("blunt trailing edge", record["reason"])
+        self.assertEqual(len(result.wakes.records), 1)
+        record = result.wakes.records[0]
+        self.assertEqual(record["kind"], "base")
+        self.assertTrue(record["applied"], record.get("reason"))
+        self.assertEqual(len(record["anchor_keys"]), 2)
+        self.assertAlmostEqual(record["base_width"], 2.0 * depth * math.tan(half), places=6)
+        self.assertTrue(result.resolved, result.described_failures())
+        strips = sorted(face.provenance for face in result.graph.faces if face.role == "wake")
+        self.assertEqual(strips, ["base strip", "base strip beyond the ring", "wake band", "wake band", "wake band beyond the ring", "wake band beyond the ring"])
+        kinds = [cut.anchor.kind for cut in result.layout.cuts[0]]
+        self.assertEqual(kinds.count("wake"), 2)
         sharp = pipeline.run_external(["sharp"], [tear], WAKE)
         self.assertEqual(len(sharp.wakes.applied), 1)
         self.assertTrue(sharp.resolved, sharp.described_failures())
+
+    def test_blunt_foil_o_grid(self):
+        """The single-foil O-grid with a blunt trailing edge: the base strip
+        carries the base as its wall edge, so the base's boundary layer is
+        the strip's own grading, and the wake lines are the base's normal."""
+        names, loops = cases.blunt_foil()
+        result = pipeline.run_external(names, loops, replace(WAKE, layer_height=0.05))
+        self.assertTrue(result.admissible, result.problems or result.failures)
+        record = result.wakes.records[0]
+        self.assertEqual(record["kind"], "base")
+        self.assertTrue(record["applied"], record.get("reason"))
+        self.assertTrue(np.allclose(record["direction"], [1.0, 0.0], atol=1e-9))
+        strip = next(face for face in result.graph.faces if face.provenance == "base strip")
+        gates = [key for key in strip.corners if key[0] == "gate"]
+        self.assertEqual(len(gates), 2)
+        wall = result.graph.edges[result.graph.edge_key(*gates)]
+        self.assertEqual(wall.role, "wall")
+        self.assertAlmostEqual(wall.length, 0.02, delta=1e-6)
 
     def test_direction_outside_the_sector_is_refused(self):
         result = run_teardrop(

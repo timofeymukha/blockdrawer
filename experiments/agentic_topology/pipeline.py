@@ -403,7 +403,7 @@ def _try_hull(result: PipelineResult, names, loops, settings: PipelineOptions):
             layer=replace(settings.layer, inscribed_cap=False),
         )
         hull_points = hull_module.align_start(hull_points, result.sites[-1].curve.point_at(0.0))
-        hull_chains = hull_module.mirrored_chains(hull_points, result.sites[-1])
+        hull_chains = hull_module.mirrored_chains(hull_points, result.sites[-1], loops)
         record["hull_chains"] = [name for name, _role, _points in hull_chains]
         near = run_external(names, loops, near_settings, outer=hull_chains)
         record["near"] = {
@@ -557,7 +557,8 @@ def _try_cgrid(result: PipelineResult, settings: PipelineOptions) -> PipelineRes
         return result
     try:
         layout, solve = _cgrid_layout(result, settings)
-        plans = [item for item in wake.plan(layout, settings.wake) if item.get("planned")]
+        # A blunt base is the annular producer's; the C-grid takes a sharp edge.
+        plans = [item for item in wake.plan(layout, settings.wake) if item.get("planned") and item.get("kind") != "base"]
     except Exception as error:
         record["reason"] = f"wake planning failed: {_describe(error)}"
         result.cgrid = record
