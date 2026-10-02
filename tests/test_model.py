@@ -11,6 +11,27 @@ from tests.helpers import (
 
 
 class MeshModelTests(unittest.TestCase):
+    def test_convexity_is_judged_independently_of_the_drawing_scale(self) -> None:
+        """A block's corners are compared by the sine of their angle, so the
+        same block is valid at any size; the area threshold refused every
+        block a thousand times smaller than unit size."""
+        from blockdrawer.domain import Vertex
+
+        def placed(corners):
+            model = MeshModel()
+            for identifier, (x, y) in zip(("v0", "v1", "v2", "v3"), corners):
+                model.vertices[identifier] = Vertex(identifier, x, y)
+            return model
+
+        for size in (1.0e-5, 1.0, 1.0e5):
+            with self.subTest(size=size):
+                placed([(0.0, 0.0), (size, 0.0), (size, 0.5 * size), (0.0, 0.5 * size)]).validate()
+        # A corner within 1e-9 of a straight angle is not strictly convex at
+        # any scale.
+        for size in (1.0e-5, 1.0, 1.0e5):
+            with self.subTest(flat=size), self.assertRaises(TopologyError):
+                placed([(0.0, 0.0), (size, -1.0e-12 * size), (2.0 * size, 0.0), (size, size)]).validate()
+
     def test_export_settings_validate_names_and_pair_cyclic_z_patches(self) -> None:
         model = MeshModel()
 

@@ -1558,16 +1558,23 @@ class MeshModel(
 
     def _validate_convex_ccw(self, block: Block) -> None:
         points = [self.vertices[vertex_id] for vertex_id in block.vertices]
-        cross_products = []
+        flat_corners = []
         for index in range(4):
             first = points[index]
             second = points[(index + 1) % 4]
             third = points[(index + 2) % 4]
-            cross_products.append(
-                (second.x - first.x) * (third.y - second.y)
-                - (second.y - first.y) * (third.x - second.x)
+            cross = (second.x - first.x) * (third.y - second.y) - (
+                second.y - first.y
+            ) * (third.x - second.x)
+            lengths = math.hypot(second.x - first.x, second.y - first.y) * math.hypot(
+                third.x - second.x, third.y - second.y
             )
-        if any(value <= self.COORDINATE_TOLERANCE for value in cross_products):
+            # The cross product is |a| |b| sin(angle): compare the sine, not
+            # the area, so a block is judged the same at any drawing scale.
+            # (An absolute area threshold refused every block a thousand
+            # times smaller than unit size.)
+            flat_corners.append(cross <= self.COORDINATE_TOLERANCE * lengths)
+        if any(flat_corners):
             raise TopologyError(
                 f"Block {block.id} must remain strictly convex and counter-clockwise"
             )
