@@ -371,6 +371,48 @@ result can be read either way; the session is written whenever the result is
    non-orthogonality in the annular construction; the C-grid avoids it with
    its cross-wake line.
 
+   **Wake over another body** (the multi-element wake, `through` in the
+   record). A wake whose ray crosses the ring into another body's cell and
+   reaches that cell's far ring before any wall - a main element's wake
+   over its flap - is written through that cell. The planner follows the
+   ray: it must leave the passed body's cell exactly once, into the outer
+   cell, and reach the outer boundary; two anchors are pinned, where the
+   wake enters the cell (pinned to the trailing edge and to the passed
+   body's nearest wall station) and where it leaves (pinned to the passed
+   body and to the exit on the outer boundary), and the second is the exit
+   the hull far field continues. Through the cell the wake is a straight
+   chord from ring to ring with a strip on each side between it and the
+   two wake fronts, which run parallel to it from their ring crossings on;
+   each front leaves the seam point along the wake, or - where the band
+   thins towards the trailing edge, so a front parallel to the wake would
+   put a reflex corner on the core patch beside the band - along the band
+   front's own tangent, turned five degrees further from the wake. On the
+   body side the strip is bounded by the passed body's core, which gets
+   three new spokes down to that body's band: where the body-side front
+   enters the cell, halfway along the chord, and where it leaves; the
+   body's band is rebuilt with the wake band as an obstacle so it stays
+   clear of the strip. On the other side lies the *lens*: the region
+   between the lens-side front and the arc of the passed body's ring the
+   chord cuts off, from the entry crossing to the junction of the three
+   cells and on to the exit crossing. A lens is a curved triangle - two
+   tips where the front crosses the ring, one corner at the junction - and
+   no spoke from its arc to its front can end it in quads, since the tip
+   between the first spoke and the arc is a triangle whatever the angles;
+   it is written as three quads around a centre vertex, with one new spoke
+   from the middle of each side: into the wake's own cell from the arc's
+   piece on the entry branch, onto the outer boundary from its piece on
+   the exit branch, and down through both strips to the passed body's band
+   from the front. The same tip argument means the passed body's wall under
+   the wake carries exactly those three gates: every optional gate on the
+   lens arc is dropped before the bands are built, a junction is the lens
+   corner, and a fixed gate of the passed body there (a corner or chain
+   break under the wake) refuses the wake, as does a lens with more than
+   one corner, a body whose band cannot be built with three gates under the
+   wake (its wall turns too much there), or a wake that enters a third
+   body's cell. Beside the wake's own trailing edge, optional gates whose
+   core patch against the wake front is not a convex quad are dropped
+   rather than slid; a fixed one there refuses.
+
    **Single-body C-grid** (`cgrid.py`, with `--wake` and a C-shaped far
    field). For one body with one sharp trailing edge the medial ring is the
    wrong scaffold: at fifteen chords it sits seven chords out, every core
@@ -429,7 +471,13 @@ result can be read either way; the session is written whenever the result is
    radius), extracted by marching squares on a distance raster and projected
    onto the exact level set; below half the widest gap it is several curves
    and the height is raised. The hull carries the outer boundary's chains
-   at the same fractions of the perimeter. The near field is then the
+   at the same fractions of the perimeter when the far field is closed: the
+   near field is first built with the hull as one chain, since a wake
+   leaving the cluster maps onto the cap and outlet by its own construction
+   and mirrored chain breaks beside its exit would tangle the hull's gates;
+   only when no wake leaves is the near field built again with the chains
+   mirrored, so that the closed far field maps chain onto chain. The near
+   field is the
    annular construction run with the hull as its outer boundary, with the
    C-grid's band settings (band height as a layout input, 45 degrees of wall
    turning per block, inscribed-disk cap off), so bands, seams, cavities and
@@ -451,10 +499,14 @@ result can be read either way; the session is written whenever the result is
    the outer boundary by straight spokes. With a
    wake leaving the cluster the levels are the *slit hull*'s: cut where they
    lie inside the wake band's offset, ending on mitre points at the band's
-   edge lines, the wake band's two halves and one strip per level and side
-   running to the outlet, the levels mapped onto the cap and two wake-side
-   blocks covering the legs, exactly the C-grid's far field with the wake
-   band's own width in place of the trailing edge. Without one the far field
+   edge lines, the wake band's strips - two halves for a sharp edge, the
+   base strip and its two bands for a blunt base - and one strip per level
+   and side running to the outlet, the levels mapped onto the cap and two
+   wake-side blocks covering the legs, exactly the C-grid's far field with
+   the wake band's own width in place of the trailing edge. A hull's chain
+   breaks are anchored by the inward ray (`LayoutOptions.outer_by_ray`),
+   since the closest ring point of a station near the hull's pointed end is
+   arbitrary. Without one the far field
    is closed and each hull chain maps onto the outer chain of its name. The
    hull edges become interior fronts, and the whole graph is validated with
    the real domain; otherwise the annular construction runs and the reason
@@ -803,6 +855,64 @@ admissible, 85 degrees of non-orthogonality at the landing); `narrow_gap_tip`
 refuses it with the reason that the blocker has no room beside the landing
 gate for a band 0.034 wide, its front section on one side being 0.020 long.
 
+### Wake over another body (multi-element wake)
+
+```
+make research-staggered      # staggered teardrops, --wake --hull, band 0.01, hull 20 bands out
+```
+
+`staggered_foils`: the tandem's rear foil placed as a slotted flap sits under
+a main element's trailing edge - nose 0.18 chords ahead of the front tail and
+0.174 below it, turned nose-up by 25 degrees, so its highest point lies 0.03
+chords under the front wake just behind the tail. In the near field inside
+the hull (twenty band heights of 0.01 out, so the junction of the two cells
+with the hull stands well above the wake band) the front wake crosses the
+rear foil's cell as a chord with a strip on each side, the lens between the
+lens-side strip and the medial arc is three quads around a centre vertex,
+the rear's band takes three spokes under the wake, and the rear's own wake
+leaves through the hull:
+
+| case | near-field blocks | front wake | rear wake | near field |
+| --- | --- | --- | --- | --- |
+| staggered_foils, hull at 0.2 | 93 | **through the rear's cell** | to the hull | **admissible** |
+
+The hull far field itself then refuses: it continues one wake leaving the
+cluster and here two do, the front's above the rear foil and the rear's
+behind it, so the complete result falls back to the annular construction
+(88 blocks, admissible, the rear wake only; the hull record is kept on the
+fallback with that reason). A hull that carries two exits is the next step,
+and the one 30P30N needs too - its main wake and flap base both leave.
+
+The multi-element wake needs the hull: with the far field many chords away
+the rear foil's far ring lies beyond its tail, the chord would run the whole
+length of the body and the exit crossing lands at the sharp tail, which the
+writer refuses. Three refusals are inherent to the lens: a fixed gate of the
+passed body on the lens arc, a lens with a second corner (a far-field chain
+break projecting onto the arc, which is what the plain far field gives), and
+a passed body whose wall turns too much under the wake for the three gates
+it gets there - the teardrop placed with its nose behind the front tail,
+whose nose top projects onto the lens arc, is refused that way. Two
+geometric refusals come from the passage being too short or the lens too
+thin: a rear foil 0.08 chords under the wake with the hull ten band heights
+of 0.02 out puts the junction 0.024 above the wake and the lens-side front
+only 0.015 wide between its tips.
+
+**30P30N main and flap** (hull six band heights of 0.02 out): the main's
+wake over the flap is planned and written - the main-side turning and
+curvature gates beside the trailing edge are dropped because the core
+patches between them and the wake front were not convex, and the flap's
+band under the wake is rebuilt against the wake band - and the graph has
+no problems, but the sampled grids refuse it: the slot between the wake
+line and the flap's nose is 0.005 chords deep 0.02 behind the trailing
+edge, where the wake band (0.0028-0.0045 thick, the main's band at the
+edge continued) leaves the flap's band 0.0001-0.0007 and the core between
+them less than that, and the graded counts grid folds there (37 inverted
+cells in that core patch; the uniform shape grid is clean). The slot wants
+the wake band clearance-limited by the flap exactly as the wall bands are
+limited by each other - a front that is the offset of the wake line at
+0.35 of the clearance, a polyline rather than a straight line - which is
+the next refinement of this template.
+
 ### Hull far field (opt-in, two or more bodies)
 
 ```bash
@@ -813,9 +923,10 @@ python experiments/agentic_topology/research_cli.py run --case two_circles \
 
 | case | annular construction | hull far field |
 | --- | --- | --- |
-| tandem foils, C-shape of radius 15 about (1, 0), `--wake` | 73 blocks, inadmissible; the front wake refused at the layout stage by the far-field chain gates crowding the rear tail; 112 s | **128 blocks, admissible**, both wakes (front on the rear foil's band, rear through the hull to the outlet), hull at 0.9, levels at 1.8 and 3.6, then the cap; one core block at the rear edge's seam at 70.5 degrees of non-orthogonality, half a degree over the target; 19 s |
+| tandem foils, C-shape of radius 15 about (1, 0), `--wake` | 73 blocks, inadmissible; the front wake refused at the layout stage by the far-field chain gates crowding the rear tail; 112 s | **116 blocks, admissible**, both wakes (front on the rear foil's band, rear through the hull to the outlet), hull at 0.9, levels at 1.8 and 3.6, then the cap; one core block at the rear edge's seam at 70.5 degrees of non-orthogonality, half a degree over the target; 19 s |
 | two circles, rectangle at scale 8 | 45 blocks, admissible, 78 degrees | **88 blocks, resolved** |
 | two circles, circle at scale 8 | 42 blocks, admissible, 78 degrees | **88 blocks, resolved** once the levels map between the kinks; by plain fraction the peanut-shaped level twisted one sector onto the round boundary to 79 degrees |
+| tandem with a blunt rear edge (`tandem_blunt`), C-shape of radius 15, `--wake` | - | **113 blocks, admissible**: the front wake lands on the rear foil, the rear's base leaves the hull as three strips to the outlet |
 | 30P30N main and flap, C-shape of radius 15, `--wake`, band 0.02 | 75 blocks, inadmissible | **179 blocks, admissible**, closed far field with four levels (0.24 to 1.92); neither wake applies yet (the main's passes over the flap, the flap's base leaves the hull), and the near field's worst block is at 89 degrees |
 
 The near field is the annular producer's own: the hull is just its outer

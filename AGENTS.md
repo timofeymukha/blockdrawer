@@ -251,10 +251,21 @@ them in the canvas widgets.
   with the band continued as a two-sided wake band and the far-field core cut
   open along it - or, for a blunt base (two convex corners within two percent
   of the perimeter), one record with two fixed anchors and three strips: the
-  base itself going on as the wake's core strip between the flank bands;
-  wakes are tried in passes so an upstream wake can follow a
-  downstream one; trials are committed only as complete admissible results
-  and refusals keep their reasons under `medial.wakes`. Feature anchors take
+  base itself going on as the wake's core strip between the flank bands - or,
+  when the ray crosses into another body's cell and reaches that cell's far
+  ring before any wall (a main element's wake over its flap, `through` in
+  the record), through that cell: two fixed anchors where the wake enters
+  and leaves it, a straight chord with a wake strip on each side, three
+  spokes from the body-side strip down to the passed body's band (whose
+  band is rebuilt with the wake band as an obstacle), and the lens between
+  the lens-side front and the ring arc the chord cuts off written as three
+  quads around a centre vertex, since a lens is a curved triangle no spoke
+  can end in quads; the passed body carries exactly three gates under the
+  wake, so a wall that turns too much there, a fixed gate on the lens arc or
+  a second lens corner refuses the wake; wakes are tried in passes so an
+  upstream wake can follow a downstream one; trials are committed only as
+  complete admissible results and refusals keep their reasons under
+  `medial.wakes`. Feature anchors take
   the closest ring point unless the outward ray's spoke is squarer by fifteen
   degrees (corners always take the ray), and gates are cut until
   neighbouring spoke lengths are within a factor of four; both rules moved
@@ -282,8 +293,12 @@ them in the canvas widgets.
   level sets at growing heights carry the hull's vertices outward - by
   arc-length fraction between the kinks where the nearest body changes, so
   no vertex crosses the waist between two bodies - and join the outer
-  boundary by spokes - cut open along one exit wake's band to the
-  outlet, C-grid style, or closed and mapped chain onto chain. The whole
+  boundary by spokes - cut open along one exit wake's band (a sharp edge's
+  two halves or a blunt base's three strips) to the outlet, C-grid style,
+  or closed and mapped chain onto chain. The near field is built with the hull as
+  one chain first and with the outer boundary's chains mirrored onto it only
+  when no wake leaves; a hull's chain breaks are anchored by the inward ray
+  (`LayoutOptions.outer_by_ray`). The whole
   graph is validated with the real domain; refusals keep their reason under
   `medial.hull` and the annular construction runs instead.
   `spanned.py` exposes an opt-in `--span-gaps` construction: mutually facing

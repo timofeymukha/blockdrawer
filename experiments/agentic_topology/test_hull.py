@@ -21,6 +21,44 @@ def run(key, names, loops, options):
     return _RUNS[key]
 
 
+def staggered_options(**overrides):
+    settings = dict(
+        farfield_shape="cshape", farfield_radius=15.0, farfield_center=(1.0, 0.0),
+        layer_height=0.01, wake=wake.WakeOptions(enabled=True),
+        hull=hull.HullOptions(enabled=True, height_ratio=20.0),
+    )
+    settings.update(overrides)
+    return replace(CAVITY_FAST, **settings)
+
+
+def staggered_near(key="staggered-near"):
+    """The near field inside the hull as ``_try_hull`` builds it, run on its own:
+    the annular construction with the hull as the single outer chain."""
+    import math
+    import planar_domain as pdm
+    import sites as site_module
+    if key in _RUNS:
+        return _RUNS[key]
+    names, loops = cases.staggered_foils()
+    settings = staggered_options()
+    outer, circle = pdm.fabricate_outer(loops, pipeline.farfield_spec(settings))
+    domain = pdm.from_bodies(names, loops, outer=outer)
+    sites, _scale = site_module.sites_from_domain(domain, circle=circle, frame=site_module.domain_frame(loops))
+    _centre, radius = site_module.domain_frame(loops)
+    layer_height = pipeline._metric(domain, settings).layer_height
+    height = min(settings.hull.height_ratio * layer_height, float(radius))
+    points = hull.align_start(hull.cluster_level_set(loops, height, resolution=settings.hull.resolution), sites[-1].curve.point_at(0.0))
+    near_settings = replace(
+        settings,
+        hull=replace(settings.hull, enabled=False),
+        layer_height=layer_height,
+        layout=replace(settings.layout, band_height=layer_height, max_band_turning=math.radians(45.0), outer_by_ray=True),
+        layer=replace(settings.layer, inscribed_cap=False),
+    )
+    _RUNS[key] = pipeline.run_external(names, loops, near_settings, outer=[("hull", "farfield", points)])
+    return _RUNS[key]
+
+
 def tandem_options(**overrides):
     settings = dict(
         farfield_shape="cshape", farfield_radius=15.0, farfield_center=(1.0, 0.0),
@@ -63,7 +101,7 @@ class HullFarFieldTests(unittest.TestCase):
         self.assertTrue(result.admissible, result.problems or result.failures)
         self.assertGreaterEqual(record["levels"], 1)
         self.assertEqual(record["exit_wake"], "rear")
-        self.assertEqual(record["hull_chains"], ["bottom", "outlet", "top", "cap"])
+        self.assertEqual(record["hull_chains"], ["hull"])
         near = record["near"]
         self.assertTrue(near["admissible"])
         self.assertEqual({item["site"]: item["target"] for item in near["wakes"]}, {"front": "body", "rear": "outer"})
@@ -71,6 +109,65 @@ class HullFarFieldTests(unittest.TestCase):
         self.assertEqual(boundaries, ["bottom", "cap", "front", "outlet", "rear", "top"])
         levels = {key[2] for key in result.graph.vertices if key[:2] == ("hull", "level")}
         self.assertEqual(levels, set(range(1, record["levels"] + 1)))
+
+    def test_a_blunt_base_leaves_the_cluster_as_three_strips(self):
+        """The rear foil's blunt base exits the hull as the base strip between
+        the two wake lines with a wake band on each side, all running on to
+        the outlet through every level."""
+        names, loops = cases.tandem_blunt()
+        result = run("tandem-blunt-hull", names, loops, tandem_options())
+        record = result.hull
+        self.assertTrue(record["applied"], record.get("reason"))
+        self.assertTrue(result.admissible, result.problems or result.failures)
+        self.assertEqual(record["exit_kind"], "base")
+        beyond = [face for face in result.graph.faces if face.provenance == "wake band beyond the hull"]
+        self.assertEqual(len(beyond), 3)
+        exits = sorted(key[3] for key in result.graph.vertices if key[:3] == ("hull", "exit", 0))
+        self.assertEqual(exits, ["centre0", "centre1", "in", "out"])
+
+    def test_a_wake_passes_over_a_staggered_rear_foil(self):
+        """The multi-element wake: the front wake crosses the rear foil's cell
+        as a chord with a strip on each side, the lens between the lens-side
+        strip and the medial arc is three quads around a centre, the rear's
+        band gets three spokes under the wake, and the rear's own wake leaves
+        through the hull."""
+        names, loops = cases.staggered_foils()
+        result = run("staggered-hull", names, loops, staggered_options())
+        record = result.hull
+        near = record["near"]
+        self.assertTrue(near["admissible"], near.get("problems") or near.get("failures") or near.get("errors"))
+        self.assertEqual({item["site"]: (item["applied"], item["target"]) for item in near["wakes"]},
+                         {"front": (True, "outer"), "rear": (True, "outer")})
+        # Both wakes leave the cluster, and the hull far field continues one
+        # exiting wake only: the far field falls back with that reason, and
+        # the fallback keeps the hull record.
+        self.assertFalse(record["applied"])
+        self.assertIn("at most one wake", record["reason"])
+        self.assertIs(result.hull, record)
+
+    def test_the_wake_over_the_rear_foil_is_written_through_its_cell(self):
+        """The near field inside the hull, built directly: the front record
+        carries the passage and the lens, the graph the four strip blocks,
+        the three lens blocks and the three spokes onto the rear's band."""
+        result = staggered_near()
+        self.assertTrue(result.admissible, result.problems or result.failures)
+        wakes = {item["site"]: item for item in result.wakes.records}
+        front = wakes["front"]
+        self.assertTrue(front["applied"], front.get("reason"))
+        self.assertEqual(front["through"][0]["site"], "rear")
+        self.assertEqual(front["target"]["kind"], "outer")
+        self.assertEqual(front["lens"]["blocks"], 3)
+        self.assertEqual(front["exit_key"], front["anchor_keys"][1])
+        self.assertTrue(wakes["rear"]["applied"], wakes["rear"].get("reason"))
+        provenances = [face.provenance for face in result.graph.faces]
+        self.assertEqual(provenances.count("lens beside the wake"), 3)
+        self.assertEqual(provenances.count("wake band over the body"), 4)
+        rear = int(front["through"][0]["cell"])
+        feet = sorted(key[-1] for key in result.graph.vertices if key[:2] == ("wake", rear) and key[-2] == "gate")
+        self.assertEqual(feet, ["f", "g", "x"])
+        centre = ("wake", rear, *front["anchor_key"], "lens", "centre")
+        self.assertIn(centre, result.graph.vertices)
+        self.assertEqual(sum(centre in key for key in result.graph.edges), 3)
 
     def test_the_annular_construction_is_the_fallback_with_a_reason(self):
         names, loops = cases.tandem_foils()

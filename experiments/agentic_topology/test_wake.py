@@ -143,6 +143,24 @@ class WakeConstructionTests(unittest.TestCase):
         baseline = run_case("sharp_bodies", CAVITY_FAST)
         self.assertNotEqual(result.graph.summary(), baseline.graph.summary())
 
+    def test_a_wake_over_another_body_is_planned_through_its_cell(self):
+        """With the far field many chords away the rear foil's far ring lies
+        beyond its tail, so the plan sees the passage but the trial refuses
+        it at the rear's sharp tail; the record still says what the wake
+        would do."""
+        names, loops = cases.staggered_foils()
+        result = run_case("staggered_foils", CAVITY_FAST)
+        records = wake.plan(result.layout, wake.WakeOptions(enabled=True))
+        front = next(item for item in records if item["site"] == "front")
+        self.assertTrue(front["planned"], front.get("reason"))
+        self.assertEqual(len(front["through"]), 1)
+        passage = front["through"][0]
+        self.assertEqual(passage["site"], "rear")
+        self.assertEqual(front["target"]["kind"], "outer")
+        self.assertGreater(passage["length"], 0.0)
+        self.assertNotEqual(passage["ring"]["branch"], front["ring_branch"])
+        self.assertGreater(front["wake_length"], passage["length"])
+
     def test_tandem_foils_get_both_wakes(self):
         """The rung between the single airfoil and 30P30N: the front foil's
         wake ends on the rear foil's band, the rear foil's wake leaves for the

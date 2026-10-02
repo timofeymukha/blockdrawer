@@ -158,27 +158,65 @@ def tandem_foils(
     angle: float = math.radians(10.0),
     gap: float = 0.4,
     tip_ratio: float = 3.0,
+    rear_base: float = 0.0,
+    drop: float = 0.0,
 ) -> tuple[list[str], list[np.ndarray]]:
     """Two sharp-tailed foils in tandem, the rear one turned by ``angle``.
 
     Both foils have chord one: a teardrop of radius ``1 / (1 + tip_ratio)``
     with the tip ``tip_ratio`` radii behind the centre.  The front foil lies
     on the x axis with its tail at the origin; the rear foil's nose sits
-    ``gap`` chords behind that tail, and the rear foil is turned nose-up by
-    ``angle`` about its nose, so the front foil's wake, leaving the tail along
-    the x axis, arrives at the rear foil's nose.  The rung between the single
-    airfoil and 30P30N: the front wake ends on another body's band, and the
-    rear wake leaves for the far field at an angle.
+    ``gap`` chords behind that tail and ``drop`` chords below the axis, and
+    the rear foil is turned nose-up by ``angle`` about its nose.  With no
+    drop the front foil's wake, leaving the tail along the x axis, arrives
+    at the rear foil's nose; with a drop larger than the rear foil's height
+    above its nose the wake passes over the rear foil.  The rungs between
+    the single airfoil and 30P30N: the front wake ends on another body's
+    band, or passes over another body, and the rear wake leaves for the far
+    field at an angle.
     """
     radius = 1.0 / (1.0 + tip_ratio)
     front = teardrop((-radius * tip_ratio, 0.0), radius, tip_ratio=tip_ratio)
     # Turn about the nose: place the centre so that the rotated nose lands
-    # at (gap, 0).
+    # at (gap, -drop).
     nose_local = np.asarray([-radius, 0.0])
     rotation = np.asarray([[math.cos(-angle), -math.sin(-angle)], [math.sin(-angle), math.cos(-angle)]])
-    centre = np.asarray([gap, 0.0]) - rotation @ nose_local
+    centre = np.asarray([gap, -drop]) - rotation @ nose_local
     rear = teardrop(tuple(centre), radius, tip_ratio=tip_ratio, angle=-angle)
+    if rear_base > 0.0:
+        # Cut the rear foil's tail off square, ``rear_base`` wide, in its
+        # own frame, then place it as the sharp one was placed.
+        local = teardrop((0.0, 0.0), radius, tip_ratio=tip_ratio)
+        tip, arc = local[-1], local[:-1]
+        half = math.asin(1.0 / tip_ratio)
+        depth = 0.5 * rear_base / math.tan(half)
+        local = np.vstack([arc, [[tip[0] - depth, -0.5 * rear_base], [tip[0] - depth, 0.5 * rear_base]]])
+        rear = _place(local, tuple(centre), -angle)
     return ["front", "rear"], [front, rear]
+
+
+def tandem_blunt() -> tuple[list[str], list[np.ndarray]]:
+    """The tandem with a blunt rear trailing edge: the front wake lands on the
+    rear foil, the rear's base leaves the cluster as three strips."""
+    return tandem_foils(rear_base=0.02)
+
+
+def staggered_foils() -> tuple[list[str], list[np.ndarray]]:
+    """The tandem with the rear foil dropped below the front foil's wake.
+
+    The rear foil's nose sits 0.18 chords ahead of the front tail and 0.174
+    below it, turned nose-up by twenty-five degrees, so its highest point
+    lies 0.03 chords under the front wake just behind the tail - the
+    proportions of a slotted flap under a main element's trailing edge -
+    and the front wake passes over the rear foil through its cell on the
+    way to the far field: the multi-element wake.  The nose sits ahead of
+    the tail so the rear's nose gates project onto the gap side of the
+    wake's ring crossing and only its straight upper side lies under the
+    wake, and the junction of the two bodies' cells with the hull stands
+    well above the wake band when the hull is twenty band heights of 0.01
+    out, so the lens beside the wake band is a proper triangle.
+    """
+    return tandem_foils(angle=math.radians(25.0), gap=-0.18, drop=0.174)
 
 
 def peanut(
@@ -508,6 +546,8 @@ CASES = {
     "skimming_tail": skimming_tail,
     "tandem_foils": tandem_foils,
     "blunt_foil": blunt_foil,
+    "tandem_blunt": tandem_blunt,
+    "staggered_foils": staggered_foils,
 }
 
 

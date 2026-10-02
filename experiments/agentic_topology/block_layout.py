@@ -433,7 +433,7 @@ def reflex_anchors(diagram: Diagram, cells: list[Cell]) -> list[Anchor]:
     return anchors
 
 
-def chain_anchors(diagram: Diagram, cells: list[Cell]) -> list[Anchor]:
+def chain_anchors(diagram: Diagram, cells: list[Cell], *, outer_ray: bool = False) -> list[Anchor]:
     """Mandatory anchors where one named boundary chain meets the next.
 
     A block edge carries exactly one patch name, so a loop made of several
@@ -445,14 +445,14 @@ def chain_anchors(diagram: Diagram, cells: list[Cell]) -> list[Anchor]:
     for cell in cells:
         site = diagram.sites[cell.site]
         for station in site.chain_breaks:
-            anchor = anchor_from_wall(diagram, cell, float(station), "chain")
+            anchor = anchor_from_wall(diagram, cell, float(station), "chain", outer_ray=outer_ray)
             if anchor is not None:
                 anchors.append(anchor)
     return anchors
 
 
 def anchor_from_wall(
-    diagram: Diagram, cell: Cell, wall_station: float, kind: str
+    diagram: Diagram, cell: Cell, wall_station: float, kind: str, *, outer_ray: bool = False
 ) -> Anchor | None:
     """Anchor a wall station on the cell ring where its spoke is squarest.
 
@@ -482,7 +482,7 @@ def anchor_from_wall(
     if closest is None:
         return None
     direction = outward_direction(site, wall_station)
-    if site.curve.kind != "wall" or direction is None:
+    if direction is None or (site.curve.kind != "wall" and not outer_ray):
         return Anchor(closest[1], closest[2], kind, None, (cell.site, wall_station))
     hit: tuple[float, int, float] | None = None
     for step in cell.steps:
@@ -492,7 +492,9 @@ def anchor_from_wall(
                 hit = (t, step.branch, arclength)
     if hit is None:
         chosen = closest
-    elif kind in ("corner", "reflex"):
+    elif kind in ("corner", "reflex") or site.curve.kind != "wall":
+        # Corners always take the ray; so does a hull's chain break, whose
+        # closest ring point at a pointed end of the hull is arbitrary.
         chosen = hit
     else:
         # The closest point is the default; the ray replaces it only when it
@@ -1026,6 +1028,10 @@ class LayoutOptions:
     # Judge the anchor floor against the wall gap as well as the clearance
     # (see ``AnchorSet``): for a producer whose core is not built on the ring.
     floor_by_wall_gap: bool = False
+    # Anchor the outer boundary's chain breaks by the inward ray rather than
+    # the closest ring point: for a hull that wraps the cluster closely, whose
+    # pointed ends have a whole arc of stations closest to one ring point.
+    outer_by_ray: bool = False
     # The spoke lengths at a patch's two gates may differ by at most this
     # factor.  Leaving a narrow gap the clearance grows quickly, and one
     # block spanning a spoke of a fiftieth of the body and one of half of
@@ -1102,7 +1108,7 @@ def build_layout(diagram: Diagram, options: LayoutOptions | None = None) -> Layo
         anchors.add(anchor, force=True)
     # A named boundary chain ends here and another begins: a block edge has
     # one patch name, so this is a gate whatever the geometry does.
-    for anchor in chain_anchors(diagram, cells):
+    for anchor in chain_anchors(diagram, cells, outer_ray=settings.outer_by_ray):
         anchors.add(anchor, force=True)
     # A reflex corner is where the level set of the wall distance has its
     # mitre; the band spoke has to run along its bisector, so it is always a

@@ -1,6 +1,6 @@
 .PHONY: run test integration-test check research-test research-30p30n \
         research-periodic-hill research-cases research-a-airfoil research-tandem \
-        research-tandem-15c research-blunt-foil
+        research-tandem-15c research-blunt-foil research-staggered
 
 PYTHON ?= python3
 OPENFOAM_IMAGE ?= /tmp/timofey/code/openfoam-apptainer/openfoam-2606.sif
@@ -87,6 +87,14 @@ research-blunt-foil:
 		--json $(RESEARCH_OUTPUT)/blunt_foil.json \
 		--session $(RESEARCH_OUTPUT)/blunt_foil-session.json \
 		--session-render $(RESEARCH_OUTPUT)/blunt_foil-session.png
+
+research-staggered:
+	$(PYTHON) $(RESEARCH)/research_cli.py run --case staggered_foils --wake --hull \
+		--farfield-shape cshape --farfield-radius 15 --farfield-center 1,0 \
+		--layer-height 0.01 --hull-height-ratio 20 \
+		--output $(RESEARCH_OUTPUT)/staggered_foils.png \
+		--json $(RESEARCH_OUTPUT)/staggered_foils.json \
+		--session $(RESEARCH_OUTPUT)/staggered_foils-session.json
 
 research-30p30n:
 	$(PYTHON) $(RESEARCH)/fetch_30p30n.py

@@ -86,6 +86,30 @@ case you are in.
   70 degrees of non-orthogonality in the annular construction.
   The engine refuses a wake from a single base corner; build the base by hand
   until the template exists.
+- **Sharp trailing edge whose wake passes over another body** (a main
+  element's wake over its flap): the wake runs through that body's cell as
+  a straight chord with a wake strip on each side; the body-side strip is
+  tied to the passed body's band by three spokes (where the strip enters
+  the cell, halfway along the chord, where it leaves), and the sliver
+  between the lens-side strip and the medial arc over the body - a curved
+  triangle - is three quads around a centre vertex. The passed body's band
+  is thinned to stay clear of the wake band and carries exactly those three
+  gates under the wake. Engine: `--wake` with `--hull` (the far ring must
+  lie above the body, which only the hull's near-field ring does; with a
+  plain far field the chord runs beyond the body's tail); the plan record
+  carries `through` and `lens`. Refused, with the reason under
+  `medial.wakes`, when the body's wall turns too much under the wake for
+  three gates, when a corner or chain break projects onto the lens arc,
+  when the lens has a second corner, or when the wake would enter a third
+  body's cell. The staggered teardrops (`make research-staggered`) get it
+  in the near field inside the hull with the rear's own wake beside it; the
+  hull far field then continues one exiting wake only, so with two the far
+  field falls back to the annular construction with that reason under
+  `medial.hull` (the two-exit hull is the next step, and 30P30N's too).
+  30P30N's main and flap get the topology, but the slot under the main's
+  trailing edge - 0.005 chords between the wake line and the flap's nose -
+  folds the graded grid there until the wake band is clearance-limited by
+  the flap as wall bands are.
 - **Multi-element bodies** (slat, main, flap): the *effective airfoil* is a
   chain of wall pieces and **bridges** - straight cuts across a cove mouth or
   from a cusp to the next element - and the regions the chain skips are
@@ -163,7 +187,7 @@ acceptance terms - `topology_valid`, `untangled`, `within_shape_targets`,
 `describe`, `cavities`, `candidates`, `apply --move` and `focus` subcommands
 let you choose among validated alternatives instead of placing vertices.
 
-**Where the engine cannot** (multi-element wakes, blunt bases, pockets), write
+**Where the engine cannot** (wakes over two bodies, pockets), write
 geometry code, not clicks: a layout module that computes every vertex, curve
 and block independently of BlockDrawer, and a generator that emits an
 auditable `.jsonl` command batch and applies it in one atomic step:

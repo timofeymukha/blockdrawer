@@ -255,23 +255,33 @@ def plan(layout, options: WakeOptions | None = None) -> list[dict]:
                     (i for i, item in enumerate(layout.cells) if item.site == other_index), None
                 )
                 ends = [item for item in _ray_crossings(point, direction, other.curve.loop()) if item[0] > t_ring]
-                if other_cell is None or not ends:
-                    record["reason"] = (
-                        f"the wake crosses the ring into the cell of {other.name!r} "
-                        "but does not reach its wall"
-                    )
+                if other_cell is None:
+                    record["reason"] = f"the wake crosses the ring into the cell of {other.name!r}, which has no layout cell"
                     continue
-                t_end, _arclength, _segment = ends[0]
-                end_point = point + t_end * direction
-                end_station = float(other.curve.closest(end_point[None, :]).arclength[0])
-                target = {
-                    "kind": "body",
-                    "cell": other_cell,
-                    "site": other.name,
-                    "site_index": other_index,
-                    "wall_station": end_station,
-                    "point": [float(v) for v in end_point],
-                }
+                if ends:
+                    t_end, _arclength, _segment = ends[0]
+                    end_point = point + t_end * direction
+                    end_station = float(other.curve.closest(end_point[None, :]).arclength[0])
+                    target = {
+                        "kind": "body",
+                        "cell": other_cell,
+                        "site": other.name,
+                        "site_index": other_index,
+                        "wall_station": end_station,
+                        "point": [float(v) for v in end_point],
+                    }
+                else:
+                    # The wake passes over the other body: it crosses that
+                    # body's cell from ring to ring and leaves for the outer
+                    # boundary.  The crossing is recorded under ``through``.
+                    through, target, why = _plan_through(
+                        layout, point, direction, t_ring, other_cell, other, outer_index, outer, outer_loop
+                    )
+                    if through is None:
+                        record["reason"] = why
+                        continue
+                    record["through"] = [through]
+                    t_end = float(target.pop("t_end"))
             blocked = None
             for third in diagram.sites[:-1]:
                 if third.index in (cell.site, target["site_index"]):
@@ -281,8 +291,9 @@ def plan(layout, options: WakeOptions | None = None) -> list[dict]:
                     blocked = f"the wake ray meets the body {third.name!r}"
                     break
             if blocked is None:
+                expected = {branch_index} | {int(item["ring"]["branch"]) for item in record.get("through", [])}
                 for other_branch in diagram.branches:
-                    if other_branch.index == branch_index:
+                    if other_branch.index in expected:
                         continue
                     hits = [item for item in _ray_crossings(point, direction, other_branch.path) if item[0] < t_end]
                     if hits:
@@ -312,6 +323,65 @@ def plan(layout, options: WakeOptions | None = None) -> list[dict]:
     return records
 
 
+def _plan_through(layout, point, direction, t_ring, cell_b, site_b, outer_index, outer, outer_loop):
+    """The wake's passage through the cell of a body it passes over.
+
+    Beyond its own ring the wake runs through ``cell_b`` and must leave it
+    across that cell's ring exactly once, into the outer cell, and then
+    reach the outer boundary.  Returns the ``through`` record and the outer
+    target (carrying the ray parameter of its end under ``t_end``), or the
+    reason there is none.
+    """
+    diagram = layout.diagram
+    cell = layout.cells[cell_b]
+    hits = [item for item in _ray_crossings(point, direction, cell.ring) if item[0] > t_ring + 1e-9]
+    if len(hits) != 1:
+        return None, None, (
+            f"the wake passes over {site_b.name!r} but leaves its cell {len(hits)} times; exactly one is needed"
+        )
+    t_exit, exit_station, _segment = hits[0]
+    branch_index, position = cell.branch_station(exit_station)
+    branch = diagram.branches[branch_index]
+    beyond = [index for index in branch.pair if index != cell.site][0]
+    if beyond != outer_index:
+        return None, None, (
+            f"the wake passes over {site_b.name!r} and enters the cell of "
+            f"{diagram.sites[beyond].name!r}; a wake over two bodies is not built"
+        )
+    ends = [item for item in _ray_crossings(point, direction, outer_loop) if item[0] > t_exit]
+    if not ends:
+        return None, None, f"the wake passes over {site_b.name!r} but does not reach the outer boundary"
+    t_end, _arclength, _segment = ends[0]
+    end_point = point + t_end * direction
+    end_station = float(outer.curve.closest(end_point[None, :]).arclength[0])
+    exit_point = point + t_exit * direction
+    entry_point = point + t_ring * direction
+    through = {
+        "cell": int(cell_b),
+        "site": site_b.name,
+        "site_index": int(cell.site),
+        "wall_station": float(site_b.curve.closest(entry_point[None, :]).arclength[0]),
+        "exit_wall_station": float(site_b.curve.closest(exit_point[None, :]).arclength[0]),
+        "ring": {
+            "branch": int(branch_index),
+            "position": float(position),
+            "station": float(exit_station),
+            "point": [float(v) for v in exit_point],
+        },
+        "length": float(t_exit - t_ring),
+    }
+    target = {
+        "kind": "outer",
+        "cell": len(layout.cells) - 1,
+        "site": outer.name,
+        "site_index": outer_index,
+        "wall_station": end_station,
+        "point": [float(v) for v in end_point],
+        "t_end": float(t_end),
+    }
+    return through, target, ""
+
+
 def _plan_base(record, layout, settings, cell_index, cell, site, loop, stations, angles, first, second, outer_index, outer, outer_loop):
     """Plan the wake of a blunt base: two parallel wake lines from its corners.
 
@@ -323,7 +393,6 @@ def _plan_base(record, layout, settings, cell_index, cell, site, loop, stations,
     within sixty degrees of that normal.
     """
     diagram = layout.diagram
-    total = float(stations[-1])
     points = [np.asarray(loop[first], dtype=np.float64), np.asarray(loop[second], dtype=np.float64)]
     base = points[1] - points[0]
     width = float(np.linalg.norm(base))
@@ -458,19 +527,34 @@ def prepare(layout, records: list[dict]) -> list[str]:
             ]
         else:
             target = record.get("target") or {"site_index": outer_index, "wall_station": record["exit_station"]}
-            pins = [
-                (
-                    record["wall_station"],
-                    {"branch": record["ring_branch"], "position": record["ring_position"], "station": record["ring_station"], "point": record["ring_point"]},
-                    (int(target["site_index"]), float(target["wall_station"])),
-                )
-            ]
+            ring1 = {"branch": record["ring_branch"], "position": record["ring_position"], "station": record["ring_station"], "point": record["ring_point"]}
+            through = record.get("through") or []
+            if through:
+                # A wake passing over another body pins two anchors: where
+                # it enters that body's cell, pinned to the trailing edge
+                # and to that body's nearest wall station, and where it
+                # leaves, pinned to that body and to the exit on the outer
+                # boundary.
+                passage = through[0]
+                pins = [
+                    (record["wall_station"], ring1, (int(passage["site_index"]), float(passage["wall_station"]))),
+                    (float(passage["exit_wall_station"]), passage["ring"], (int(target["site_index"]), float(target["wall_station"]))),
+                ]
+            else:
+                pins = [(record["wall_station"], ring1, (int(target["site_index"]), float(target["wall_station"])))]
         keys = []
-        for station, ring, extra in pins:
-            anchor = _pin_anchor(layout, anchors, cell_index, cell, site, station, ring, extra, removed, notes, record)
+        for index, (station, ring, extra) in enumerate(pins):
+            pin_cell = cell_index
+            if record.get("through") and index == 1:
+                pin_cell = int(record["through"][0]["cell"])
+            pin = layout.cells[pin_cell]
+            anchor = _pin_anchor(layout, anchors, pin_cell, pin, diagram.sites[pin.site], station, ring, extra, removed, notes, record)
             keys.append(list(anchor.key))
         record["anchor_key"] = keys[0]
         record["anchor_keys"] = keys
+        if record.get("through"):
+            record["exit_key"] = keys[-1]
+            _prepare_lens(layout, anchors, diagram, record, removed, notes)
         target = record.get("target") or {}
         if target.get("kind") == "body":
             _drop_landing_neighbours(layout, anchors, diagram, record, target, removed, notes)
@@ -489,12 +573,12 @@ def _pin_anchor(layout, anchors, cell_index, cell, site, station, ring, extra, r
     """Replace the feature anchor at ``station`` by a fixed wake anchor at ``ring``."""
     import block_layout
 
-    total = site.curve.length()
     # Remove the feature's existing anchor at this wall station.  The wake
     # anchor takes its place on the ring - the same place, when the feature
     # anchor sits on the corner's bisector and the wake follows it - so the
     # removed anchor's cut must not count as a neighbour in the crowding
     # bookkeeping below.
+    total = site.curve.length()
     for cut in layout.cuts[cell_index]:
         anchor = cut.anchor
         # The feature's anchor is matched by the station it was made for as
@@ -547,6 +631,75 @@ def _pin_anchor(layout, anchors, cell_index, cell, site, station, ring, extra, r
     if not anchors.add(anchor, force=True):
         raise pg.GraphError("the wake anchor coincides with an existing ring cut")
     return anchor
+
+
+def _prepare_lens(layout, anchors, diagram, record, removed, notes):
+    """Clear the medial arc between the wake and the body it passes over.
+
+    The wake's chord through that body's cell and the arc of the cell's ring
+    on the far side of the chord bound a lens.  The lens is written as quads
+    around a centre vertex whose corners are the arc's junctions; every
+    optional anchor on the arc is dropped, and a fixed gate of the passed
+    body there refuses the wake.  The arc's corners and direction are kept
+    under ``record["lens"]``.
+    """
+    layout.cuts = anchors.cuts()
+    passage = record["through"][0]
+    cell_b = int(passage["cell"])
+    cell = layout.cells[cell_b]
+    site_b = diagram.sites[cell.site]
+    key1, key2 = (tuple(key) for key in record["anchor_keys"])
+    cuts = layout.cuts[cell_b]
+    s1 = next((cut.ring_station for cut in cuts if cut.anchor.key == key1), None)
+    s2 = next((cut.ring_station for cut in cuts if cut.anchor.key == key2), None)
+    if s1 is None or s2 is None:
+        raise pg.GraphError("the wake's anchors are missing from the cell it passes through")
+    total = cell.ring_length
+    point = np.asarray(record["point"], dtype=np.float64)
+    direction = np.asarray(record["direction"], dtype=np.float64)
+    normal = np.array([-direction[1], direction[0]])
+    wall_side = float(np.mean((site_b.curve.loop() - point) @ normal))
+    forward_arc = g2.loop_section(cell.ring, s1, s2, forward=True)
+    arc_side = float(np.mean((forward_arc - point) @ normal))
+    forward = arc_side * wall_side < 0.0
+    corners = []
+    dropped = []
+    for cut in cuts:
+        anchor = cut.anchor
+        if anchor.key in (key1, key2):
+            continue
+        inside = _cyclic_between(cut.ring_station, s1, s2, total) if forward else _cyclic_between(cut.ring_station, s2, s1, total)
+        if not inside:
+            continue
+        if anchor.junction is not None:
+            corners.append(cut)
+        elif anchor.kind in _OPTIONAL_KINDS and anchor.movable:
+            dropped.append(anchor)
+        elif anchor.hint is not None and anchor.hint[0] == cell.site:
+            raise pg.GraphError(
+                f"a {anchor.kind} gate of {site_b.name!r} lies between the wake and the medial arc it passes under"
+            )
+        else:
+            corners.append(cut)
+    for anchor in dropped:
+        anchors.by_branch[anchor.branch] = [item for item in anchors.by_branch[anchor.branch] if item is not anchor]
+        anchors._keys.discard(anchor.key)
+        removed.append(anchor.key)
+    if dropped:
+        notes.append(f"{site_b.name}: dropped {len(dropped)} optional anchor(s) on the medial arc the wake passes under")
+        anchors._stations = {index: [] for index in range(len(layout.cells))}
+        for other_cuts in layout.cuts:
+            for cut in other_cuts:
+                if cut.anchor.key in removed:
+                    continue
+                anchors._stations[cut.cell].append((cut.ring_station, cut.wall_station, cut.clearance))
+    corners.sort(key=lambda cut: ((cut.ring_station - s1) % total) if forward else ((s1 - cut.ring_station) % total))
+    if len(corners) != 1 or corners[0].anchor.junction is None:
+        raise pg.GraphError(
+            f"the lens between the wake and the medial arc over {site_b.name!r} has "
+            f"{len(corners)} corner(s); one junction is what is built"
+        )
+    record["lens"] = {"cell": cell_b, "forward": bool(forward), "corners": [list(cut.anchor.key) for cut in corners]}
 
 
 def _drop_landing_neighbours(layout, anchors, diagram, record, target, removed, notes):
@@ -625,23 +778,71 @@ def make_room(layout, records: list[dict], fronts, options: WakeOptions | None =
     return notes
 
 
+def band_obstacles(layout, records: list[dict], fronts) -> dict:
+    """Polylines the bands of passed-over bodies keep clear of: the wake bands.
+
+    A wake passing over a body runs a band height above that body's cell,
+    and the body's own band - clearance-limited by walls only - would
+    otherwise grow into it.  For every such wake the body-side front of the
+    wake band, from the trailing edge to the outer boundary, is an obstacle
+    for that body's band, keyed by its cell.
+    """
+    diagram = layout.diagram
+    result: dict = {}
+    for record in records:
+        if not record.get("planned") or not record.get("through") or "anchor_key" not in record:
+            continue
+        cell_index = record["cell"]
+        cuts = layout.cuts[cell_index]
+        front = fronts.get(cell_index)
+        key = tuple(record["anchor_key"])
+        position = next((i for i, cut in enumerate(cuts) if cut.anchor.key == key), None)
+        if front is None or position is None or not front.is_seam(position):
+            continue
+        point_te = cuts[position].wall_point
+        direction = np.asarray(record["direction"], dtype=np.float64)
+        direction = direction / np.linalg.norm(direction)
+        normal = np.array([-direction[1], direction[0]])
+        sides = {label: float(np.dot(front.point_at(position, label) - point_te, normal)) for label in ("in", "out")}
+        if sides["in"] * sides["out"] >= 0.0:
+            continue
+        height = min(abs(sides["in"]), abs(sides["out"]))
+        # The front's offset beyond the ring: where it leaves the seam
+        # along the band's tangent it is a little thicker than the band.
+        leaving = _seam_directions(front, position, point_te, direction)
+        cell = layout.cells[cell_index]
+        offsets = {}
+        for label in ("in", "out"):
+            origin = front.point_at(position, label)
+            hits = _ray_crossings(origin, leaving[label], cell.ring)
+            offsets[label] = sides[label] if not hits else float(np.dot(origin + min(hits)[0] * leaving[label] - point_te, normal))
+        for passage in record["through"]:
+            site_b = diagram.sites[int(passage["site_index"])]
+            body_side = float(np.mean((site_b.curve.loop() - point_te) @ normal))
+            label = "in" if sides["in"] * body_side > 0.0 else "out"
+            offset = math.copysign(max(height, abs(offsets[label])), body_side)
+            length = float(record.get("wake_length", 0.0))
+            line = np.asarray([point_te + offset * normal, point_te + length * direction + offset * normal])
+            result.setdefault(int(passage["cell"]), []).append(line)
+    return result
+
+
 def _make_room_at(layout, cell, cuts, position, front, record, labels, settings, notes) -> bool:
     """Slide the ring neighbours of one wake anchor clear of its wake fronts."""
-    import block_layout
-
-    diagram = layout.diagram
     moved = False
     if True:
         wake_cut = cuts[position]
         direction = np.asarray(record["direction"], dtype=np.float64)
+        direction = direction / np.linalg.norm(direction)
         normal = np.array([-direction[1], direction[0]])
         total = cell.ring_length
         height = 0.0
         crossings: dict[str, float] = {}
+        leaving = _seam_directions(front, position, wake_cut.wall_point, direction) if record.get("through") else {"in": direction, "out": direction}
         for label in labels:
             origin = front.point_at(position, label)
             height = max(height, abs(float(np.dot(origin - wake_cut.wall_point, normal))))
-            hits = _ray_crossings(origin, direction, cell.ring)
+            hits = _ray_crossings(origin, leaving[label], cell.ring)
             if not hits:
                 crossings[label] = wake_cut.ring_station
                 continue
@@ -653,11 +854,17 @@ def _make_room_at(layout, cell, cuts, position, front, record, labels, settings,
             )
             crossings[label] = station
         count = len(cuts)
+        # The lens corner beside a wake passing over another body is the
+        # junction; the lens is written around it and the writer checks
+        # the arc piece's length itself.
+        lens_corners = {tuple(key) for key in (record.get("lens") or {}).get("corners", [])}
         for label, step in (("in", -1), ("out", 1)):
             if label not in labels:
                 continue
             neighbour = cuts[(position + step) % count]
             beyond = cuts[(position + 2 * step) % count]
+            if neighbour.anchor.key in lens_corners:
+                continue
             # The wake front's ring crossing becomes a ring vertex, and the
             # ring piece from it to the neighbouring anchor becomes a block
             # edge: the neighbour must keep the layout's own ring separation
@@ -702,7 +909,53 @@ def _make_room_at(layout, cell, cuts, position, front, record, labels, settings,
                 f"{record['site']}: {anchor.kind} anchor slid {need - have:.4g} along ring branch "
                 f"{branch} to clear the wake band"
             )
+        # The core patch between a wake front and the neighbouring spoke
+        # must be a convex quad.  A band that thins towards the trailing
+        # edge bends its front there, and an optional gate just beyond the
+        # bend leaves a sliver with a reflex corner at the seam: such gates
+        # are dropped until the patch is convex; a fixed gate refuses.
+        for label, step in (("in", -1), ("out", 1)):
+            if label not in labels:
+                continue
+            seam = front.point_at(position, label)
+            crossing = g2.sample_at_arclength(cell.ring, [crossings[label]])[0]
+            while True:
+                live = [cut for cut in cuts if cut.anchor.key not in _dropped_keys(layout)]
+                index = next(i for i, cut in enumerate(live) if cut.anchor.key == wake_cut.anchor.key)
+                neighbour = live[(index + step) % len(live)]
+                if neighbour is wake_cut:
+                    raise pg.GraphError(f"the cell of {record['site']} has no gate left beside the wake")
+                if neighbour.anchor.key in lens_corners:
+                    break
+                order = cuts.index(neighbour)
+                nbr_front = front.point_at(order, "out" if step < 0 else "in")
+                corners = [nbr_front, seam, crossing, neighbour.ring_point] if step < 0 else [seam, nbr_front, neighbour.ring_point, crossing]
+                if g2.strictly_convex(np.asarray(corners)):
+                    break
+                anchor = neighbour.anchor
+                if not anchor.movable or anchor.kind not in _OPTIONAL_KINDS:
+                    raise pg.GraphError(
+                        f"the core patch between the wake band of {record['site']} and the "
+                        f"{anchor.kind} gate beside it is not convex"
+                    )
+                layout.anchors.by_branch[anchor.branch] = [item for item in layout.anchors.by_branch[anchor.branch] if item is not anchor]
+                layout.anchors._keys.discard(anchor.key)
+                _dropped_keys(layout).add(anchor.key)
+                moved = True
+                notes.append(
+                    f"{record['site']}: dropped the {anchor.kind} anchor beside the wake band; "
+                    "the core patch between them was not convex"
+                )
     return moved
+
+
+def _dropped_keys(layout) -> set:
+    """Anchor keys dropped while making room, kept on the layout for the pass."""
+    dropped = getattr(layout, "_wake_dropped", None)
+    if dropped is None:
+        dropped = set()
+        layout._wake_dropped = dropped
+    return dropped
 
 
 # ---------------------------------------------------------------------------
@@ -736,6 +989,48 @@ def _cyclic_between(value: float, low: float, high: float, total: float) -> bool
         span = total
     offset = (value - low) % total
     return 0.0 < offset < span
+
+
+SEAM_TURN_MARGIN = math.radians(5.0)
+
+
+def _seam_directions(front, position: int, point_te, direction, margin: float = SEAM_TURN_MARGIN) -> dict:
+    """Direction each wake front leaves its seam point.
+
+    A wake front runs parallel to the wake from the seam point, which is
+    where the band front arrives.  A band that is clearance-limited by a
+    neighbouring body thins towards the trailing edge, so its front arrives
+    at the seam turned towards the wall; a wake front parallel to the wake
+    then turns back towards the wake, and the core patch beside the band
+    gets a reflex corner at the seam that folds its grid.  Such a front
+    leaves along the band front's own tangent, turned ``margin`` further
+    from the wake, so the corner stays convex; the wake band thickens a
+    little towards the ring and keeps that thickness beyond it.
+    """
+    direction = np.asarray(direction, dtype=np.float64)
+    direction = direction / np.linalg.norm(direction)
+    normal = np.array([-direction[1], direction[0]])
+    count = len(front.front) - 1
+    index = front.gate_indices[position]
+    result = {}
+    for label, step in (("in", -1), ("out", 1)):
+        seam = front.point_at(position, label)
+        tangent = seam - front.front[(index + step) % count]
+        length = float(np.linalg.norm(tangent))
+        sigma = math.copysign(1.0, float(np.dot(seam - np.asarray(point_te), normal)))
+        if length <= 0.0:
+            result[label] = direction
+            continue
+        tangent = tangent / length
+        if sigma * float(tangent[0] * direction[1] - tangent[1] * direction[0]) >= math.sin(margin):
+            result[label] = direction
+            continue
+        angle = sigma * margin
+        result[label] = np.array([
+            math.cos(angle) * tangent[0] - math.sin(angle) * tangent[1],
+            math.sin(angle) * tangent[0] + math.cos(angle) * tangent[1],
+        ])
+    return result
 
 
 def _section_crossing(origin, direction, section: np.ndarray, *, clearance: float):
@@ -792,6 +1087,8 @@ def apply(layout, graph: pg.PatchGraph, records: list[dict], fronts, *, wall_edg
 def _write_wake(layout, graph: pg.PatchGraph, record: dict, fronts, wall_edge_style: str) -> pg.PatchGraph:
     if record.get("kind") == "base":
         return _write_base_wake(layout, graph, record, fronts, wall_edge_style)
+    if record.get("through"):
+        return _write_wake_through(layout, graph, record, fronts, wall_edge_style)
     if (record.get("target") or {}).get("kind") == "body":
         return _write_wake_to_body(layout, graph, record, fronts, wall_edge_style)
     diagram = layout.diagram
@@ -1459,6 +1756,577 @@ def _write_wake_to_body(layout, graph: pg.PatchGraph, record: dict, fronts, wall
     record["wake_points"] = {label: [float(v) for v in point] for label, point in new_points.items()}
     record["band_height_at_edge"] = float(height)
     record["landing_stations"] = {"in": feet["in"], "out": feet["out"], "gate": station_gate_b}
+    return clone
+
+
+# ---------------------------------------------------------------------------
+# A wake passing over another body
+# ---------------------------------------------------------------------------
+
+
+def _polygon_sign(points) -> float:
+    return math.copysign(1.0, g2.polygon_area(np.asarray(points, dtype=np.float64)))
+
+
+def _oriented(clone: pg.PatchGraph, corners, sign: float):
+    """``corners`` in the graph's winding: reversed when their area has the other sign."""
+    points = [clone.vertices[key].point for key in corners]
+    if _polygon_sign(points) * sign < 0.0:
+        return tuple(reversed(tuple(corners)))
+    return tuple(corners)
+
+
+def _graph_sign(clone: pg.PatchGraph) -> float:
+    for face in clone.faces:
+        points = [clone.vertices[key].point for key in face.corners]
+        area = g2.polygon_area(np.asarray(points))
+        if abs(area) > 0.0:
+            return math.copysign(1.0, area)
+    return 1.0
+
+
+def _line_crossing(origin, direction, path: np.ndarray):
+    """The first crossing of a ray with a polyline: (t, arclength, point) or None."""
+    hits = _ray_crossings(origin, direction, path)
+    if not hits:
+        return None
+    t, arclength, _segment = min(hits, key=lambda item: item[0])
+    return t, arclength, origin + t * direction
+
+
+def _write_wake_through(layout, graph: pg.PatchGraph, record: dict, fronts, wall_edge_style: str) -> pg.PatchGraph:
+    """Write a wake that passes over another body on its way to the outer boundary.
+
+    The wake leaves cell A at its trailing edge as every wake does, crosses
+    the ring into the cell B of the body it passes over, runs through B as
+    a straight chord from ring to ring, and leaves across B's far ring into
+    the outer cell C.  Its two band fronts run parallel to it all the way,
+    so through B the wake is a chord with a strip on each side.  On the
+    body side of the chord the strip is bounded by B's core, which gets
+    three new spokes down to B's band: where the body-side front enters B,
+    halfway along the chord, and where the front leaves B.  On the other
+    side the strip is bounded by the lens between the lens-side front and
+    the arc of B's ring the wake cuts off - the arc from the entry crossing
+    to the junction of A, B and C and on to the exit crossing.  The lens is
+    a curved triangle (two tips where the front crosses the ring, one
+    corner at the junction) and is written as three quads around a centre
+    vertex, with one new spoke from the middle of each lens side: into A
+    from the arc's A piece, into C from its C piece, and down through the
+    strips to B's band from the front.  ``prepare`` has cleared the arc of
+    every other gate.
+    """
+    diagram = layout.diagram
+    cell_a = record["cell"]
+    passage = record["through"][0]
+    cell_b = int(passage["cell"])
+    cell_c = len(layout.cells) - 1
+    lens = record.get("lens") or {}
+    if lens.get("cell") != cell_b or len(lens.get("corners", [])) != 1:
+        raise pg.GraphError("the wake's lens was not prepared")
+    site_a = diagram.sites[layout.cells[cell_a].site]
+    site_b = diagram.sites[layout.cells[cell_b].site]
+    site_c = diagram.sites[layout.cells[cell_c].site]
+    if site_c.curve.kind == "wall":
+        raise pg.GraphError("the last cell is not the outer boundary")
+    key1, key2 = (tuple(key) for key in record["anchor_keys"])
+    key_j = tuple(lens["corners"][0])
+    clone = graph.copy()
+    sign = _graph_sign(clone)
+
+    def face(corners, role, provenance):
+        clone.add_face(_oriented(clone, corners, sign), role=role, provenance=provenance)
+
+    cuts_a, cuts_b, cuts_c = layout.cuts[cell_a], layout.cuts[cell_b], layout.cuts[cell_c]
+    position_a = next((i for i, cut in enumerate(cuts_a) if cut.anchor.key == key1), None)
+    position_b1 = next((i for i, cut in enumerate(cuts_b) if cut.anchor.key == key1), None)
+    position_b2 = next((i for i, cut in enumerate(cuts_b) if cut.anchor.key == key2), None)
+    position_c = next((i for i, cut in enumerate(cuts_c) if cut.anchor.key == key2), None)
+    position_bj = next((i for i, cut in enumerate(cuts_b) if cut.anchor.key == key_j), None)
+    if None in (position_a, position_b1, position_b2, position_c, position_bj):
+        raise pg.GraphError("a wake anchor is missing from one of the cells it crosses")
+    wake_cut_a, wake_cut_c = cuts_a[position_a], cuts_c[position_c]
+    prev_a, next_a = cuts_a[(position_a - 1) % len(cuts_a)], cuts_a[(position_a + 1) % len(cuts_a)]
+    prev_c, next_c = cuts_c[(position_c - 1) % len(cuts_c)], cuts_c[(position_c + 1) % len(cuts_c)]
+    if prev_a.anchor.key == next_a.anchor.key or prev_c.anchor.key == next_c.anchor.key:
+        raise pg.GraphError("a cell the wake crosses has too few cuts for a wake")
+    # B's cut order along the lens arc: entry, junction, exit, then the
+    # body-side neighbours beyond each end.
+    count_b = len(cuts_b)
+    step_b = 1 if lens["forward"] else -1
+    if cuts_b[(position_b1 + step_b) % count_b].anchor.key != key_j or cuts_b[(position_bj + step_b) % count_b].anchor.key != key2:
+        raise pg.GraphError("the gates on the medial arc the wake passes under were not cleared")
+    cut_g = cuts_b[(position_b1 - step_b) % count_b]       # B's neighbour on the body side of the entry
+    cut_f = cuts_b[(position_b2 + step_b) % count_b]       # B's neighbour on the body side of the exit
+    if cut_g.anchor.key in (key1, key2, key_j) or cut_f.anchor.key in (key1, key2, key_j):
+        raise pg.GraphError("the body the wake passes over has too few gates beside the wake")
+    # The lens side of the wake in A and C: the neighbour on the arc is the
+    # junction in both cells.
+    if prev_a.anchor.key == key_j:
+        lens_label_a, body_label_a = "in", "out"
+    elif next_a.anchor.key == key_j:
+        lens_label_a, body_label_a = "out", "in"
+    else:
+        raise pg.GraphError("the junction is not the wake's ring neighbour on the arc side in the body's cell")
+    if prev_c.anchor.key == key_j:
+        lens_label_c = "in"
+    elif next_c.anchor.key == key_j:
+        lens_label_c = "out"
+    else:
+        raise pg.GraphError("the junction is not the wake's ring neighbour on the arc side in the outer cell")
+    body_nbr_a = next_a if lens_label_a == "in" else prev_a
+    body_nbr_c = next_c if lens_label_c == "in" else prev_c
+    if body_nbr_a.anchor.key != cut_g.anchor.key or body_nbr_c.anchor.key != cut_f.anchor.key:
+        raise pg.GraphError("the body-side ring neighbours of the wake differ between the cells it crosses")
+
+    front_a = fronts.get(cell_a)
+    front_b = fronts.get(cell_b)
+    if front_a is None or front_b is None:
+        raise pg.GraphError("both bodies need a boundary-layer band; a wake continues one band over another")
+    if not front_a.is_seam(position_a):
+        raise pg.GraphError("the trailing edge carries no band seam to continue into a wake")
+    for order in (position_b1, position_b2, position_bj):
+        if front_b.is_seam(order):
+            raise pg.GraphError(f"the wake passes {site_b.name!r} at a sharp feature of its band")
+
+    # Vertex keys of the three annular neighbourhoods.
+    gate_te = ("gate", cell_a, *key1)
+    f_in, f_out = _front_keys(clone, cell_a, key1)
+    ring_r1, ring_r2, ring_j = ("ring", *key1), ("ring", *key2), ("ring", *key_j)
+    gate_w = ("gate", cell_c, *key2)
+    ring_prev_a, ring_next_a = ("ring", *prev_a.anchor.key), ("ring", *next_a.anchor.key)
+    f_prev_out = _front_keys(clone, cell_a, prev_a.anchor.key)[1]
+    f_next_in = _front_keys(clone, cell_a, next_a.anchor.key)[0]
+    gate_prev_a, gate_next_a = ("gate", cell_a, *prev_a.anchor.key), ("gate", cell_a, *next_a.anchor.key)
+    ring_prev_c, ring_next_c = ("ring", *prev_c.anchor.key), ("ring", *next_c.anchor.key)
+    gate_prev_c, gate_next_c = ("gate", cell_c, *prev_c.anchor.key), ("gate", cell_c, *next_c.anchor.key)
+    gate_b1, gate_b2, gate_bj = ("gate", cell_b, *key1), ("gate", cell_b, *key2), ("gate", cell_b, *key_j)
+    fb1, fb2, fbj = _front_keys(clone, cell_b, key1)[0], _front_keys(clone, cell_b, key2)[0], _front_keys(clone, cell_b, key_j)[0]
+    gate_g, gate_f = ("gate", cell_b, *cut_g.anchor.key), ("gate", cell_b, *cut_f.anchor.key)
+    ring_g, ring_f = ("ring", *cut_g.anchor.key), ("ring", *cut_f.anchor.key)
+    # B's front vertex of a neighbour facing the wake: the outgoing one when
+    # the lens arc runs forward from the entry (the neighbour precedes it).
+    fb_g = _front_keys(clone, cell_b, cut_g.anchor.key)[1 if lens["forward"] else 0]
+    fb_f = _front_keys(clone, cell_b, cut_f.anchor.key)[0 if lens["forward"] else 1]
+    for vertex in (gate_te, f_in, f_out, ring_r1, ring_r2, ring_j, gate_w, ring_prev_a, ring_next_a, f_prev_out,
+                   f_next_in, gate_prev_a, gate_next_a, ring_prev_c, ring_next_c, gate_prev_c, gate_next_c,
+                   gate_b1, gate_b2, gate_bj, fb1, fb2, fbj, gate_g, gate_f, ring_g, ring_f, fb_g, fb_f):
+        if vertex not in clone.vertices:
+            raise pg.GraphError(f"expected vertex {vertex!r} is missing")
+
+    point_te = clone.vertices[gate_te].point
+    direction = np.asarray(record["direction"], dtype=np.float64)
+    direction = direction / np.linalg.norm(direction)
+    normal = np.array([-direction[1], direction[0]])
+    side_in = float(np.dot(clone.vertices[f_in].point - point_te, normal))
+    side_out = float(np.dot(clone.vertices[f_out].point - point_te, normal))
+    if side_in * side_out >= 0.0:
+        raise pg.GraphError("the two seam points lie on the same side of the wake line")
+    height = min(abs(side_in), abs(side_out))
+    clearance = record_clearance(record) * height
+    # Each front leaves its seam point along the wake, or along the band's
+    # tangent where the wake direction would fold the patch beside the
+    # band, and runs parallel to the wake from its ring crossing on; its
+    # offset from the wake line beyond the ring is set there.
+    leaving = _seam_directions(front_a, position_a, point_te, direction)
+    offsets: dict[str, float] = {}
+    seam_keys = {"in": f_in, "out": f_out}
+
+    def along(point) -> float:
+        return float(np.dot(np.asarray(point) - point_te, direction))
+
+    def front_point(label: str, distance: float) -> np.ndarray:
+        return point_te + distance * direction + offsets[label] * normal
+
+    # --- Ring crossings of the two fronts in A's section and in C's section.
+    cell_ring_a, cell_ring_c = layout.cells[cell_a], layout.cells[cell_c]
+    ring_total_a, ring_total_c = cell_ring_a.ring_length, cell_ring_c.ring_length
+    section_a = g2.loop_section(cell_ring_a.ring, prev_a.ring_station, next_a.ring_station, forward=True)
+    section_c = g2.loop_section(cell_ring_c.ring, prev_c.ring_station, next_c.ring_station, forward=True)
+    outer_section = site_c.curve.section(prev_c.wall_station, next_c.wall_station, forward=True)
+    outer_total = site_c.curve.length()
+    new_points: dict[str, np.ndarray] = {}
+    stations: dict[str, float] = {}
+    for label in ("in", "out"):
+        origin = clone.vertices[seam_keys[label]].point
+        hit, why = _section_crossing(origin, leaving[label], section_a, clearance=clearance)
+        if hit is None:
+            raise pg.GraphError(f"the {label} wake front does not cross the body's ring section once: {why}")
+        t, arclength = hit
+        new_points[f"ring1_{label}"] = origin + t * leaving[label]
+        stations[f"ring1_{label}"] = (prev_a.ring_station + arclength) % ring_total_a
+        offsets[label] = float(np.dot(new_points[f"ring1_{label}"] - point_te, normal))
+        hit, why = _section_crossing(new_points[f"ring1_{label}"], direction, section_c, clearance=clearance)
+        if hit is None:
+            raise pg.GraphError(f"the {label} wake front does not cross the far ring section once: {why}")
+        t, arclength = hit
+        new_points[f"ring2_{label}"] = new_points[f"ring1_{label}"] + t * direction
+        stations[f"ring2_{label}"] = (prev_c.ring_station + arclength) % ring_total_c
+        hit, why = _section_crossing(new_points[f"ring2_{label}"], direction, outer_section, clearance=clearance)
+        if hit is None:
+            raise pg.GraphError(f"the {label} wake front does not reach the outer boundary once: {why}")
+        t, arclength = hit
+        new_points[f"outer_{label}"] = new_points[f"ring2_{label}"] + t * direction
+        stations[f"outer_{label}"] = (prev_c.wall_station + arclength) % outer_total
+    if not (
+        _cyclic_between(stations["ring1_in"], prev_a.ring_station, wake_cut_a.ring_station, ring_total_a)
+        and _cyclic_between(stations["ring1_out"], wake_cut_a.ring_station, next_a.ring_station, ring_total_a)
+    ):
+        raise pg.GraphError("the wake fronts do not bracket the wake on the body's ring in cut order")
+    if not (
+        _cyclic_between(stations["ring2_in"], prev_c.ring_station, wake_cut_c.ring_station, ring_total_c)
+        and _cyclic_between(stations["ring2_out"], wake_cut_c.ring_station, next_c.ring_station, ring_total_c)
+    ):
+        raise pg.GraphError("the wake fronts do not bracket the wake on the far ring in cut order")
+    if not (
+        _cyclic_between(stations["outer_in"], prev_c.wall_station, wake_cut_c.wall_station, outer_total)
+        and _cyclic_between(stations["outer_out"], wake_cut_c.wall_station, next_c.wall_station, outer_total)
+    ):
+        raise pg.GraphError("the wake fronts do not bracket the wake on the outer boundary in cut order")
+    chain_c = site_c.chain_at(wake_cut_c.wall_station)
+    for label in ("in", "out"):
+        if site_c.chain_at(stations[f"outer_{label}"]).name != chain_c.name:
+            raise pg.GraphError("the wake band meets the outer boundary across a chain break")
+    L, G = lens_label_a, body_label_a
+    if (lens_label_c == "in") != (lens_label_a == "in"):
+        raise pg.GraphError("the lens side of the wake differs between the body's cell and the outer cell")
+
+    # --- The chord through B and the lens.
+    point_r1, point_r2 = clone.vertices[ring_r1].point, clone.vertices[ring_r2].point
+    point_j = clone.vertices[ring_j].point
+    tip1, tip2 = new_points[f"ring1_{L}"], new_points[f"ring2_{L}"]
+    # The middle spoke crosses the three lines of the passage - the lens-side
+    # front, the chord and the body-side front - where all three run through
+    # the cell: halfway along the overlap of their spans, a clearance clear
+    # of every end.
+    low = max(along(tip1), along(point_r1), along(new_points[f"ring1_{G}"])) + clearance
+    high = min(along(tip2), along(point_r2), along(new_points[f"ring2_{G}"])) - clearance
+    if high - low < 2.0 * clearance:
+        spans = {
+            "lens front": (round(along(tip1), 4), round(along(tip2), 4)),
+            "chord": (round(along(point_r1), 4), round(along(point_r2), 4)),
+            "body front": (round(along(new_points[f"ring1_{G}"]), 4), round(along(new_points[f"ring2_{G}"]), 4)),
+        }
+        raise pg.GraphError(
+            f"the wake's passage through the passed body's cell is shorter than four band clearances ({clearance:.4g}): {spans}"
+        )
+    chord_mid = 0.5 * (low + high)
+    point_x = front_point(L, chord_mid)
+    point_y = point_te + chord_mid * direction
+    point_z = front_point(G, chord_mid)
+    # The lens arc pieces: from the lens tip on A's branch to the junction
+    # and from the junction to the tip on C's branch, each split halfway.
+    if L == "in":
+        piece_a = g2.loop_section(cell_ring_a.ring, prev_a.ring_station, stations["ring1_in"], forward=True)
+    else:
+        piece_a = g2.loop_section(cell_ring_a.ring, stations["ring1_out"], next_a.ring_station, forward=True)
+    if lens_label_c == "in":
+        piece_c = g2.loop_section(cell_ring_c.ring, prev_c.ring_station, stations["ring2_in"], forward=True)
+    else:
+        piece_c = g2.loop_section(cell_ring_c.ring, stations["ring2_out"], next_c.ring_station, forward=True)
+    length_a, length_c = g2.total_length(piece_a), g2.total_length(piece_c)
+    if length_a < 2.0 * clearance or length_c < 2.0 * clearance:
+        raise pg.GraphError("a side of the lens between the wake and the medial arc is shorter than two band clearances")
+    point_am, piece_a_first, piece_a_second = _split_at_arclength(piece_a, 0.5 * length_a)
+    point_bm, piece_c_first, piece_c_second = _split_at_arclength(piece_c, 0.5 * length_c)
+    point_m = (point_x + point_am + point_bm) / 3.0
+    lens_points = np.asarray([tip1, point_j, tip2])
+    if not g2.points_in_loop(np.vstack([lens_points, lens_points[:1]]), point_m[None, :])[0]:
+        raise pg.GraphError("the lens between the wake and the medial arc has no interior for its centre")
+
+    # --- A's spoke from the middle of the lens arc: onto A's front section
+    # beside the trailing edge, then onto the wall inside that section.
+    a_nbr_front = f_prev_out if L == "in" else f_next_in
+    a_nbr_gate = gate_prev_a if L == "in" else gate_next_a
+    a_front_edge = clone.edges[clone.edge_key(a_nbr_front, seam_keys[L])]
+    a_front_path = np.asarray(a_front_edge.path, dtype=np.float64)
+    if np.linalg.norm(a_front_path[0] - clone.vertices[a_nbr_front].point) > np.linalg.norm(a_front_path[-1] - clone.vertices[a_nbr_front].point):
+        a_front_path = a_front_path[::-1]
+    # The spoke lands halfway along the front section, as its ring end sits
+    # halfway along the arc piece: the patch beside the trailing edge is
+    # skewed, so the closest point would land at the trailing edge itself.
+    a_front_length = g2.total_length(a_front_path)
+    a_land_arclength = 0.5 * a_front_length
+    if a_front_length < 2.0 * clearance:
+        raise pg.GraphError(f"the band section of {site_a.name!r} beside the wake is too short for the lens spoke")
+    point_a_land, a_front_first, a_front_second = _split_at_arclength(a_front_path, a_land_arclength)
+    total_a = site_a.curve.length()
+    station_a_nbr = float(clone.vertices[a_nbr_gate].constraint.parameter)
+    station_te = float(clone.vertices[gate_te].constraint.parameter)
+    a_foot = float(site_a.curve.closest(point_a_land[None, :]).arclength[0])
+    low_a, high_a = (station_a_nbr, station_te) if L == "in" else (station_te, station_a_nbr)
+    if not _cyclic_between(a_foot, low_a, high_a, total_a):
+        raise pg.GraphError(f"the lens spoke's foot on {site_a.name!r} leaves its wall section")
+    chain_a = site_a.section_chain(low_a, high_a)
+    if site_a.chain_at(a_foot).name != chain_a.name:
+        raise pg.GraphError(f"the lens spoke's foot on {site_a.name!r} crosses a chain break")
+
+    # --- C's spoke from the middle of the lens arc onto the outer boundary,
+    # inside the piece between the lens-side neighbour and the front's exit.
+    c_low, c_high = (prev_c.wall_station, stations["outer_in"]) if lens_label_c == "in" else (stations["outer_out"], next_c.wall_station)
+    c_piece = site_c.curve.section(c_low, c_high, forward=True)
+    c_length = g2.total_length(c_piece)
+    if c_length < 2.0 * clearance:
+        raise pg.GraphError("the outer boundary piece beside the wake is too short for the lens spoke")
+    station_bm = (c_low + 0.5 * c_length) % outer_total
+    point_bm_gate = site_c.curve.point_at(station_bm)
+    if site_c.chain_at(station_bm).name != chain_c.name:
+        raise pg.GraphError("the lens spoke onto the outer boundary crosses a chain break")
+
+    # --- B's band between the body-side neighbours: the front and wall
+    # sections the wake's spokes land on, merged across the cleared gates.
+    gates_b = front_b.gate_indices
+    orders = [position_b1, position_bj, position_b2]
+    chain_orders = [(position_b1 - step_b) % count_b] + orders + [(position_b2 + step_b) % count_b]
+    if not lens["forward"]:
+        chain_orders = chain_orders[::-1]
+    b_front_path = None
+    b_wall_path = None
+    for first, second in zip(chain_orders, chain_orders[1:]):
+        front_piece = layer_module.ring_slice(front_b.front, gates_b[first], gates_b[second]).copy()
+        wall_piece = layer_module.ring_slice(front_b.wall, gates_b[first], gates_b[second]).copy()
+        b_front_path = front_piece if b_front_path is None else np.vstack([b_front_path, front_piece[1:]])
+        b_wall_path = wall_piece if b_wall_path is None else np.vstack([b_wall_path, wall_piece[1:]])
+    first_front, last_front = (fb_g, fb_f) if lens["forward"] else (fb_f, fb_g)
+    b_front_path[0] = clone.vertices[first_front].point
+    b_front_path[-1] = clone.vertices[last_front].point
+    b_front_length = g2.total_length(b_front_path)
+    total_b = site_b.curve.length()
+    station_g = float(clone.vertices[gate_g].constraint.parameter)
+    station_f = float(clone.vertices[gate_f].constraint.parameter)
+    b_low, b_high = (station_g, station_f) if lens["forward"] else (station_f, station_g)
+    chain_b = site_b.section_chain(b_low, b_high)
+    landings = []
+    for label, origin in (("g", new_points[f"ring1_{G}"]), ("x", point_z), ("f", new_points[f"ring2_{G}"])):
+        nearest = g2.closest_on_polyline(b_front_path, origin[None, :])
+        landings.append((label, float(nearest.arclength[0])))
+    ordered = landings if lens["forward"] else landings[::-1]
+    arclengths = [item[1] for item in ordered]
+    if any(b - a < clearance for a, b in zip(arclengths, arclengths[1:])) or arclengths[0] < clearance or b_front_length - arclengths[-1] < clearance:
+        raise pg.GraphError(
+            f"the wake band's spokes onto {site_b.name!r} crowd each other or its gates: landings at "
+            f"{[round(a, 4) for a in arclengths]} along a front section of {b_front_length:.4g}, clearance {clearance:.4g}"
+        )
+    front_pieces = []
+    rest = b_front_path
+    consumed = 0.0
+    land_points = {}
+    for label, arclength in ordered:
+        point, first_piece, rest = _split_at_arclength(rest, arclength - consumed)
+        consumed = arclength
+        front_pieces.append(first_piece)
+        land_points[label] = point
+    front_pieces.append(rest)
+    feet = {}
+    for label, _arclength in ordered:
+        foot = float(site_b.curve.closest(land_points[label][None, :]).arclength[0])
+        if not _cyclic_between(foot, b_low, b_high, total_b):
+            raise pg.GraphError(f"a wake band foot on {site_b.name!r} leaves its wall section")
+        if site_b.chain_at(foot).name != chain_b.name:
+            raise pg.GraphError(f"a wake band foot on {site_b.name!r} crosses a chain break")
+        feet[label] = foot
+    foot_stations = [b_low] + [feet[label] for label, _a in ordered] + [b_high]
+    if any((b - a) % total_b < 1e-9 * total_b for a, b in zip(foot_stations, foot_stations[1:])):
+        raise pg.GraphError(f"two wake band feet on {site_b.name!r} coincide")
+
+    # --- Remove the faces the wake rewrites.
+    removed = []
+    a_band = (gate_prev_a, gate_te, f_in, f_prev_out) if L == "in" else (gate_te, gate_next_a, f_next_in, f_out)
+    wanted = [
+        (gate_te, f_out, ring_r1, f_in),
+        (f_prev_out, f_in, ring_r1, ring_prev_a),
+        (f_out, f_next_in, ring_next_a, ring_r1),
+        a_band,
+        (gate_prev_c, gate_w, ring_r2, ring_prev_c),
+        (gate_w, gate_next_c, ring_next_c, ring_r2),
+    ]
+    b_chain_keys = [(gate_g, fb_g, ring_g), (gate_b1, fb1, ring_r1), (gate_bj, fbj, ring_j), (gate_b2, fb2, ring_r2), (gate_f, fb_f, ring_f)]
+    for (g1, p1, r1), (g2_, p2, r2) in zip(b_chain_keys, b_chain_keys[1:]):
+        wanted.append((g1, g2_, p2, p1))
+        wanted.append((p1, p2, r2, r1))
+    for corners in wanted:
+        found = _face_with_corners(clone, corners)
+        if found is None:
+            raise pg.GraphError(f"expected face {corners!r} is missing around the wake")
+        removed.append(found.key)
+    clone.remove_faces(removed)
+
+    # --- New vertices.
+    ring1 = {label: ("wake", cell_a, *key1, "ring", label) for label in ("in", "out")}
+    ring2 = {label: ("wake", cell_b, *key2, "ring", label) for label in ("in", "out")}
+    outer = {label: ("wake", cell_c, *key2, "gate", label) for label in ("in", "out")}
+    key_x, key_y, key_z = ("wake", cell_b, *key1, "lens", "front"), ("wake", cell_b, *key1, "chord", "mid"), ("wake", cell_b, *key1, "band", "mid")
+    key_m = ("wake", cell_b, *key1, "lens", "centre")
+    key_am, key_am_front, key_am_gate = ("wake", cell_a, *key1, "lens", "ring"), ("wake", cell_a, *key1, "lens", "front"), ("wake", cell_a, *key1, "lens", "gate")
+    key_bm, key_bm_gate = ("wake", cell_c, *key2, "lens", "ring"), ("wake", cell_c, *key2, "lens", "gate")
+    land_keys = {label: ("wake", cell_b, *(key1 if label != "f" else key2), "front", label) for label in ("g", "x", "f")}
+    foot_keys = {label: ("wake", cell_b, *(key1 if label != "f" else key2), "gate", label) for label in ("g", "x", "f")}
+    for label in ("in", "out"):
+        clone.add_vertex(ring1[label], new_points[f"ring1_{label}"], constraint=pg.Constraint("guide", "medial", stations[f"ring1_{label}"]), provenance="wake front on the ring")
+        clone.add_vertex(ring2[label], new_points[f"ring2_{label}"], constraint=pg.Constraint("guide", "medial", stations[f"ring2_{label}"]), provenance="wake front on the far ring")
+        clone.add_vertex(outer[label], new_points[f"outer_{label}"], constraint=pg.Constraint("chain", chain_c.name, stations[f"outer_{label}"]), provenance="wake front on the outer boundary")
+    clone.add_vertex(key_x, point_x, provenance="lens-side wake front, middle of the chord")
+    clone.add_vertex(key_y, point_y, provenance="wake separatrix, middle of the chord")
+    clone.add_vertex(key_z, point_z, provenance="body-side wake front, middle of the chord")
+    clone.add_vertex(key_m, point_m, provenance="lens centre")
+    clone.add_vertex(key_am, point_am, constraint=pg.Constraint("guide", "medial", (prev_a.ring_station + 0.5 * length_a) % ring_total_a if L == "in" else (stations["ring1_out"] + 0.5 * length_a) % ring_total_a), provenance="lens side middle on the body's branch")
+    clone.add_vertex(key_am_front, point_a_land, constraint=pg.Constraint("guide", f"front:{site_a.name}", float(position_a) + (-0.5 if L == "in" else 0.5)), provenance="lens spoke landing on the band")
+    clone.add_vertex(key_am_gate, site_a.curve.point_at(a_foot), constraint=pg.Constraint("chain", chain_a.name, a_foot), provenance="lens spoke foot on the wall")
+    clone.add_vertex(key_bm, point_bm, constraint=pg.Constraint("guide", "medial", (prev_c.ring_station + 0.5 * length_c) % ring_total_c if lens_label_c == "in" else (stations["ring2_out"] + 0.5 * length_c) % ring_total_c), provenance="lens side middle on the outer branch")
+    clone.add_vertex(key_bm_gate, point_bm_gate, constraint=pg.Constraint("chain", chain_c.name, station_bm), provenance="lens spoke gate on the outer boundary")
+    for label, _a in ordered:
+        clone.add_vertex(land_keys[label], land_points[label], constraint=pg.Constraint("guide", f"front:{site_b.name}", float(position_b1)), provenance="wake band spoke landing on the band")
+        clone.add_vertex(foot_keys[label], site_b.curve.point_at(feet[label]), constraint=pg.Constraint("chain", chain_b.name, feet[label]), provenance="wake band spoke foot on the wall")
+
+    def ring_edge(first, second, path):
+        path = np.asarray(path, dtype=np.float64).copy()
+        path[0] = clone.vertices[first].point
+        path[-1] = clone.vertices[second].point
+        kind, points = _path_curve(path)
+        clone.add_edge(first, second, path=path, kind=kind, points=points, role="ring", provenance="medial branch")
+
+    def front_edge(first, second, path):
+        path = np.asarray(path, dtype=np.float64).copy()
+        path[0] = clone.vertices[first].point
+        path[-1] = clone.vertices[second].point
+        kind, points = _path_curve(path)
+        clone.add_edge(first, second, path=path, kind=kind, points=points, role="front", provenance="clearance-limited offset")
+
+    def wall_edge(site, first, second, s1, s2, chain):
+        path = site.curve.section(s1, s2, forward=True)
+        path[0] = clone.vertices[first].point
+        path[-1] = clone.vertices[second].point
+        curve = site.curve.edge_curve(s1, s2, forward=True, style=wall_edge_style)
+        clone.add_edge(first, second, path=path, kind=curve.kind, points=curve.points, boundary=chain.name, role="wall", provenance="supplied point list")
+
+    # --- Ring pieces on A's branch: prev -> in -> R1 -> out -> next, the
+    # lens-side piece split at the lens middle.
+    lens_tip1 = ring1[L]
+    if L == "in":
+        ring_edge(ring_prev_a, key_am, piece_a_first)
+        ring_edge(key_am, lens_tip1, piece_a_second)
+        ring_edge(ring1["in"], ring_r1, g2.loop_section(cell_ring_a.ring, stations["ring1_in"], wake_cut_a.ring_station, forward=True))
+        ring_edge(ring_r1, ring1["out"], g2.loop_section(cell_ring_a.ring, wake_cut_a.ring_station, stations["ring1_out"], forward=True))
+        ring_edge(ring1["out"], ring_next_a, g2.loop_section(cell_ring_a.ring, stations["ring1_out"], next_a.ring_station, forward=True))
+    else:
+        ring_edge(ring_prev_a, ring1["in"], g2.loop_section(cell_ring_a.ring, prev_a.ring_station, stations["ring1_in"], forward=True))
+        ring_edge(ring1["in"], ring_r1, g2.loop_section(cell_ring_a.ring, stations["ring1_in"], wake_cut_a.ring_station, forward=True))
+        ring_edge(ring_r1, ring1["out"], g2.loop_section(cell_ring_a.ring, wake_cut_a.ring_station, stations["ring1_out"], forward=True))
+        ring_edge(lens_tip1, key_am, piece_a_first)
+        ring_edge(key_am, ring_next_a, piece_a_second)
+    # Ring pieces on C's branch likewise.
+    lens_tip2 = ring2[lens_label_c]
+    if lens_label_c == "in":
+        ring_edge(ring_prev_c, key_bm, piece_c_first)
+        ring_edge(key_bm, lens_tip2, piece_c_second)
+        ring_edge(ring2["in"], ring_r2, g2.loop_section(cell_ring_c.ring, stations["ring2_in"], wake_cut_c.ring_station, forward=True))
+        ring_edge(ring_r2, ring2["out"], g2.loop_section(cell_ring_c.ring, wake_cut_c.ring_station, stations["ring2_out"], forward=True))
+        ring_edge(ring2["out"], ring_next_c, g2.loop_section(cell_ring_c.ring, stations["ring2_out"], next_c.ring_station, forward=True))
+    else:
+        ring_edge(ring_prev_c, ring2["in"], g2.loop_section(cell_ring_c.ring, prev_c.ring_station, stations["ring2_in"], forward=True))
+        ring_edge(ring2["in"], ring_r2, g2.loop_section(cell_ring_c.ring, stations["ring2_in"], wake_cut_c.ring_station, forward=True))
+        ring_edge(ring_r2, ring2["out"], g2.loop_section(cell_ring_c.ring, wake_cut_c.ring_station, stations["ring2_out"], forward=True))
+        ring_edge(lens_tip2, key_bm, piece_c_first)
+        ring_edge(key_bm, ring_next_c, piece_c_second)
+    # Outer boundary pieces: prev -> [lens gate] -> in -> W -> out -> [lens gate] -> next.
+    if lens_label_c == "in":
+        wall_edge(site_c, gate_prev_c, key_bm_gate, prev_c.wall_station, station_bm, chain_c)
+        wall_edge(site_c, key_bm_gate, outer["in"], station_bm, stations["outer_in"], chain_c)
+        wall_edge(site_c, outer["out"], gate_next_c, stations["outer_out"], next_c.wall_station, chain_c)
+    else:
+        wall_edge(site_c, gate_prev_c, outer["in"], prev_c.wall_station, stations["outer_in"], chain_c)
+        wall_edge(site_c, outer["out"], key_bm_gate, stations["outer_out"], station_bm, chain_c)
+        wall_edge(site_c, key_bm_gate, gate_next_c, station_bm, next_c.wall_station, chain_c)
+    wall_edge(site_c, outer["in"], gate_w, stations["outer_in"], wake_cut_c.wall_station, chain_c)
+    wall_edge(site_c, gate_w, outer["out"], wake_cut_c.wall_station, stations["outer_out"], chain_c)
+    # A's front and wall pieces on the lens side, split at the lens spoke.
+    if L == "in":
+        front_edge(a_nbr_front, key_am_front, a_front_first)
+        front_edge(key_am_front, f_in, a_front_second)
+        wall_edge(site_a, gate_prev_a, key_am_gate, station_a_nbr, a_foot, chain_a)
+        wall_edge(site_a, key_am_gate, gate_te, a_foot, station_te, chain_a)
+    else:
+        front_edge(a_nbr_front, key_am_front, a_front_first)
+        front_edge(key_am_front, f_out, a_front_second)
+        wall_edge(site_a, gate_te, key_am_gate, station_te, a_foot, chain_a)
+        wall_edge(site_a, key_am_gate, gate_next_a, a_foot, station_a_nbr, chain_a)
+    # B's front and wall pieces between the body-side neighbours, in B's
+    # station order.
+    b_front_keys = [first_front] + [land_keys[label] for label, _a in ordered] + [last_front]
+    b_gate_keys = [gate_g if lens["forward"] else gate_f] + [foot_keys[label] for label, _a in ordered] + [gate_f if lens["forward"] else gate_g]
+    for first, second, piece in zip(b_front_keys, b_front_keys[1:], front_pieces):
+        front_edge(first, second, piece)
+    for first, second, s1, s2 in zip(b_gate_keys, b_gate_keys[1:], foot_stations, foot_stations[1:]):
+        wall_edge(site_b, first, second, s1, s2, chain_b)
+    # The wake line, the fronts, the lens and the spokes.
+    _add_line(clone, gate_te, ring_r1, "wake", "wake separatrix")
+    _add_line(clone, ring_r1, key_y, "wake", "wake separatrix")
+    _add_line(clone, key_y, ring_r2, "wake", "wake separatrix")
+    wake_far = clone.edges[clone.edge_key(ring_r2, gate_w)]
+    wake_far.role = "wake"
+    wake_far.provenance = "wake separatrix"
+    for first, second in ((f_in, ring1["in"]), (f_out, ring1["out"]), (ring2["in"], outer["in"]), (ring2["out"], outer["out"]),
+                          (ring1[L], key_x), (key_x, ring2[L]), (ring1[G], key_z), (key_z, ring2[G])):
+        _add_line(clone, first, second, "wake_front", "wake band front")
+    for first, second in ((key_am, key_m), (key_bm, key_m), (key_x, key_m)):
+        _add_line(clone, first, second, "core_spoke", "lens spoke")
+    for first, second in ((key_x, key_y), (key_y, key_z)):
+        _add_line(clone, first, second, "core_spoke", "wake band cut")
+    for first, second in ((key_z, land_keys["x"]), (ring1[G], land_keys["g"]), (ring2[G], land_keys["f"]), (key_am, key_am_front), (key_bm, key_bm_gate)):
+        _add_line(clone, first, second, "core_spoke", "annular cut")
+    for label in ("g", "x", "f"):
+        _add_line(clone, foot_keys[label], land_keys[label], "layer_spoke", "wall normal")
+    _add_line(clone, key_am_gate, key_am_front, "layer_spoke", "wall normal")
+
+    # --- Faces.  A: the wedge halves, the body-side core patch, the lens-side
+    # core patch split by the lens spoke, and the band blocks beside it.
+    face((gate_te, ring_r1, ring1["in"], f_in), "wake", "wake band")
+    face((gate_te, f_out, ring1["out"], ring_r1), "wake", "wake band")
+    if L == "in":
+        face((f_out, f_next_in, ring_next_a, ring1["out"]), "core", "annular core patch")
+        face((f_prev_out, key_am_front, key_am, ring_prev_a), "core", "annular core patch")
+        face((key_am_front, f_in, ring1["in"], key_am), "core", "annular core patch")
+        face((gate_prev_a, key_am_gate, key_am_front, f_prev_out), "layer", "boundary-layer band")
+        face((key_am_gate, gate_te, f_in, key_am_front), "layer", "boundary-layer band")
+    else:
+        face((f_prev_out, f_in, ring1["in"], ring_prev_a), "core", "annular core patch")
+        face((f_out, key_am_front, key_am, ring1["out"]), "core", "annular core patch")
+        face((key_am_front, f_next_in, ring_next_a, key_am), "core", "annular core patch")
+        face((gate_te, key_am_gate, key_am_front, f_out), "layer", "boundary-layer band")
+        face((key_am_gate, gate_next_a, f_next_in, key_am_front), "layer", "boundary-layer band")
+    # C: the wake band beyond the far ring, the body-side patch, the
+    # lens-side patch split by the lens spoke.
+    face((ring_r2, gate_w, outer["in"], ring2["in"]), "wake", "wake band beyond the ring")
+    face((ring_r2, ring2["out"], outer["out"], gate_w), "wake", "wake band beyond the ring")
+    if lens_label_c == "in":
+        face((outer["out"], gate_next_c, ring_next_c, ring2["out"]), "core", "annular core patch")
+        face((gate_prev_c, key_bm_gate, key_bm, ring_prev_c), "core", "annular core patch")
+        face((key_bm_gate, outer["in"], ring2["in"], key_bm), "core", "annular core patch")
+    else:
+        face((gate_prev_c, outer["in"], ring2["in"], ring_prev_c), "core", "annular core patch")
+        face((outer["out"], key_bm_gate, key_bm, ring2["out"]), "core", "annular core patch")
+        face((key_bm_gate, gate_next_c, ring_next_c, key_bm), "core", "annular core patch")
+    # B: the two strips, the lens, the core patches under the body-side
+    # strip, the core patches beside, and the band blocks.
+    face((ring_r1, key_y, key_x, ring1[L]), "wake", "wake band over the body")
+    face((key_y, ring_r2, ring2[L], key_x), "wake", "wake band over the body")
+    face((ring1[G], key_z, key_y, ring_r1), "wake", "wake band over the body")
+    face((key_z, ring2[G], ring_r2, key_y), "wake", "wake band over the body")
+    face((ring1[L], key_x, key_m, key_am), "core", "lens beside the wake")
+    face((key_x, ring2[L], key_bm, key_m), "core", "lens beside the wake")
+    face((key_m, key_bm, ring_j, key_am), "core", "lens beside the wake")
+    face((land_keys["g"], land_keys["x"], key_z, ring1[G]), "core", "annular core patch")
+    face((land_keys["x"], land_keys["f"], ring2[G], key_z), "core", "annular core patch")
+    face((fb_g, land_keys["g"], ring1[G], ring_g), "core", "annular core patch")
+    face((land_keys["f"], fb_f, ring_f, ring2[G]), "core", "annular core patch")
+    for first, second, p1, p2 in zip(b_gate_keys, b_gate_keys[1:], b_front_keys, b_front_keys[1:]):
+        face((first, second, p2, p1), "layer", "boundary-layer band")
+
+    edges, vertices = clone.unused_entities()
+    clone.discard(edges, vertices)
+    record["wake_points"] = {label: [float(v) for v in point] for label, point in new_points.items()}
+    record["wake_points"].update({"lens_centre": [float(v) for v in point_m], "chord_middle": [float(v) for v in point_y]})
+    record["band_height_at_edge"] = float(height)
+    record["lens"]["blocks"] = 3
     return clone
 
 

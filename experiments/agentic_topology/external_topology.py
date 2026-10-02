@@ -88,12 +88,15 @@ def build_graph(
     options: layer_module.LayerOptions | None = None,
     wall_edge_style: str = "polyLine",
     allow_scale: bool = False,
+    extra_walls=None,
 ) -> AssemblyResult:
     """Assemble bands, seams, fans and core patches into one patch graph.
 
     ``allow_scale`` lets a front that no local repair admits fall back to a
     uniformly thinner band instead of failing; the pipeline passes it on its
     last band-repair round, after inserting anchors has been tried.
+    ``extra_walls`` maps a cell index to polylines its band keeps clear of
+    as if they were other walls: a wake band passing over the cell's body.
     """
     settings = options or layer_module.LayerOptions()
     diagram = layout.diagram
@@ -155,7 +158,7 @@ def build_graph(
                 site.curve.loop(),
                 stations,
                 fluid_sign=site.curve.fluid_sign,
-                wall_loops=wall_loops,
+                wall_loops=wall_loops + [np.asarray(item, dtype=np.float64) for item in (extra_walls or {}).get(cell_index, [])],
                 requested=metric.layer_height,
                 options=settings,
                 obstacles=[front.front for front in fronts.values()],

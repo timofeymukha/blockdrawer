@@ -399,27 +399,45 @@ def _try_hull(result: PipelineResult, names, loops, settings: PipelineOptions):
                 settings.layout,
                 band_height=metric.layer_height if settings.layer.enabled else None,
                 max_band_turning=settings.layout.max_band_turning if settings.layout.max_band_turning is not None else math.radians(45.0),
+                outer_by_ray=True,
             ),
             layer=replace(settings.layer, inscribed_cap=False),
         )
         hull_points = hull_module.align_start(hull_points, result.sites[-1].curve.point_at(0.0))
-        hull_chains = hull_module.mirrored_chains(hull_points, result.sites[-1], loops)
-        record["hull_chains"] = [name for name, _role, _points in hull_chains]
-        near = run_external(names, loops, near_settings, outer=hull_chains)
-        record["near"] = {
-            "blocks": None if near.graph is None else len(near.graph.faces),
-            "admissible": near.admissible,
-            "wakes": None if near.wakes is None else [
-                {"site": item["site"], "applied": item["applied"], "target": (item.get("target") or {}).get("kind"), "reason": item.get("reason")}
-                for item in near.wakes.records
-            ],
-        }
-        if not near.admissible:
-            record["near"]["problems"] = near.problems[:4]
-            record["near"]["failures"] = near.failures[:4]
-            record["near"]["errors"] = near.errors[:4]
-            raise hull_module.HullError("the near field inside the hull is not admissible")
         outer_site = result.sites[-1]
+
+        def near_field(chains):
+            near = run_external(names, loops, near_settings, outer=chains)
+            if "near" in record:
+                record.setdefault("near_attempts", []).append(record["near"])
+            record["near"] = {
+                "chains": [name for name, _role, _points in chains],
+                "blocks": None if near.graph is None else len(near.graph.faces),
+                "admissible": near.admissible,
+                "wakes": None if near.wakes is None else [
+                    {"site": item["site"], "applied": item["applied"], "target": (item.get("target") or {}).get("kind"), "reason": item.get("reason")}
+                    for item in near.wakes.records
+                ],
+            }
+            if not near.admissible:
+                record["near"]["problems"] = near.problems[:4]
+                record["near"]["failures"] = near.failures[:4]
+                record["near"]["errors"] = near.errors[:4]
+                raise hull_module.HullError("the near field inside the hull is not admissible")
+            return near
+
+        # The hull is one chain first: a wake leaving the cluster maps onto
+        # the cap and outlet by its own construction and needs no chain
+        # structure on the hull, while mirrored chain breaks would sit beside
+        # its exit and tangle the hull's gates.  Only a closed far field maps
+        # chain onto chain, so it runs the near field again with the outer
+        # boundary's chains mirrored onto the hull.
+        near = near_field([("hull", "farfield", hull_points)])
+        exits = [item for item in near.wakes.applied if (item.get("target") or {}).get("kind") == "outer"] if near.wakes else []
+        if not exits and len(outer_site.chains) > 1:
+            hull_chains = hull_module.mirrored_chains(hull_points, outer_site, loops)
+            near = near_field(hull_chains)
+        record["hull_chains"] = record["near"]["chains"]
         built = hull_module.extend(
             near, result.domain, outer_site, loops, hull_points=hull_points, hull_height=height,
             options=settings.hull, wall_edge_style=settings.wall_edge_style,
@@ -698,7 +716,7 @@ def _try_one_wake(result, settings, record, accepted, original_layout):
         settings, "external", domain=result.domain, scale=result.scale,
         sites=result.sites, diagram=result.diagram,
         layout=copy.deepcopy(original_layout), solve=result.solve, metric=result.metric,
-        problems=list(result.domain.problems()), cgrid=result.cgrid,
+        problems=list(result.domain.problems()), cgrid=result.cgrid, hull=result.hull,
     )
     try:
         if not settings.layer.enabled:
@@ -712,13 +730,15 @@ def _try_one_wake(result, settings, record, accepted, original_layout):
             record["failures"] = trial.assembly.failures
             raise pg.GraphError("the wake layout could not build every wall band")
         # The band heights at the trailing edges are known now: slide any
-        # ring anchor out of the wake bands and rebuild once if needed.
+        # ring anchor out of the wake bands, keep the band of a body a wake
+        # passes over clear of the wake band, and rebuild once if needed.
+        extra_walls = wake.band_obstacles(trial.layout, trial_records, trial.assembly.fronts)
         moved = wake.make_room(trial.layout, trial_records, trial.assembly.fronts, settings.wake)
-        if moved:
+        if moved or extra_walls:
             trial.wake_notes.extend(moved)
             trial.assembly = external_topology.build_graph(
                 trial.layout, trial.domain, trial.metric, options=settings.layer,
-                wall_edge_style=settings.wall_edge_style, allow_scale=True,
+                wall_edge_style=settings.wall_edge_style, allow_scale=True, extra_walls=extra_walls,
             )
             if trial.assembly.failures:
                 record["failures"] = trial.assembly.failures
@@ -778,7 +798,7 @@ def _try_spanning(result: PipelineResult, settings: PipelineOptions) -> Pipeline
             settings, "external", domain=result.domain, scale=result.scale,
             sites=result.sites, diagram=result.diagram,
             layout=copy.deepcopy(original_layout), solve=result.solve, metric=result.metric,
-            problems=list(result.domain.problems()), wakes=result.wakes,
+            problems=list(result.domain.problems()), hull=result.hull, wakes=result.wakes,
             wake_notes=list(result.wake_notes), cgrid=result.cgrid,
         )
         try:
