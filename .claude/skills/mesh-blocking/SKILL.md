@@ -20,8 +20,11 @@ acceptance term or an option changes there, update the decision points here.**
 ## 1. Collect before drawing
 
 - **Geometry**: one closed point list per solid body (`x y` per line), or a
-  CAD file assembled into closed contours. Orientation does not matter; the
-  tools normalise it. Keep the supplied points; never resample geometry from a
+  CAD file assembled into closed contours. Orientation, start point and
+  point density do not change the engine's block graph; the tools normalise
+  them. (Gate positions can still move by a raster pixel between
+  orientations, which has flipped one fixture's verdict: judge a candidate in
+  the orientation you export.) Keep the supplied points; never resample geometry from a
   picture or a raster.
 - **Physics**: Reynolds number and the target first-point $y^+$; Mach and angle
   of attack are solver inputs - keep the chord aligned and impose incidence
@@ -34,8 +37,9 @@ acceptance term or an option changes there, update the decision points here.**
   block cell is a curved element of order $p$ - then counts are small, block
   curvature must be exact, and quality is judged per element.
 - **Span**: pseudo-2D (`z_min_patch_type=empty z_max_patch_type=empty`, one
-  cell in $z$) or a periodic slab (reciprocal `cyclic` spanwise patches,
-  `z_cells` from the spanwise resolution).
+  cell in $z$; the topology engine writes its sessions this way) or a periodic
+  slab (reciprocal `cyclic` spanwise patches, `z_cells` from the spanwise
+  resolution).
 
 ## 2. Choose the topology
 
@@ -47,14 +51,19 @@ case you are in.
   a core to a ring, and far-field patches. A rectangular outer boundary with
   inlet, outlet and two far-field sides is fine: each corner is a gate whose
   spoke follows the corner bisector, so two blocks share it at 45 degrees. That
-  is the classical O-in-a-box; do not fight it.
+  is the classical O-in-a-box; do not fight it. The engine builds it for a
+  square cylinder in a box with equal margins too (a body corner and a box
+  corner on one diagonal become one spoke), and for ellipses up to 15:1;
+  thinner bodies can still fail their band at the tips.
 - **Sharp trailing edge** (fluid sector of at least 250 degrees at one wall
   vertex): a **C-grid**. The band continues past the edge as a two-sided wake
   band along a straight wake line to the outlet; the far-field core is cut open
   along it. The edge then carries four blocks at right angles. Never leave a
   seam wedge or a fan at a production trailing edge: it collapses the
   body-normal lines into a downstream fan. Engine: `--wake`; refusals list the
-  reason under `medial.wakes`.
+  reason under `medial.wakes`. Give `--wake-direction` whenever the body has
+  another sharp vertex (a sharp leading edge): without it every vertex sharp
+  enough gets a wake along its own bisector, upstream included.
 - **Sharp trailing edge upstream of another body** (tandem foils, a slat
   ahead of a main element): the wake band crosses the gap and ends on the
   downstream body's band. Its centreline is that body's spoke at the
@@ -83,9 +92,12 @@ case you are in.
   `--wake` builds it (`make research-blunt-foil`); the record's `kind` is
   `base`. The core block beside each wake band meets the flank front at 180
   degrees less the edge angle, so a thin trailing edge leaves that block near
-  70 degrees of non-orthogonality in the annular construction.
-  The engine refuses a wake from a single base corner; build the base by hand
-  until the template exists.
+  70 degrees of non-orthogonality in the annular construction. The two wake
+  lines bounding the base strip are graded to the first-cell width at the
+  corners. A corner whose partner lies a little beyond the two-percent rule
+  along a nearly straight wall (a flat-back section) is refused with the
+  remedy rather than cut lopsidedly from one corner: raise
+  `--wake-blunt-ratio` to build it as a base.
 - **Sharp trailing edge whose wake passes over another body** (a main
   element's wake over its flap): the wake runs through that body's cell as
   a straight chord with a wake strip on each side; the body-side strip is
@@ -158,15 +170,22 @@ itself - band blocks without sliver corners at the requested height, at most
 again - and builds the band by wall normals, three more level sets at heights
 growing by three, the wake band along the given direction, and straight
 spokes to the cap; the A-airfoil at fifteen chords comes out `resolved` in
-125 blocks with the band at its full height, 23 degrees of wall misalignment
-and 51 degrees of non-orthogonality. It refuses,
+165 blocks with the band at its full height, 12 degrees of wall misalignment
+and 51 degrees of non-orthogonality (raster width 700). It resolves at every
+raster width from 420 to 1000, start point, small incidence change and rigid
+turn tried, but the gate count, and with it the block count (99 to 210),
+still follows the raster and the start point. It refuses,
 with the reason under `medial.cgrid`, anything but one body, one wake and the
 cap-leg-outlet-leg boundary; a rectangle or circle around a single airfoil
 falls back to the annular construction, which is admissible only to about
 six chords there. Two foils in tandem build in a circle far field with both
-wakes (`make research-tandem`), admissible but a degree of non-orthogonality
-short of resolved at the medial junctions; multi-element bodies with coves
-and blunt trailing edges are still hand builds.
+wakes (`make research-tandem`), admissible but not resolved at the trailing
+edges' seams; multi-element bodies with coves are still hand builds. NACA
+0012 and a cambered NACA 4412 resolve in the same C-grid set-up (165 and 115
+blocks). A smooth body that misses only its wall misalignment can
+take a tighter `--max-wall-turning`: the 2:1 ellipse resolves at 45 degrees
+in 24 blocks (10 degrees of misalignment) where the default 100 gives 12
+blocks and 27 degrees.
 
 ```bash
 python experiments/agentic_topology/research_cli.py run \
@@ -182,12 +201,16 @@ bottom:farfield=bottom.dat --outer outlet:outlet=outlet.dat --outer
 top:farfield=top.dat`. Give the band height absolutely with `--layer-height`
 (the ratio form multiplies the whole domain's scale, which the report prints
 as `domain.domain_scale`). Read the report's
-acceptance terms - `topology_valid`, `untangled`, `within_shape_targets`,
-`sizing_feasible`, `admissible`, `resolved` - and the refusal reasons; the
+acceptance terms - `topology_valid`, `grids_evaluated`, `untangled`,
+`within_shape_targets`, `sizing_feasible`, `admissible`, `resolved` - and the
+refusal reasons (`trial_crashes` lists defects, never geometry); with
+`--no-grid-quality` nothing is sampled, so the grid terms are false and no
+session is written; the
 `describe`, `cavities`, `candidates`, `apply --move` and `focus` subcommands
 let you choose among validated alternatives instead of placing vertices.
 
-**Where the engine cannot** (wakes over two bodies, pockets), write
+**Where the engine cannot** (two wakes leaving a cluster through the hull,
+pockets), write
 geometry code, not clicks: a layout module that computes every vertex, curve
 and block independently of BlockDrawer, and a generator that emits an
 auditable `.jsonl` command batch and applies it in one atomic step:
@@ -283,14 +306,23 @@ $$
    at). Look for folded or sliver blocks and for spline overshoot.
 5. `check_mesh`: `blockMesh` then `checkMesh` must print `Mesh OK`. Read
    maximum non-orthogonality, skewness, aspect ratio and every negative-volume
-   or `***` line. This is the authority. **checkMesh's aspect ratio includes
-   the empty spanwise direction**, so for a pseudo-2D case the $z$ thickness
-   is a quality parameter, not a free choice: with a first cell of
-   $4.5\times10^{-6}c$ only $0.002 < \Delta z < 0.0045$ passed.
+   or `***` line. This is the authority. **With `patch` z faces checkMesh's
+   aspect ratio includes the spanwise direction** (a unit-depth slab of the
+   engine's `skimming_tail` read 58,379; the same mesh with `empty` z patches
+   20), so set both to `empty` for a pseudo-2D case; where the $z$ faces stay
+   non-empty the $z$ thickness is a quality parameter, not a free choice:
+   with a first cell of $4.5\times10^{-6}c$ only $0.002 < \Delta z < 0.0045$
+   passed.
 6. The engine's report, when it built the topology: the shape grid (eight
    uniform cells per block side) gives count-independent non-orthogonality,
-   skewness and wall misalignment; the structure report gives the length ratio
-   every component forces before any count exists. These acceptance terms
+   skewness and wall misalignment, as lower bounds of the continuous values;
+   a fold check at 32 cells per side guards `untangled` against folds between
+   those samples, and `acceptance.untangled_by_grid` says which grid folded -
+   an inversion on the counts grid alone comes from the default counts and
+   grading, so change those, not the topology; the structure report gives the length ratio every component
+   forces before any count exists, and
+   `sizing.feasibility.failures_without_exemptions` what the far-field fan-out
+   and wake-landing exemptions waive. These acceptance terms
    (`admissible`, `untangled`, `within_shape_targets`, `resolved`) exist only
    for engine output; a hand-built session is judged by `validate_session`,
    the quality screen and `Mesh OK`.
@@ -308,10 +340,12 @@ Failure signatures and their fixes:
   many layers; span it with one strip or move the ring.
 - **A 3-degree corner in a seam wedge at a trailing edge**: the medial anchor
   is not inside the feature's sector; use the wake construction.
-- **Length ratio far above 20 in one component**: the report now separates
-  far-field fan-out (`farfield_fanout_ratio`, informational: large far cells
-  are normal) from band-to-core coupling, which still fails `sizing_feasible`
-  and is a topology defect.
+- **Length ratio far above 20 in one component**: the report separates
+  far-field fan-out (`farfield_fanout_ratio`, informational: a tangential
+  component whose longest edge lies on a non-wall outer chain - large far
+  cells are normal) from band-to-core coupling, which still fails
+  `sizing_feasible` and is a topology defect; every component is judged, not
+  only the short `worst` table.
 - **A band that thins to nothing on a thin body**: the annular producer capped
   the band at half the local thickness (the inscribed-disk rule) and a nose
   block spanning too much turning; the C-grid producer switches the cap off

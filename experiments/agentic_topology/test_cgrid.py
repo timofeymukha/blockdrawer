@@ -11,6 +11,7 @@ import cgrid
 import geometry2d as g2
 import patch_graph as pg
 import pipeline
+import planar_domain as pdm
 import synthetic_cases as cases
 import wake
 
@@ -102,9 +103,37 @@ class CGridConstructionTests(unittest.TestCase):
         result = run("tear-c", [teardrop()], c_options())
         structure = result.analysis["graph"]["sizing_structure"]
         self.assertIsNotNone(structure["farfield_fanout_ratio"])
-        judged = [item for item in structure["worst"] if not item["fan_out"]]
-        self.assertTrue(all(item["length_ratio"] <= 20.0 for item in judged), judged[:1])
+        # The verdict is judged on the whole component list, not the short
+        # table: the worst component that is not far-field fan-out.
+        judged = structure["worst_judged"]
+        self.assertFalse(judged["fan_out"])
+        self.assertLessEqual(judged["length_ratio"], 20.0)
         self.assertEqual(result.structure_failures, [])
+        # The report states what the exemption waives: the same limit on the
+        # worst component overall, fan-out included.
+        strict = result.analysis["sizing"]["feasibility"]["failures_without_exemptions"]
+        overall = structure["worst_overall"]["length_ratio"]
+        self.assertGreaterEqual(overall, judged["length_ratio"])
+        self.assertEqual(
+            any(item["metric"] == "maximum_component_length_ratio" for item in strict),
+            overall > 20.0,
+        )
+
+    def test_chain_names_do_not_decide_the_c_grid(self):
+        """The outer loop starts at the chain whose name sorts first; with the
+        upper leg first the outlet ends at station 0, which the outlet check
+        must not mistake for a wake line leaving beyond the corners."""
+        reference = run("tear-c", [teardrop()], c_options())
+        roles = [chain.role for chain in reference.domain.outer.chains]
+        chains = pdm.cshape_chains((0.704, 0.0), 3.0)
+        names = ("upstream", "lower", "outlet", "farfield")
+        renamed = [(name, chain.role, chain.points) for name, chain in zip(names, chains)]
+        result = pipeline.run_external(["tear"], [teardrop()], c_options(), outer=renamed)
+        self.assertEqual(result.domain.outer.chains[0].name, "farfield")
+        self.assertTrue(result.cgrid["applied"], result.cgrid.get("reason"))
+        self.assertEqual(result.graph.summary(), reference.graph.summary())
+        self.assertEqual(result.resolved, reference.resolved)
+        self.assertEqual(sorted(roles), sorted(chain.role for chain in result.domain.outer.chains))
 
     def test_c_grid_needs_the_c_shaped_boundary(self):
         result = run("tear-circle", [teardrop()], c_options(farfield_shape="circle", farfield_radius=None, farfield_center=None))

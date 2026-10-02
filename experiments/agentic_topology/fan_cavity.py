@@ -1692,7 +1692,9 @@ def repair(graph: pg.PatchGraph, domain, *, options: CavityOptions | None = None
     features = feature_corners(graph, settings)
     rewritten: set[tuple] = set()
     current = graph
-    baseline_coupling = len(_count_coupling(current))
+    # The coupling the graph already has, recomputed after every applied
+    # repair: a candidate is judged against the graph it would replace.
+    baseline_coupling = _count_coupling(current)
     for feature in features:
         record = {
             "feature": list(feature["vertex"]),
@@ -1771,9 +1773,18 @@ def repair(graph: pg.PatchGraph, domain, *, options: CavityOptions | None = None
         record["candidates"] = [
             item.described() for item in ordered[: settings.reported_candidates]
         ]
+        # A template the caller chose for this feature (``cavity.choices``,
+        # an applied move) is committed when it is valid, even if the
+        # incumbent scores higher: otherwise the move it realises is a silent
+        # no-op that still reports itself as applied.
+        forced = any(
+            str(key) == _label(cavity.vertex)
+            for key, _name in (tuple(item) for item in settings.choices)
+        )
         threshold = (
-            incumbent.score if incumbent.valid else -math.inf
-        ) + settings.improvement_margin
+            -math.inf if forced
+            else (incumbent.score if incumbent.valid else -math.inf) + settings.improvement_margin
+        )
         chosen = next(
             (
                 item
@@ -1802,6 +1813,7 @@ def repair(graph: pg.PatchGraph, domain, *, options: CavityOptions | None = None
             result.cavities.append(record)
             continue
         current = clones[chosen.identifier]
+        baseline_coupling = _count_coupling(current)
         fresh = current.faces[-len(chosen.faces):]
         rewritten.update(tuple(face.key) for face in fresh)
         record["applied"] = chosen.identifier
@@ -1835,7 +1847,7 @@ def _commit_problems(
     after: pg.PatchGraph,
     cavity: Cavity,
     options: CavityOptions,
-    baseline_coupling: int,
+    baseline_coupling: list,
 ) -> list[dict]:
     """Structural checks that only make sense on the whole replaced graph."""
     found: list[dict] = []
@@ -1888,7 +1900,17 @@ def _commit_problems(
         )
     if not options.allow_count_coupling and cavity.has_layer:
         coupling = _count_coupling(after)
-        if len(coupling) > baseline_coupling:
+
+        def walls(records) -> set:
+            return {
+                name
+                for record in records
+                for name in (*record["wall_tangential_chains"], *record["wall_normal_chains"])
+            }
+
+        # More coupled components, or an existing one now reaching another
+        # wall's tangents or normals.
+        if len(coupling) > len(baseline_coupling) or not walls(coupling) <= walls(baseline_coupling):
             found.append(
                 {
                     "reason": "count_component_coupling",

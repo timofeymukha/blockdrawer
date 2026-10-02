@@ -36,7 +36,18 @@ class SolverOptions:
     spoke_cosine: float = math.cos(math.radians(70.0))
     spoke_weight: float = 0.5
     alignment_weight: float = 0.02
+    # Barrier on a band patch's wall turning above the layout's own limit.
+    # Without it the relaxation slid an 8:1 ellipse's tip gates off the tips
+    # and left two patches turning 160 degrees, whose band blocks are
+    # bow-ties at every height.
+    turning_weight: float = 4.0
     sweeps: int = 40
+    # Splitting stops after this many consecutive splits that do not raise
+    # the worst block: when the worst patch cannot be split (its cut would
+    # crowd another), splitting the next-worst ones one by one used to spend
+    # the whole budget - forty relaxations of a growing layout, half an hour
+    # on the A-airfoil's C-grid layout - without changing the worst block.
+    futile_splits: int = 5
     margin: float = 0.06
     grid: int = 9
     refinements: int = 3
@@ -92,6 +103,43 @@ class Evaluator:
         self.cells = layout.cells
         self.sites = layout.diagram.sites
         self._ring = [g2.cumulative_length(cell.ring) for cell in self.cells]
+        # Prefix sums of absolute wall turning by arc length, per wall cell,
+        # so a patch's turning is two lookups inside the relaxation loop.
+        self._turning: dict[int, tuple[np.ndarray, np.ndarray, float]] = {}
+        limit = getattr(layout, "wall_turning_limit", None)
+        self.turning_limit = limit if limit and options.turning_weight > 0.0 else None
+        if self.turning_limit is not None:
+            for cell_index, cell in enumerate(self.cells):
+                curve = self.sites[cell.site].curve
+                if curve.kind != "wall":
+                    continue
+                loop = curve.loop()
+                stations = g2.cumulative_length(loop)[:-1]
+                angles = np.abs(g2.turning_angles(loop, closed=True))
+                self._turning[cell_index] = (stations, np.cumsum(angles), float(g2.cumulative_length(loop)[-1]))
+        # Each patch is held to the larger of the limit and the turning it
+        # had when the relaxation started: the barrier keeps the relaxation
+        # from undoing the layout's cuts, not from accepting a patch the
+        # layout itself could not cut below the limit.
+        self._bounds: dict[tuple[int, int], float] = {}
+        for cell_index in self._turning:
+            cuts = layout.cuts[cell_index]
+            for position in range(len(cuts)):
+                start = self.wall_turning(cell_index, cuts[position].wall_station, cuts[(position + 1) % len(cuts)].wall_station)
+                self._bounds[(cell_index, position)] = max(self.turning_limit, start)
+
+    def wall_turning(self, cell_index: int, start: float, end: float) -> float:
+        """Absolute wall turning forward from ``start`` to ``end`` (wrapping)."""
+        stations, prefix, total = self._turning[cell_index]
+
+        def upto(value: float) -> float:
+            index = int(np.searchsorted(stations, value % total, side="right"))
+            return float(prefix[index - 1]) if index else 0.0
+
+        if (end - start) % total <= 0.0:
+            return 0.0
+        first, second = upto(start), upto(end)
+        return second - first if (end % total) >= (start % total) else float(prefix[-1]) - first + second
 
     def cut_points(self, cell_index: int, cut: Cut):
         cell = self.cells[cell_index]
@@ -123,6 +171,16 @@ class Evaluator:
             total += options.aspect_weight * math.log(
                 aspect / options.aspect_limit
             ) ** 2
+        if self.turning_limit is not None and cell_index in self._turning:
+            cuts = self.layout.cuts[cell_index]
+            turning = self.wall_turning(
+                cell_index,
+                cuts[position].wall_station,
+                cuts[(position + 1) % len(cuts)].wall_station,
+            )
+            bound = self._bounds.get((cell_index, position), self.turning_limit)
+            if turning > bound:
+                total += options.turning_weight * ((turning - bound) / self.turning_limit) ** 2
         return total
 
     def cut_penalty(self, cell_index: int, position: int) -> float:
@@ -441,6 +499,8 @@ def relax(
 def solve(layout: Layout, options: SolverOptions | None = None) -> SolveResult:
     settings = options or SolverOptions()
     result = SolveResult()
+    best = -math.inf
+    futile = 0
     for attempt in range(settings.max_splits + 1):
         worst, sweeps = relax(layout, settings)
         released = False
@@ -467,6 +527,15 @@ def solve(layout: Layout, options: SolverOptions | None = None) -> SolveResult:
         )
         if worst >= settings.split_quality:
             return result
+        if worst > best + 1.0e-3:
+            best, futile = worst, 0
+        else:
+            futile += 1
+            if settings.futile_splits and futile >= settings.futile_splits:
+                result.failures.append(
+                    {"reason": f"{futile} splits in a row did not raise the worst block ({worst:.3g})"}
+                )
+                return result
         if not _split_worst(layout, settings, result):
             return result
         result.splits += 1

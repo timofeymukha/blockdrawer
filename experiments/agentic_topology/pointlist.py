@@ -91,6 +91,17 @@ def parse_box(text: str):
     return values
 
 
+def parse_point(text: str):
+    """``X,Y`` as a finite point; the origin is a point like any other."""
+    try:
+        values = tuple(float(item) for item in text.split(","))
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("a point is X,Y") from error
+    if len(values) != 2 or not all(math.isfinite(v) for v in values):
+        raise argparse.ArgumentTypeError("a point is a finite X,Y")
+    return values
+
+
 def parse_direction(text: str):
     """``DX,DY`` as a non-zero direction."""
     try:

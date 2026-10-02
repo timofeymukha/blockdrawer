@@ -304,14 +304,18 @@ def domain_frame(loops) -> tuple[np.ndarray, float]:
 
     The centre is the arc-length weighted centroid of every supplied boundary
     and the radius is the largest distance from it to any boundary point.  Both
-    are invariant to component order and to point-list reversal.
+    are invariant to component order, to point-list reversal and to the start
+    point, because each loop is measured closed: the open supplied list omits
+    one segment, and which one depends on where the list starts (for an
+    airfoil file starting at a blunt trailing edge, the whole base).
     """
     weights = []
     centres = []
     for loop in loops:
-        length = g2.total_length(loop)
+        closed = g2.close_loop(loop, 0.0)
+        length = g2.total_length(closed)
         weights.append(length)
-        centres.append(g2.centroid_by_arclength(loop))
+        centres.append(g2.centroid_by_arclength(closed))
     total = float(sum(weights))
     if total <= 0.0:
         raise ValueError("supplied geometry has zero total boundary length")
@@ -338,8 +342,11 @@ def canonical_order(loops, center, radius) -> list[int]:
     for index, loop in enumerate(loops):
         closed = g2.close_loop(loop, 0.0)
         perimeter = g2.total_length(closed) / radius
-        area = abs(g2.signed_area(closed)) / (radius * radius)
         centre = g2.centroid_by_arclength(closed)
+        # Relative to the body's own centre: the shoelace sum on raw
+        # coordinates loses the eighth digit far from the origin, and two
+        # congruent bodies then swap order under a translation.
+        area = abs(g2.signed_area(closed - centre[None, :])) / (radius * radius)
         offset = float(np.linalg.norm(centre - center)) / radius
         spread = float(
             np.mean(np.linalg.norm(closed[:-1] - centre[None, :], axis=1))
@@ -392,11 +399,9 @@ def sites_from_domain(domain, *, circle=None, frame=None) -> tuple[list[Site], f
     exact circle, which is then kept analytic so its edges export as arcs.
 
     ``frame`` is the body frame ``(center, radius)`` the caller already
-    measured; the returned scale is its diameter.  The pipeline measures it on
-    the supplied point lists exactly as it always has - including their
-    open closing segment - so that no established result moves; without a
-    frame the closed hole loops are measured, which is the geometrically
-    exact reading and differs for bodies whose closing segment is long.
+    measured; the returned scale is its diameter.  Without a frame the hole
+    loops are measured, which gives the same frame: :func:`domain_frame`
+    closes every loop.
     """
     hole_loops = [loop.points() for loop in domain.holes]
     if not hole_loops:

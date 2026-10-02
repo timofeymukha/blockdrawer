@@ -62,8 +62,14 @@ class GridOptions:
     node_budget: int = 4_000_000
     # Cells per block side of the *shape* grid: every block is sampled at
     # uniform parametric fractions, independent of any cell count or grading,
-    # so the shape measures describe the block map itself.
+    # so the shape measures describe the block map itself.  They are measured
+    # at this resolution and are lower bounds of the continuous extremes.
     shape_cells: int = 8
+    # Cells per block side of the *fold* check: the same uniform sampling,
+    # finer, judged for inversion only.  A fold between the shape grid's
+    # samples - a loop in a curved edge, say - is invisible at eight cells and
+    # appears at thirty-two.  0 disables it.
+    fold_cells: int = 32
 
     def limits(self) -> "GridLimits":
         return GridLimits(

@@ -477,6 +477,31 @@ class PatchGraph:
         found.extend(self._degenerate_edge_problems(tolerance_ratio))
         if check_geometry:
             found.extend(self._crossing_problems(tolerance_ratio))
+            found.extend(self._self_crossing_problems())
+        return found
+
+    def _self_crossing_problems(self) -> list[dict]:
+        """No edge path crosses itself.
+
+        The crossing test above compares distinct edges only, so a loop or a
+        bow-tie inside one path - which neither coverage nor a coarse sampled
+        grid need see - was never checked.
+        """
+        found = []
+        for key, edge in self.edges.items():
+            path = np.asarray(edge.path, dtype=np.float64)
+            if len(path) < 4:
+                continue
+            pairs = g2.self_intersections(path, closed=False)
+            if pairs:
+                found.append(
+                    {
+                        "kind": "self_crossing_edge",
+                        "edges": [[list(key[0]), list(key[1])]],
+                        "role": edge.role,
+                        "segments": [list(pair) for pair in pairs[:4]],
+                    }
+                )
         return found
 
     def _boundary_cycle_problems(self, incidence) -> list[dict]:
@@ -651,6 +676,71 @@ class PatchGraph:
 # ---------------------------------------------------------------------------
 
 
+# Distance, as a fraction of the domain scale, a boundary edge may lie from the
+# chain it is named after.  Polyline and line edges are sections of the
+# supplied point lists (measured 1e-17); an arc is the exact circle against
+# the domain's polygon of it (measured 4.8e-6).
+BOUNDARY_TOLERANCE = 1.0e-9
+ARC_BOUNDARY_TOLERANCE = 1.0e-4
+
+
+def boundary_problems(graph: PatchGraph, domain) -> list[dict]:
+    """Every boundary edge lies on its named chain, and every chain is covered.
+
+    ``problems()`` compares graph edges only with one another, and coverage
+    samples a lattice that is blind within a cell diagonal of the boundary, so
+    a section exported under the wrong patch name - a slot labelled as the
+    wall beside it - or a wall edge drifting off the supplied geometry passed
+    every check.  Here each named boundary edge is measured against its own
+    chain's point list, and the edges carrying each chain's name must add up
+    to that chain's length.
+    """
+    scale = float(domain.scale)
+    chains = {chain.name: chain for chain in domain.chains()}
+    found: list[dict] = []
+    covered = {name: 0.0 for name in chains}
+    arcs = {name: False for name in chains}
+    for key, edge in graph.edges.items():
+        if edge.boundary is None:
+            continue
+        chain = chains.get(edge.boundary)
+        path = np.asarray(edge.path, dtype=np.float64)
+        if chain is None:
+            found.append(
+                {"kind": "boundary_without_chain", "edges": [[list(key[0]), list(key[1])]], "boundary": edge.boundary}
+            )
+            continue
+        covered[edge.boundary] += g2.total_length(path)
+        arcs[edge.boundary] |= edge.kind == "arc"
+        tolerance = (ARC_BOUNDARY_TOLERANCE if edge.kind == "arc" else BOUNDARY_TOLERANCE) * scale
+        distances = g2.distance_to_polyline(np.asarray(chain.points, dtype=np.float64), path)
+        worst = int(np.argmax(distances))
+        if float(distances[worst]) > tolerance:
+            found.append(
+                {
+                    "kind": "boundary_off_chain",
+                    "edges": [[list(key[0]), list(key[1])]],
+                    "boundary": edge.boundary,
+                    "distance": float(distances[worst]),
+                    "point": [float(path[worst][0]), float(path[worst][1])],
+                    "tolerance": float(tolerance),
+                }
+            )
+    for name, chain in chains.items():
+        length = float(chain.length)
+        ratio = ARC_BOUNDARY_TOLERANCE if arcs[name] else 1.0e-9
+        if abs(covered[name] - length) > ratio * max(length, scale):
+            found.append(
+                {
+                    "kind": "chain_not_covered",
+                    "boundary": name,
+                    "covered_length": float(covered[name]),
+                    "chain_length": length,
+                }
+            )
+    return found
+
+
 def coverage(graph: PatchGraph, domain, *, samples: int = 400) -> dict:
     """Confirm the faces tile the fluid region exactly.
 
@@ -743,20 +833,32 @@ class StructureLimits:
         }
 
 
-def structure_failures(structure: dict, limits: StructureLimits) -> list[dict]:
+def structure_failures(
+    structure: dict, limits: StructureLimits, *, exemptions: bool = True
+) -> list[dict]:
     """The structural sizing statements a topology fails, as failure records.
 
     Each record has the shape of a grid quality failure - ``metric``,
     ``observed``, ``limit``, ``comparison`` - so an agent reads both kinds the
     same way; ``edges`` names the offending component's extreme edges.
+
+    The length-ratio limit is judged on every component, not on the short
+    ``worst`` table.  ``exemptions=False`` gives the verdict without the two
+    exemptions - far-field fan-out components and wake-landing couplings -
+    so a report can state what each of them waives.
     """
     found: list[dict] = []
     worst = structure.get("worst") or []
-    # Far-field fan-out components are reported, not failed; the verdict
-    # falls on the worst component that is not one.
-    judged = [record for record in worst if not record.get("fan_out")]
-    if limits.max_length_ratio is not None and judged:
-        record = judged[0]
+    if not exemptions:
+        record = structure.get("worst_overall") or (worst[0] if worst else None)
+    elif "worst_judged" in structure:
+        # Far-field fan-out components are reported, not failed; the verdict
+        # falls on the worst component of the whole list that is not one.
+        record = structure["worst_judged"]
+    else:
+        # Old saved reports carry only the short table.
+        record = next((item for item in worst if not item.get("fan_out")), None)
+    if limits.max_length_ratio is not None and record is not None:
         if record["length_ratio"] > limits.max_length_ratio:
             found.append(
                 {
@@ -783,13 +885,28 @@ def structure_failures(structure: dict, limits: StructureLimits) -> list[dict]:
         "wall_tangential_normal_couplings" if physical else "tangential_normal_couplings"
     )
     couplings = int(structure.get(metric, 0))
+    if physical and not exemptions:
+        couplings += int(structure.get("wake_landing_couplings", 0))
     if couplings and not limits.allow_tangential_normal_coupling:
         evidence = structure.get("wall_coupled" if physical else "coupled", worst)
+        if physical and not exemptions:
+            evidence = list(evidence) + list(structure.get("wake_landing", []))
         predicate = (
             "couples_wall_tangential_and_normal" if physical
             else "mixes_tangential_and_normal"
         )
-        example = next((item for item in evidence if item.get(predicate)), None)
+        if physical and not exemptions:
+            predicate = None
+        example = next(
+            (
+                item for item in evidence
+                if (
+                    item.get(predicate) if predicate is not None
+                    else item.get("couples_wall_tangential_and_normal") or item.get("wake_landing_coupling")
+                )
+            ),
+            None,
+        )
         found.append(
             {
                 "metric": metric,
@@ -946,14 +1063,13 @@ def sizing_structure(graph: PatchGraph, *, reported: int = 6) -> dict:
         longest_boundary = longest_edge.boundary
         longest_role = graph.boundary_roles.get(longest_boundary) if longest_boundary else None
         # Far-field fan-out: a tangential component whose longest edge lies
-        # on a non-wall outer chain or on the medial ring.  The far cells are
-        # simply large there, which every O- and C-grid does; it is grading,
-        # not a defect.
+        # on a non-wall outer chain.  The far cells are simply large there,
+        # which every O- and C-grid does; it is grading, not a defect.  (A
+        # component whose longest edge is a medial-ring edge used to count
+        # too, but the ring also runs through the gaps between bodies, which
+        # is near field; no default verdict depended on it.)
         fan_out = bool(
-            (
-                longest_role in ("farfield", "inlet", "outlet", "symmetry", "patch")
-                or (longest_boundary is None and longest_edge.role == "ring")
-            )
+            longest_role in ("farfield", "inlet", "outlet", "symmetry", "patch")
             and not (set(roles) & NORMAL_ROLES)
         )
         longest = int(np.argmax(lengths))
@@ -1000,6 +1116,10 @@ def sizing_structure(graph: PatchGraph, *, reported: int = 6) -> dict:
             record["ties_band_to_core_depth"] for record in records
         ),
         "worst": records[:reported],
+        # The verdict's own records, from the whole list: the worst component
+        # overall and the worst one that is not far-field fan-out.
+        "worst_overall": records[0] if records else None,
+        "worst_judged": next((record for record in records if not record["fan_out"]), None),
         # The largest ratio among far-field fan-out components, informational.
         "farfield_fanout_ratio": max(
             (record["length_ratio"] for record in records if record["fan_out"]), default=None
@@ -1008,6 +1128,7 @@ def sizing_structure(graph: PatchGraph, *, reported: int = 6) -> dict:
         # evidence even when they fall outside the short worst-ratio table.
         "coupled": [record for record in records if record["mixes_tangential_and_normal"]],
         "wall_coupled": [record for record in records if record["couples_wall_tangential_and_normal"]],
+        "wake_landing": [record for record in records if record.get("wake_landing_coupling")],
     }
 
 

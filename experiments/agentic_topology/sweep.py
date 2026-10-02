@@ -296,6 +296,11 @@ class Correspondence:
     crossing: list[int] = field(default_factory=list)
     objective: float = 0.0
     sweeps: int = 0
+    # Cut indices whose station on that guide is a chain join: a block vertex
+    # the relaxation must not move, or the guide edge across the join would
+    # carry one patch name for two chains.
+    pinned_first: frozenset = frozenset()
+    pinned_second: frozenset = frozenset()
 
     @property
     def columns(self) -> int:
@@ -353,31 +358,61 @@ def initial_cuts(
     mandatory_first=(),
     mandatory_second=(),
 ) -> Correspondence:
-    """Propose monotone cut fractions from features, joins and metric length."""
+    """Propose monotone cut fractions from features, joins and metric length.
+
+    A chain join on either guide is a block vertex, whatever its distance to
+    another proposal: it pins that guide's station of one cut, exactly.  A
+    join on each guide may share one cut when they are close; features too
+    close to a join or to a guide end are dropped instead of the join.
+    """
     length_first = g2.total_length(first)
     length_second = g2.total_length(second)
-    proposals = [
-        float(station) / length_first
-        for station in (*section_features(first, options), *mandatory_first)
-    ]
-    proposals.extend(
-        float(station) / length_second
-        for station in (*section_features(second, options), *mandatory_second)
-    )
     separation = 1.0 / max(options.maximum_columns, 1)
-    merged: list[float] = []
-    for value in sorted(proposals):
+    end = 1.0e-9
+    pins: list[dict] = []
+    joins = sorted(
+        [(float(station) / length_first, "first", float(station)) for station in mandatory_first]
+        + [(float(station) / length_second, "second", float(station)) for station in mandatory_second]
+    )
+    for fraction, guide, station in joins:
+        if fraction <= end or fraction >= 1.0 - end:
+            continue
+        last = pins[-1] if pins else None
+        if last is not None and guide not in last["stations"] and fraction - last["fraction"] < separation:
+            last["stations"][guide] = station
+            continue
+        pins.append({"fraction": fraction, "stations": {guide: station}})
+    merged: list[float] = [pin["fraction"] for pin in pins]
+    features = sorted(
+        [float(station) / length_first for station in section_features(first, options)]
+        + [float(station) / length_second for station in section_features(second, options)]
+    )
+    for value in features:
         if value <= separation or value >= 1.0 - separation:
             continue
-        if merged and value - merged[-1] < separation:
+        if any(abs(value - other) < separation for other in merged):
             continue
         merged.append(value)
+    merged.sort()
     stations = _enforce_metric_limit(
         first, second, [0.0, *merged, 1.0], metric, options
     )
     feature = np.asarray(stations, dtype=np.float64)
+    values_first = feature * length_first
+    values_second = feature * length_second
+    pinned_first: set[int] = set()
+    pinned_second: set[int] = set()
+    for pin in pins:
+        index = int(np.argmin(np.abs(feature - pin["fraction"])))
+        if "first" in pin["stations"]:
+            values_first[index] = pin["stations"]["first"]
+            pinned_first.add(index)
+        if "second" in pin["stations"]:
+            values_second[index] = pin["stations"]["second"]
+            pinned_second.add(index)
     return Correspondence(
-        feature * length_first, feature * length_second, feature.copy()
+        values_first, values_second, feature.copy(),
+        pinned_first=frozenset(pinned_first), pinned_second=frozenset(pinned_second),
     )
 
 
@@ -474,10 +509,12 @@ def relax_correspondence(
     for sweeps in range(1, options.relax_sweeps + 1):
         moved = 0.0
         for index in range(1, count - 1):
-            for values, total in (
-                (values_first, length_first),
-                (values_second, length_second),
+            for values, total, pinned in (
+                (values_first, length_first, correspondence.pinned_first),
+                (values_second, length_second, correspondence.pinned_second),
             ):
+                if index in pinned:
+                    continue
                 low = values[index - 1] + options.margin * total
                 high = values[index + 1] - options.margin * total
                 if high <= low:
@@ -526,6 +563,8 @@ def relax_correspondence(
         crossing,
         objective,
         sweeps,
+        correspondence.pinned_first,
+        correspondence.pinned_second,
     )
 
 
@@ -575,13 +614,22 @@ def _guide_front(
     *,
     fluid_left: bool,
     protected=(),
+    opposite=None,
 ):
-    """Clearance-limited offset of one open guide, sampled like the guide itself."""
+    """Clearance-limited offset of one open guide, sampled like the guide itself.
+
+    ``opposite`` is the other guide's polyline.  When it carries no wall - a
+    symmetry plane, say - it still bounds the band: only walls used to limit
+    the clearance, and a wall-and-symmetry channel built its front outside
+    the domain.
+    """
     if not any(domain.chain(name).is_wall for name in side.names):
         return None, []
     sign = 1.0 if fluid_left else -1.0
     normals = sign * g2.vertex_normals(points, closed=False)
     walls = [chain.points for chain in domain.wall_chains()]
+    if opposite is not None:
+        walls = walls + [np.asarray(opposite, dtype=np.float64)]
     upper = metric.layer_height / max(options.clearance_fraction, 1.0e-6)
     # Fluid angle at every guide vertex; the open ends are treated as smooth.
     # A left turn of a guide with the fluid on its left closes the fluid
@@ -717,6 +765,8 @@ def build(
     wall_b, index_b = insert_open_stations(second, correspondence.second)
     front_a = front_b = None
     if layer_settings.enabled:
+        opposite_a = None if any(domain.chain(name).is_wall for name in second_side.names) else wall_b
+        opposite_b = None if any(domain.chain(name).is_wall for name in guide_a.names) else wall_a
         front_a, front_notes = _guide_front(
             wall_a,
             guide_a,
@@ -726,6 +776,7 @@ def build(
             [],
             fluid_left=True,
             protected=index_a,
+            opposite=opposite_a,
         )
         notes.extend(front_notes)
         front_b, front_notes = _guide_front(
@@ -737,9 +788,16 @@ def build(
             [front_a] if front_a is not None else [],
             fluid_left=False,
             protected=index_b,
+            opposite=opposite_b,
         )
         notes.extend(front_notes)
-    rows: list[Row] = [Row(guide_a.names[0], "wall", wall_a, index_a, guide_a)]
+    def guide_role(side: Side) -> str:
+        # A band belongs between a front and a physical wall only; a guide of
+        # symmetry, inlet or periodic chains is a boundary row, so the faces
+        # beside it are core and its ribs are core ribs.
+        return "wall" if any(domain.chain(name).is_wall for name in side.names) else "boundary"
+
+    rows: list[Row] = [Row(guide_a.names[0], guide_role(guide_a), wall_a, index_a, guide_a)]
     if front_a is not None:
         rows.append(
             Row(f"front:{guide_a.names[0]}", "front", front_a, list(index_a))
@@ -748,7 +806,7 @@ def build(
         rows.append(
             Row(f"front:{second_side.names[0]}", "front", front_b, list(index_b))
         )
-    rows.append(Row(second_side.names[0], "wall", wall_b, index_b, second_side))
+    rows.append(Row(second_side.names[0], guide_role(second_side), wall_b, index_b, second_side))
 
     graph = pg.PatchGraph(
         euler_characteristic=domain.euler_characteristic,
@@ -841,8 +899,8 @@ def _add_horizontal(graph, row_keys, row: Row, column: int, path: np.ndarray) ->
         kind=kind,
         points=points,
         boundary=boundary,
-        role="wall" if row.role == "wall" else "front",
-        provenance="sweep guide" if row.role == "wall" else "layer front",
+        role="wall" if row.role in ("wall", "boundary") else "front",
+        provenance="sweep guide" if row.role in ("wall", "boundary") else "layer front",
     )
 
 

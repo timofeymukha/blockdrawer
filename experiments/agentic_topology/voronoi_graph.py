@@ -667,11 +667,50 @@ def _trace_closed_loop(
 # ---------------------------------------------------------------------------
 
 
+# A junction whose equidistance refinement stops above this fraction of its
+# clearance is not a junction: two true junctions whose pixel clusters touch
+# were merged, so the cluster asked for a point equidistant from four sites
+# and the short branch between them was lost (``four_bodies`` at the
+# suite's own width of 420, residual 3 percent of the clearance).
+JUNCTION_RESIDUAL_RATIO = 1.0e-6
+RASTER_REFINEMENTS = 3
+
+
+def unconverged_junctions(junctions) -> list:
+    return [
+        junction for junction in junctions
+        if junction.residual > JUNCTION_RESIDUAL_RATIO * max(junction.clearance, 1e-300)
+    ]
+
+
 def build_diagram(
     sites: list[Site], *, scale: float, grid_width: int = 1200
 ) -> Diagram:
-    notes: list[str] = []
-    raster = build_raster(sites, grid_width)
-    junctions = detect_junctions(sites, raster, scale=scale)
+    """The medial diagram; the raster is refined until every junction converges.
+
+    The raster decides connectivity only, so a cluster the raster merged is
+    rebuilt on a raster 1.5 times finer, up to three times.  A junction that
+    still does not converge is reported in the notes, never silently kept.
+    """
+    history: list[str] = []
+    width = int(grid_width)
+    for attempt in range(RASTER_REFINEMENTS + 1):
+        raster = build_raster(sites, width)
+        junctions = detect_junctions(sites, raster, scale=scale)
+        failed = unconverged_junctions(junctions)
+        if not failed or attempt == RASTER_REFINEMENTS:
+            break
+        worst = max(junction.residual / max(junction.clearance, 1e-300) for junction in failed)
+        history.append(
+            f"raster width {width}: {len(failed)} junction(s) did not converge "
+            f"(residual {worst:.2g} of the clearance) - merged clusters; rebuilt finer"
+        )
+        width = int(round(1.5 * width))
+    notes: list[str] = list(history)
+    for junction in unconverged_junctions(junctions):
+        notes.append(
+            f"junction {junction.index} did not converge at raster width {width} "
+            f"(residual {junction.residual / max(junction.clearance, 1e-300):.2g} of the clearance)"
+        )
     branches = trace_branches(sites, raster, junctions, scale=scale, notes=notes)
     return Diagram(sites, scale, junctions, branches, raster, notes)

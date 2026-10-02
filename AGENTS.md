@@ -315,9 +315,32 @@ them in the canvas widgets.
   Front repair reduces the caps of whole failing blocks; repeated failures
   request a patch split, with bounded global height search permitted on the
   caller's final repair round. That search is not a proof of monotone
-  admissibility or numerical stability. Regression
-  fixtures that reproduce a known failure carry `expectedFailure` tests so a
-  fix cannot land unnoticed. It may use NumPy and Pillow and keeps its own self-tests beside it.
+  admissibility or numerical stability. Verdicts fail closed: with a grid
+  not evaluated (`--no-grid-quality`) every grid-dependent term is false and
+  no session is written, a fold check at 32 cells per block side guards
+  `untangled`, `sizing_feasible` judges every equality component (the
+  report adds the verdict without the fan-out and wake-landing exemptions),
+  `topology_valid` requires every named boundary edge on its own chain and
+  every chain covered (`patch_graph.boundary_problems`), no self-crossing
+  edge path, and an exportable `blockMeshDict`; an opt-in stage never
+  replaces a result by one with a lower verdict, and an exception inside a
+  trial that is not a construction refusal is reported as a crash. Exported
+  sessions use `empty` z patches, and an exported spline that leaves its
+  validated polyline is written as that polyline. Cell counts integrate the
+  size metric exactly per segment and refuse backwards first-cell requests.
+  The layout measures the body frame on closed loops, takes curvature from
+  the smoothed vertex turning, splits by a turning density, merges
+  near-coincident forced anchors, keeps the wall-turning limit through the
+  relaxation, clamps an unpinned gate only when the gates would otherwise
+  wind twice round a wall, stops splitting after five splits that do not
+  raise the worst block, and refines the raster until every junction
+  converges, so all 13 fixtures keep their block graph under rotation,
+  reflection, reversal, start point, scaling, translation, densification
+  and raster width (`EquivalentInputTests` guards five of them); the
+  geometry of that graph, and on `concave_and_convex` turned through 180
+  degrees the verdict, still follow the orientation. A regression fixture
+  that reproduces a known failure carries an `expectedFailure` test while it
+  fails, so a fix cannot land unnoticed; none is open now. It may use NumPy and Pillow and keeps its own self-tests beside it.
   It imports BlockDrawer but nothing in `blockdrawer/` may import it, and none
   of its numerical code belongs in the package until it earns its way in. Its
   experimental agent operations stay in `research_cli.py`; do not widen the

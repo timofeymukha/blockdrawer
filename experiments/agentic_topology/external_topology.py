@@ -355,7 +355,11 @@ def _snap_sharp_gates(site, cuts, settings):
     sit inside a block edge: the two band blocks that would span it offset in
     almost opposite directions and fold.  The gate nearest such a vertex is
     therefore moved onto it, provided the move keeps the gate order, and the
-    move is reported.
+    move is reported.  A gate that already holds a sharp vertex is never moved
+    to another one: two sharp corners a base width apart (a blunt trailing
+    edge) would otherwise trade one gate, and the first corner would end up
+    inside a band block's wall edge.  A feature left without a gate is
+    reported.
     """
     stations = [float(cut.wall_station) for cut in cuts]
     if len(stations) < 3:
@@ -365,26 +369,47 @@ def _snap_sharp_gates(site, cuts, settings):
     total = float(cumulative[-1])
     angles = layer_module.fluid_angles(loop, site.curve.fluid_sign)
     limit = math.radians(settings.sharp_fluid_angle)
+    tolerance = 1.0e-12 * total
     notes: list[str] = []
+
+    def gap(first: float, second: float) -> float:
+        return min((first - second) % total, (second - first) % total)
+
+    sharp = [
+        float(cumulative[index])
+        for index in range(len(loop) - 1)
+        if float(angles[index]) >= limit
+    ]
+    held = {
+        order
+        for order, value in enumerate(stations)
+        if any(gap(value, station) <= tolerance for station in sharp)
+    }
     for index in range(len(loop) - 1):
         if float(angles[index]) < limit:
             continue
         station = float(cumulative[index])
         order = sorted(range(len(stations)), key=lambda item: stations[item])
-        gaps = [
-            min((station - value) % total, (value - station) % total)
-            for value in stations
-        ]
-        nearest = int(np.argmin(gaps))
-        if gaps[nearest] <= 1.0e-12 * total:
+        gaps = [gap(station, value) for value in stations]
+        if min(gaps) <= tolerance:
             continue
-        position = order.index(nearest)
-        before = stations[order[(position - 1) % len(order)]]
-        after = stations[order[(position + 1) % len(order)]]
-        if (station - before) % total <= 0.0 or (after - station) % total <= 0.0:
+        free = [item for item in range(len(stations)) if item not in held]
+        nearest = min(free, key=lambda item: gaps[item]) if free else None
+        moved = False
+        if nearest is not None:
+            position = order.index(nearest)
+            before = stations[order[(position - 1) % len(order)]]
+            after = stations[order[(position + 1) % len(order)]]
+            # Strictly between its neighbours in cyclic order, or the move
+            # would reorder the cuts.
+            moved = 0.0 < (station - before) % total < (after - before) % total
+        if not moved:
             notes.append(
                 f"{site.name}: a sharp wall feature at arc length {station:.6f} "
-                f"cannot become a gate without reordering the cuts"
+                f"({math.degrees(float(angles[index])):.1f} degree fluid sector) "
+                f"has no free gate beside it and lies inside a band block's wall "
+                f"edge; moving one would reorder the cuts or take another sharp "
+                f"feature's gate"
             )
             continue
         notes.append(
@@ -393,6 +418,7 @@ def _snap_sharp_gates(site, cuts, settings):
             f"({math.degrees(float(angles[index])):.1f} degree fluid sector)"
         )
         stations[nearest] = station
+        held.add(nearest)
     return stations, notes
 
 

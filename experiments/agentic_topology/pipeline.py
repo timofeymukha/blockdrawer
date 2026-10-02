@@ -132,14 +132,22 @@ class PipelineResult:
     model: object | None = None
     identifiers: dict = field(default_factory=dict)
     refused: list = field(default_factory=list)
+    # Export decisions: a spline wall edge exported as its validated polyline.
+    export_notes: list = field(default_factory=list)
     # ``shape`` samples every block at uniform fractions and is judged against
     # the shape limits only; ``grid`` samples the graded mesh nodes the
     # session defines and carries the sizing report.
     shape: grid_quality.GridReport | None = None
     grid: grid_quality.GridReport | None = None
+    # The block map sampled finer than ``shape``, judged for folds only.
+    fold: grid_quality.GridReport | None = None
     analysis: dict = field(default_factory=dict)
     errors: list = field(default_factory=list)
     failures: list = field(default_factory=list)
+    # Exceptions an opt-in trial raised that are not one of the
+    # construction's own refusals: defects, reported as such.  Trials share
+    # the list, so it survives whichever result is finally returned.
+    crashes: list = field(default_factory=list)
 
     @property
     def layer_blocks(self) -> set[str]:
@@ -183,14 +191,28 @@ class PipelineResult:
         )
 
     @property
-    def untangled(self) -> bool:
-        """No sampled transfinite cell is inverted, on either grid."""
-        if not self.topology_valid:
+    def grids_evaluated(self) -> bool:
+        """Both sampled grids were measured.
+
+        Without them nothing about the block map has been proven, so every
+        verdict that depends on a grid fails closed (``evaluate_grid=False``,
+        ``--no-grid-quality``, or a grid stage that raised).
+        """
+        if self.shape is None or self.grid is None:
             return False
-        for report in (self.shape, self.grid):
-            if report is not None and not report.untangled:
-                return False
-        return True
+        return self.fold is not None or not self.options.grid.fold_cells
+
+    @property
+    def untangled(self) -> bool:
+        """No sampled transfinite cell is inverted, on either grid.
+
+        False, not vacuously true, when a grid was not evaluated.
+        """
+        if not self.topology_valid or not self.grids_evaluated:
+            return False
+        if self.fold is not None and not self.fold.untangled:
+            return False
+        return self.shape.untangled and self.grid.untangled
 
     @property
     def within_shape_targets(self) -> bool:
@@ -198,9 +220,10 @@ class PipelineResult:
 
         Non-orthogonality, skewness and wall misalignment are properties of
         the block map, sampled independently of any cell count or grading.
+        False when the shape grid was not evaluated.
         """
         if self.shape is None:
-            return self.topology_valid
+            return False
         return self.shape.within_quality_targets
 
     @property
@@ -224,7 +247,7 @@ class PipelineResult:
         the default metric produced.
         """
         if self.grid is None:
-            return self.topology_valid
+            return False
         return self.grid.within_quality_targets
 
     @property
@@ -268,6 +291,58 @@ class PipelineResult:
 
 def _describe(error: BaseException) -> str:
     return f"{type(error).__name__}: {error}"
+
+
+# The construction's own refusals.  Anything else raised inside an opt-in
+# trial is a programming error, not a geometric verdict: it is recorded under
+# ``crashes`` and its reason says "crashed", so it can never pass for "the
+# template does not apply here".
+REFUSALS = (
+    pg.GraphError,
+    hull_module.HullError,
+    block_layout.LayoutError,
+    voronoi_graph.TraceError,
+    layer_module.LayerError,
+    pdm.DomainError,
+    sweep_module.SweepError,
+)
+
+
+def _trial_failure(result: "PipelineResult", stage: str, error: BaseException) -> str:
+    """The reason a trial reverted; a crash is recorded as one."""
+    if isinstance(error, REFUSALS):
+        return _describe(error)
+    import traceback
+
+    result.crashes.append(
+        {
+            "stage": stage,
+            "error": _describe(error),
+            "traceback": traceback.format_exception(error, limit=-8),
+        }
+    )
+    return f"crashed: {_describe(error)}"
+
+
+def _verdict_rank(result: "PipelineResult") -> int:
+    """The verdict lattice: 0 inadmissible, 1 admissible, 2 resolved."""
+    if not result.admissible:
+        return 0
+    return 2 if result.resolved else 1
+
+
+def _degrades(trial: "PipelineResult", current: "PipelineResult") -> str | None:
+    """Why committing ``trial`` would lower the verdict of ``current``, if it would.
+
+    An opt-in stage may change the construction, but never replace a better
+    verdict by a worse one: a resolved annular result is not traded for an
+    admissible C-grid or wake.
+    """
+    names = ("inadmissible", "admissible", "resolved")
+    before, after = _verdict_rank(current), _verdict_rank(trial)
+    if after < before:
+        return f"the trial is {names[after]}, the result it would replace is {names[before]}"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -356,6 +431,49 @@ def run_external(names, loops, options: PipelineOptions | None = None, *, outer=
     return result
 
 
+def hull_outline(loops, settings: PipelineOptions, metric, notes: list | None = None):
+    """The hull - the cluster's wall-distance level set - and its height.
+
+    The requested band height follows the domain scale by default, far field
+    included; the hull is a near-field construct, so its height is capped by
+    the body frame's radius, and raised while the level set is several curves.
+    """
+    _centre, radius = site_module.domain_frame(loops)
+    height = min(settings.hull.height_ratio * metric.layer_height, float(radius))
+    for _attempt in range(4):
+        try:
+            return hull_module.cluster_level_set(loops, height, resolution=settings.hull.resolution), height
+        except hull_module.HullError as error:
+            if notes is not None:
+                notes.append(f"height {height:.4g}: {error}")
+            height *= 1.5
+    raise hull_module.HullError("no single hull around every body up to five times the requested height")
+
+
+def hull_near_settings(settings: PipelineOptions, metric) -> PipelineOptions:
+    """The options the near field inside the hull is built with.
+
+    As the C-grid builds its band: the band height is a geometric input of the
+    layout (sliver-free band blocks, at most 45 degrees of wall turning per
+    block), the inscribed-disk cap is off since this producer is handed the
+    band height, and the hull's chain breaks are anchored by the inward ray.
+    Tests build the near field through this function too, so they cannot
+    drift from the pipeline.
+    """
+    return replace(
+        settings,
+        hull=replace(settings.hull, enabled=False),
+        layer_height=metric.layer_height,
+        layout=replace(
+            settings.layout,
+            band_height=metric.layer_height if settings.layer.enabled else None,
+            max_band_turning=settings.layout.max_band_turning if settings.layout.max_band_turning is not None else math.radians(45.0),
+            outer_by_ray=True,
+        ),
+        layer=replace(settings.layer, inscribed_cap=False),
+    )
+
+
 def _try_hull(result: PipelineResult, names, loops, settings: PipelineOptions):
     """The hull far field: near field inside the cluster's level set, levels beyond.
 
@@ -369,45 +487,15 @@ def _try_hull(result: PipelineResult, names, loops, settings: PipelineOptions):
         return None
     try:
         metric = _metric(result.domain, settings)
-        # The requested band height follows the domain scale by default, far
-        # field included; the hull is a near-field construct, so it is capped
-        # by the body frame's radius.
-        _centre, radius = site_module.domain_frame(loops)
-        height = min(settings.hull.height_ratio * metric.layer_height, float(radius))
-        hull_points = None
-        for _attempt in range(4):
-            try:
-                hull_points = hull_module.cluster_level_set(loops, height, resolution=settings.hull.resolution)
-                break
-            except hull_module.HullError as error:
-                record.setdefault("notes", []).append(f"height {height:.4g}: {error}")
-                height *= 1.5
-        if hull_points is None:
-            raise hull_module.HullError("no single hull around every body up to five times the requested height")
+        hull_points, height = hull_outline(loops, settings, metric, record.setdefault("notes", []))
         record.update({"attempted": True, "hull_height": float(height), "hull_points": len(hull_points) - 1})
-        # The near field is built as the C-grid builds its band: the band
-        # height is a geometric input of the layout (sliver-free band
-        # blocks, at most 45 degrees of wall turning per block) and the
-        # inscribed-disk cap is off, since this producer is handed the band
-        # height.  The hull carries the outer boundary's chains, at the same
-        # fractions, so a closed far field maps chain onto chain.
-        near_settings = replace(
-            settings,
-            hull=replace(settings.hull, enabled=False),
-            layer_height=metric.layer_height,
-            layout=replace(
-                settings.layout,
-                band_height=metric.layer_height if settings.layer.enabled else None,
-                max_band_turning=settings.layout.max_band_turning if settings.layout.max_band_turning is not None else math.radians(45.0),
-                outer_by_ray=True,
-            ),
-            layer=replace(settings.layer, inscribed_cap=False),
-        )
+        near_settings = hull_near_settings(settings, metric)
         hull_points = hull_module.align_start(hull_points, result.sites[-1].curve.point_at(0.0))
         outer_site = result.sites[-1]
 
         def near_field(chains):
             near = run_external(names, loops, near_settings, outer=chains)
+            result.crashes.extend(near.crashes)
             if "near" in record:
                 record.setdefault("near_attempts", []).append(record["near"])
             record["near"] = {
@@ -446,7 +534,7 @@ def _try_hull(result: PipelineResult, names, loops, settings: PipelineOptions):
             settings, "external", domain=result.domain, scale=result.scale, sites=result.sites,
             diagram=near.diagram, layout=near.layout, solve=near.solve, metric=metric,
             problems=list(result.domain.problems()), assembly=near.assembly, wakes=near.wakes,
-            cavity=near.cavity, cgrid=near.cgrid,
+            cavity=near.cavity, cgrid=near.cgrid, crashes=result.crashes,
         )
         trial.graph = built.graph
         trial.wake_notes = list(near.wake_notes)
@@ -464,7 +552,7 @@ def _try_hull(result: PipelineResult, names, loops, settings: PipelineOptions):
             }
             raise hull_module.HullError("the hull far field failed coverage, export or sampled-grid validation")
     except Exception as error:
-        record["reason"] = f"hull far field reverted: {_describe(error)}"
+        record["reason"] = f"hull far field reverted: {_trial_failure(result, 'hull', error)}"
         return None
     record["applied"] = True
     trial.hull = record
@@ -573,12 +661,20 @@ def _try_cgrid(result: PipelineResult, settings: PipelineOptions) -> PipelineRes
         result.cgrid = record
         result.analysis = build_analysis(result)
         return result
+    # Cheap refusals before the C-grid's own layout and relaxation, which can
+    # cost minutes on a finely sampled body.
+    refusal = cgrid.outer_boundary_refusal(result.domain)
+    if refusal is not None:
+        record["reason"] = refusal
+        result.cgrid = record
+        result.analysis = build_analysis(result)
+        return result
     try:
         layout, solve = _cgrid_layout(result, settings)
         # A blunt base is the annular producer's; the C-grid takes a sharp edge.
         plans = [item for item in wake.plan(layout, settings.wake) if item.get("planned") and item.get("kind") != "base"]
     except Exception as error:
-        record["reason"] = f"wake planning failed: {_describe(error)}"
+        record["reason"] = f"wake planning failed: {_trial_failure(result, 'cgrid', error)}"
         result.cgrid = record
         result.analysis = build_analysis(result)
         return result
@@ -599,6 +695,7 @@ def _try_cgrid(result: PipelineResult, settings: PipelineOptions) -> PipelineRes
         settings, "external", domain=result.domain, scale=result.scale,
         sites=result.sites, diagram=result.diagram, layout=layout,
         solve=solve, metric=result.metric, problems=list(result.domain.problems()),
+        crashes=result.crashes,
     )
     try:
         built, repairs = _build_cgrid(trial, plans[0], settings)
@@ -620,8 +717,11 @@ def _try_cgrid(result: PipelineResult, settings: PipelineOptions) -> PipelineRes
                 "worst_cells": [] if trial.shape is None else trial.shape.worst_cells[:4],
             }
             raise pg.GraphError("the C-grid failed coverage, export or sampled-grid validation")
+        worse = _degrades(trial, result)
+        if worse is not None:
+            raise pg.GraphError(f"the C-grid would lower the verdict: {worse}")
     except Exception as error:
-        record["reason"] = f"C-grid reverted: {_describe(error)}"
+        record["reason"] = f"C-grid reverted: {_trial_failure(result, 'cgrid', error)}"
         result.cgrid = record
         result.analysis = build_analysis(result)
         return result
@@ -717,6 +817,7 @@ def _try_one_wake(result, settings, record, accepted, original_layout):
         sites=result.sites, diagram=result.diagram,
         layout=copy.deepcopy(original_layout), solve=result.solve, metric=result.metric,
         problems=list(result.domain.problems()), cgrid=result.cgrid, hull=result.hull,
+        crashes=result.crashes,
     )
     try:
         if not settings.layer.enabled:
@@ -763,9 +864,12 @@ def _try_one_wake(result, settings, record, accepted, original_layout):
                 "counts_inverted": None if trial.grid is None else trial.grid.inverted_cells,
             }
             raise pg.GraphError("the complete wake failed coverage, export or sampled-grid validation")
+        worse = _degrades(trial, result)
+        if worse is not None:
+            raise pg.GraphError(f"the wake would lower the verdict: {worse}")
     except Exception as error:
         record["applied"] = False
-        record["reason"] = f"wake reverted, including its anchor: {_describe(error)}"
+        record["reason"] = f"wake reverted, including its anchor: {_trial_failure(result, 'wake', error)}"
         return None
     record.update(written.records[-1])
     record.pop("reason", None)
@@ -799,7 +903,7 @@ def _try_spanning(result: PipelineResult, settings: PipelineOptions) -> Pipeline
             sites=result.sites, diagram=result.diagram,
             layout=copy.deepcopy(original_layout), solve=result.solve, metric=result.metric,
             problems=list(result.domain.problems()), hull=result.hull, wakes=result.wakes,
-            wake_notes=list(result.wake_notes), cgrid=result.cgrid,
+            wake_notes=list(result.wake_notes), cgrid=result.cgrid, crashes=result.crashes,
         )
         try:
             if not settings.layer.enabled:
@@ -833,9 +937,15 @@ def _try_spanning(result: PipelineResult, settings: PipelineOptions) -> Pipeline
                     "counts_inverted": None if trial.grid is None else trial.grid.inverted_cells,
                 }
                 raise pg.GraphError("the complete span failed coverage, export or sampled-grid validation")
+            worse = _degrades(trial, result)
+            if worse is not None:
+                raise pg.GraphError(f"the span would lower the verdict: {worse}")
         except Exception as error:
             record["spanned"] = False
-            record["reason"] = f"spanning reverted, including mouth placement: {_describe(error)}"
+            record["reason"] = (
+                "spanning reverted, including mouth placement: "
+                f"{_trial_failure(result, 'span', error)}"
+            )
             continue
         record.update(trial.spanning.branches[-1])
         accepted.append(dict(record))
@@ -1023,6 +1133,8 @@ def _finish(result: PipelineResult, settings: PipelineOptions) -> None:
         result.problems.extend(
             result.graph.problems(check_geometry=settings.check_edge_crossings)
         )
+        if result.domain is not None:
+            result.problems.extend(pg.boundary_problems(result.graph, result.domain))
         try:
             result.coverage = pg.coverage(
                 result.graph, result.domain, samples=settings.coverage_samples
@@ -1046,10 +1158,17 @@ def _finish(result: PipelineResult, settings: PipelineOptions) -> None:
                 counts=result.counts.counts,
                 grading=requests if settings.sizing.graded_layers else (),
                 reference_curves=settings.reference_curves,
+                notes=result.export_notes,
             )
             result.model = model
             result.identifiers = identifiers
             result.refused = refused
+            # The dictionary is the product.  A session that cannot be
+            # exported - a cyclic pair whose edges do not match, say, which
+            # the graph's reciprocity check does not see - is not valid.
+            from blockdrawer.foam import block_mesh_dict
+
+            block_mesh_dict(model)
         except Exception as error:
             result.errors.append({"stage": "session", "error": _describe(error)})
     if result.model is not None and settings.evaluate_grid:
@@ -1072,6 +1191,16 @@ def _finish(result: PipelineResult, settings: PipelineOptions) -> None:
                 first_width=result.metric.first if result.metric else None,
                 topology_valid=result.topology_valid,
             )
+            # The fold check: the block map finer than the shape grid,
+            # judged for inversion only (``untangled``).
+            if settings.grid.fold_cells:
+                result.fold = grid_quality.evaluate(
+                    result.model,
+                    options=settings.grid.shape_only(),
+                    layer_blocks=result.layer_blocks,
+                    topology_valid=result.topology_valid,
+                    cells=settings.grid.fold_cells,
+                )
         except Exception as error:  # pragma: no cover - reported, not raised
             result.errors.append({"stage": "grid_quality", "error": _describe(error)})
     result.analysis = build_analysis(result)
@@ -1116,6 +1245,9 @@ def build_analysis(result: PipelineResult) -> dict:
         ),
         "family": result.family,
         "stage_errors": list(result.errors),
+        "trial_crashes": [
+            {key: value for key, value in item.items() if key != "traceback"} for item in result.crashes
+        ],
         "failures": list(result.failures),
         "domain": None,
         "graph": None,
@@ -1132,7 +1264,15 @@ def build_analysis(result: PipelineResult) -> dict:
         ),
         "acceptance": {
             "topology_valid": result.topology_valid,
+            "grids_evaluated": result.grids_evaluated,
             "untangled": result.untangled,
+            # Which grid an inversion is on: one on the counts grid alone is
+            # the default counts and grading, not the block map.
+            "untangled_by_grid": {
+                "shape": None if result.shape is None else result.shape.untangled,
+                "fold_check": None if result.fold is None else result.fold.untangled,
+                "counts": None if result.grid is None else result.grid.untangled,
+            },
             "within_shape_targets": result.within_shape_targets,
             "sizing_feasible": result.sizing_feasible,
             "admissible": result.admissible,
@@ -1188,6 +1328,7 @@ def build_analysis(result: PipelineResult) -> dict:
             "budget_factor": (
                 1.0 if result.counts is None else result.counts.budget_factor
             ),
+            "budget_met": None if result.counts is None else result.counts.budget_met,
             "unattainable_counts": (
                 [] if result.counts is None else result.counts.unattainable
             ),
@@ -1199,6 +1340,16 @@ def build_analysis(result: PipelineResult) -> dict:
             "feasibility": {
                 "limits": settings.structure.described(),
                 "failures": result.structure_failures,
+                # What the far-field fan-out and wake-landing exemptions
+                # waive: the same limits with neither exemption applied.
+                # Informational; ``sizing_feasible`` uses ``failures``.
+                "failures_without_exemptions": (
+                    []
+                    if result.graph is None
+                    else pg.structure_failures(
+                        pg.sizing_structure(result.graph), settings.structure, exemptions=False
+                    )
+                ),
             },
         }
     if result.family == "external":
@@ -1209,8 +1360,19 @@ def build_analysis(result: PipelineResult) -> dict:
         analysis["layers"] = _sweep_layer_section(result)
     if result.shape is not None:
         analysis["quality"] = result.shape.described()
+    if result.fold is not None:
+        analysis["fold_check"] = {
+            "cells_per_side": result.fold.cells_per_side if hasattr(result.fold, "cells_per_side") else result.options.grid.fold_cells,
+            "sampled_cells": result.fold.sampled_cells,
+            "inverted_cells": result.fold.inverted_cells,
+            "minimum_scaled_jacobian": (
+                None if result.fold.minimum_scaled_jacobian is None
+                else result.fold.minimum_scaled_jacobian.value
+            ),
+        }
     if result.model is not None:
         analysis["session"] = {
+            "export_notes": list(result.export_notes),
             "topology_signature": session_emit.topology_signature(result.model),
             "corner_quality": session_emit.quality_summary(result.model),
             "boundaries": {
@@ -1231,9 +1393,18 @@ ACCEPTANCE_TERMS = {
         "patch-graph incidence, planarity, domain coverage and periodic "
         "compatibility all hold and MeshModel.validate() accepted the session"
     ),
+    "grids_evaluated": (
+        "both sampled grids were measured; when false every grid-dependent "
+        "term (untangled, within_shape_targets, admissible, resolved, "
+        "within_sizing_targets) is false, because nothing was proven"
+    ),
     "untangled": (
-        "no sampled transfinite cell is inverted, on the uniform shape grid "
-        "or on the graded counts grid"
+        "both grids were evaluated and no sampled transfinite cell is "
+        "inverted, on the uniform shape grid, on the finer uniform fold check "
+        "(fold_check) or on the graded counts grid. The counts grid uses the "
+        "default counts and grading, so admissible is conditional on them: "
+        "untangled_by_grid says which grid folded, and an inversion on the "
+        "counts grid alone is a sizing defect, not one of the block map"
     ),
     "within_shape_targets": (
         "every enabled shape limit - non-orthogonality, skewness, wall "
@@ -1267,10 +1438,23 @@ LIMITATIONS = [
     "only with --wake, exactly one body, one planned wake and a cap-leg-outlet-"
     "leg outer boundary. Its far-field spokes are straight.",
     "The wake separatrix is opt-in (--wake). It is one straight scaffold line "
-    "from a sharp feature through the body's own ring to the outer boundary; "
-    "a wake that would enter another body's cell, cross another medial branch, "
-    "or meet the outer boundary across a chain break is refused with its "
-    "reason, and a refused wake leaves the annular construction untouched.",
+    "from a sharp feature through the body's own ring: to the outer boundary, "
+    "onto a downstream body's band, or through another body's cell (lens and "
+    "three spokes); a wake that would cross another medial branch, meet the "
+    "outer boundary across a chain break, or enter a third body's cell is "
+    "refused with its reason, and a refused wake leaves the annular "
+    "construction untouched. Wake rewrites whose anchors are ring neighbours "
+    "do not compose. Without --wake-direction every sharp vertex, a sharp "
+    "leading edge included, gets a wake along its own bisector. The blunt-"
+    "base rule is a cliff at --wake-blunt-ratio of the perimeter; a base up "
+    "to four times wider is refused with that remedy, not cut from one "
+    "corner, and the base strip is graded but not measured by the first-cell "
+    "check.",
+    "The hull far field continues one exiting wake only; two exiting wakes "
+    "(30P30N's main and flap, the staggered foils) fall back to the annular "
+    "construction, so the through-cell wake and its lens are not yet part of a "
+    "complete exported result. The hull trial is not compared with the "
+    "annular result it replaces.",
     "Gap spanning is opt-in. Its core-to-farfield count connection is reported "
     "but is not a wall-band direction coupling. Mouths "
     "must fit before the next branch anchor; sharp gates, a third wall and "
@@ -1288,7 +1472,25 @@ LIMITATIONS = [
     "every seam merges the chain's wall-normal band count with its core radial "
     "count; graph.sizing_structure reports the length ratio that forces.",
     "The 30P30N block graph depends on the raster width although its medial "
-    "junctions do not; every synthetic fixture is raster-invariant.",
+    "junctions do not. Junctions that fail to converge make the raster finer, "
+    "but the anchor floor still follows the medial ring's discretisation, so a "
+    "C-grid's gate count moves with the raster width and the start point; the "
+    "A-airfoil resolves at every width and start measured, in 99 to 185 "
+    "blocks.",
+    "Equivalent inputs - rotation, reflection, reversal, start point, scaling, "
+    "translation, densification, a repeated closing point - give the same "
+    "block graph for all 13 synthetic fixtures, and so do raster widths 400 "
+    "to 1000. The graph's geometry still follows the orientation: bisector "
+    "vertices are walked from the junction the raster finds first and the "
+    "relaxation sweeps from it, so gates land up to a pixel apart; "
+    "concave_and_convex turned through 180 degrees has one inverted sampled "
+    "cell (inadmissible, admissible otherwise) and three_rotated_ellipses "
+    "13 or 65 degrees of wall misalignment. Under --wake, tandem_foils "
+    "mirrored has 55 blocks instead of 51 and tandem_blunt turned through "
+    "180 degrees loses both wakes to validation.",
+    "Band blocks are judged by their straight corner quadrilateral, so a body "
+    "much thinner at its tips than the 15:1 ellipse measured can still fail "
+    "its band.",
     "Front repair reduces whole failing blocks, requests cuts and permits a "
     "bounded global height search on the final repair round. It is deterministic "
     "but a last-bit height change still moves sharp_bodies' default cell count "
@@ -1348,6 +1550,9 @@ def _medial_section(result: PipelineResult) -> dict | None:
             "the raster only decides connectivity; junctions and branches are "
             "recomputed analytically"
         ),
+        # A raster refined because a cluster merged two junctions, or a
+        # junction that still did not converge.
+        "diagram_notes": list(diagram.notes),
         "junction_count": len(diagram.junctions),
         "branch_count": len(diagram.branches),
         "junctions": [
@@ -1392,6 +1597,17 @@ def _medial_section(result: PipelineResult) -> dict | None:
         },
         "wake_notes": list(result.wake_notes)
         + ([] if result.wakes is None else result.wakes.notes),
+        # What the layout gave up on: a patch whose turning or clearance jump
+        # could not be cut further, and every anchor refused for crowding.
+        "layout_notes": [] if result.layout is None else list(result.layout.notes),
+        "rejected_anchors": (
+            []
+            if result.layout is None
+            else [
+                {"kind": anchor.kind, "branch": anchor.branch, "position": float(anchor.position), "reason": reason}
+                for anchor, reason in result.layout.anchors.rejected
+            ]
+        ),
         "solver": {
             "converged": result.solve.converged,
             "worst_corner_scaled_jacobian": result.solve.worst_quality,

@@ -132,7 +132,18 @@ class SizeMetric:
         return self.size_at_distance(self.wall_distance(points))
 
     def metric_length(self, path: np.ndarray) -> float:
-        return g2.metric_length(path, self.size(path))
+        """The path's length in cells of the size metric, the integral of ds/size.
+
+        Long segments are subdivided at a quarter of the core size first, so
+        the integral follows the core cap and a wall distance that is not
+        linear along a segment; each piece is then integrated exactly for a
+        linear size (``g2.metric_length``).  Band spokes, core spokes and
+        sweep ribs are two-point lines, which the old per-vertex trapezoid
+        overcounted 1.3 to 1.7 times at the default sizing and by a factor of
+        about 67 at a first-cell width of 1e-5 of the scale.
+        """
+        points = g2.subdivide(path, 0.25 * self.core)
+        return g2.metric_length(points, self.size(points))
 
     def described(self) -> dict:
         return {
@@ -159,6 +170,9 @@ class CountAssignment:
     budget_factor: float
     total_cells: int
     unattainable: list[dict]
+    # False when even the smallest counts the factor search reaches exceed
+    # the budget: the bisection stops at its floor and says nothing else.
+    budget_met: bool = True
 
 
 def assign_counts(
@@ -222,7 +236,8 @@ def assign_counts(
         for record in records
         if abs(record["cells"] - record["weighted_target"] * factor) > 0.5 + 1e-9
     ]
-    return CountAssignment(counts, records, factor, total_cells, unattainable)
+    budget_met = options.budget is None or options.budget <= 0 or total_cells <= options.budget
+    return CountAssignment(counts, records, factor, total_cells, unattainable, budget_met)
 
 
 def _budget_factor(graph, components, targets, options: SizingOptions) -> float:
@@ -274,13 +289,30 @@ class GradingRequest:
 
 def layer_grading_requests(graph: pg.PatchGraph, metric: SizeMetric) -> list:
     """Every band spoke, directed away from its wall vertex."""
+    # Vertices on a physical wall.  Construction role ``wall`` is every
+    # boundary edge - symmetry, inlet, far field - so a band spoke ending on a
+    # symmetry plane was graded towards it; the domain role decides.  Graphs
+    # without recorded roles (hand-built tests) fall back to the label.
+    roles = graph.boundary_roles
     on_wall: set[pg.VertexKey] = set()
     for key, edge in graph.edges.items():
-        if edge.role == "wall":
+        if edge.role != "wall":
+            continue
+        physical = roles.get(edge.boundary) if (roles and edge.boundary is not None) else "wall"
+        if physical == "wall":
             on_wall.update(key)
+    # A blunt base's boundary layer runs along its strip: the two wake lines
+    # leaving the base corners are the base's wall-normal edges.
+    base_edges: set = set()
+    for face in graph.faces:
+        if face.provenance != "base strip":
+            continue
+        for key in graph.face_edges(face):
+            if graph.edges[key].role == "wake":
+                base_edges.add(key)
     requests = []
     for key, edge in graph.edges.items():
-        if edge.role != "layer_spoke":
+        if edge.role != "layer_spoke" and key not in base_edges:
             continue
         ends = [vertex for vertex in key if vertex in on_wall]
         if len(ends) != 1:

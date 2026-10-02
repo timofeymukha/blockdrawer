@@ -30,6 +30,7 @@ except ImportError:  # pragma: no cover - research dependency
 
 import agent_ops
 import block_layout
+import voronoi_graph
 import external_topology
 import fan_cavity
 import geometry2d as g2
@@ -65,12 +66,19 @@ CAVITY_FAST = pipeline.PipelineOptions(grid_width=420, coverage_samples=240)
 _RUNS: dict = {}
 
 
+def _no_crash(result):
+    """A trial that raised something other than a refusal is a defect."""
+    if result.crashes:
+        raise AssertionError(f"a trial crashed: {result.crashes[0]['error']}")
+    return result
+
+
 def run_case(name: str, options=None, *, fresh: bool = False):
     settings = options or FAST
     key = ("external", name, repr(settings))
     if fresh or key not in _RUNS:
         names, loops = cases.CASES[name]()
-        result = pipeline.run_external(names, loops, settings)
+        result = _no_crash(pipeline.run_external(names, loops, settings))
         if fresh:
             return result
         _RUNS[key] = result
@@ -82,7 +90,7 @@ def run_internal(name: str, options=None, *, fresh: bool = False):
     key = ("internal", name, repr(settings))
     if fresh or key not in _RUNS:
         domain = pdm.from_internal_case(cases.INTERNAL_CASES[name]())
-        result = pipeline.run_internal(domain, settings)
+        result = _no_crash(pipeline.run_internal(domain, settings))
         if fresh:
             return result
         _RUNS[key] = result
@@ -603,11 +611,34 @@ class SizingTests(unittest.TestCase):
             self.assertEqual(counts[edges[1]], counts[edges[3]])
 
     def test_the_count_minimises_the_weighted_metric_error(self):
+        """Brute force over every admissible integer against the recorded targets."""
         result = run_case("two_circles")
+        components = pg.constraint_components(result.graph)
+        options = result.options.sizing
+        candidates = np.arange(options.minimum_cells, options.maximum_cells + 1)
         for record in result.counts.components:
-            target = record["weighted_target"]
-            chosen = record["cells"]
-            self.assertLessEqual(abs(chosen - target), 0.5 + 1e-9)
+            keys = components[record["component"]]
+            weights = np.asarray([g2.total_length(result.graph.edges[key].path) for key in keys])
+            targets = np.asarray(record["metric_lengths"])
+            errors = [float(np.sum(weights * (count - targets) ** 2)) for count in candidates]
+            best = int(candidates[int(np.argmin(errors))])
+            self.assertEqual(record["cells"], best, record["component"])
+
+    def test_metric_length_integrates_a_band_spoke_exactly(self):
+        """A two-point spoke leaving a straight wall: the integral of ds/size."""
+        wall = np.column_stack([np.linspace(-5.0, 5.0, 201), np.zeros(201)])
+        for ratio in (4.0e-3, 1.0e-3, 1.0e-5):
+            metric = sizing.SizeMetric(sizing.SizingOptions(first_width_ratio=ratio), 1.0, [wall])
+            g, first, core = metric.growth, metric.first, metric.core
+            for height in (0.02, 0.1, 0.6):
+                spoke = np.asarray([[0.0, 0.0], [0.0, height]])
+                capped = (core - first) / (g - 1.0)
+                if height <= capped:
+                    exact = math.log(1.0 + (g - 1.0) * height / first) / (g - 1.0)
+                else:
+                    exact = math.log(core / first) / (g - 1.0) + (height - capped) / core
+                with self.subTest(first=first, height=height):
+                    self.assertAlmostEqual(metric.metric_length(spoke) / exact, 1.0, places=2)
 
     def test_a_budget_scales_every_component_down(self):
         names, loops = cases.two_circles()
@@ -638,7 +669,9 @@ class SizingTests(unittest.TestCase):
                     )
                 )
             )
-            if model.edge_cells[current] < 2:
+            cells = model.edge_cells[current]
+            if cells < 2 or request.first_width * cells >= model.edge_length(current):
+                # Refused: the uniform edge is already finer than the request.
                 continue
             values = model.edge_grading_values(current)
             wall = result.identifiers[request.wall_vertex]
@@ -718,7 +751,27 @@ class SessionTests(unittest.TestCase):
     def test_external_session_round_trip_render_and_export(self):
         result = run_case("two_circles")
         self.assertTrue(result.admissible)
-        self._round_trip(result)
+        reloaded = self._round_trip(result)
+        # A pseudo-2-D mesh: both z patches empty, so checkMesh judges the
+        # plane mesh, not a unit-depth slab whose z faces fail aspect ratio.
+        self.assertEqual((reloaded.z_min_patch_type, reloaded.z_max_patch_type), ("empty", "empty"))
+
+    def test_an_unreachable_cell_budget_is_reported(self):
+        result = run_case(
+            "two_circles", dataclasses.replace(FAST, sizing=dataclasses.replace(FAST.sizing, budget=10))
+        )
+        self.assertFalse(result.counts.budget_met)
+        self.assertGreater(result.counts.total_cells, 10)
+        self.assertFalse(result.analysis["sizing"]["budget_met"])
+        self.assertTrue(run_case("two_circles").counts.budget_met)
+
+    def test_the_origin_is_a_far_field_centre(self):
+        import research_cli
+
+        parsed = research_cli.build_parser().parse_args(
+            ["run", "--case", "single_ellipse", "--farfield-center", "0,0"]
+        )
+        self.assertEqual(research_cli.build_options(parsed).farfield_center, (0.0, 0.0))
 
     def test_internal_session_round_trip_render_and_export(self):
         from blockdrawer.foam import block_mesh_dict
@@ -783,18 +836,18 @@ class SyntheticCaseTests(unittest.TestCase):
                 )
                 self.assertTrue(result.topology_valid)
                 self.assertTrue(result.untangled)
-                self.assertEqual(
-                    result.resolved,
-                    result.within_shape_targets and result.sizing_feasible,
-                )
+                # The verdict and the list of what keeps it from being
+                # resolved come from separate code paths; they must agree,
+                # and the report must state the same verdict.
+                self.assertEqual(result.resolved, not result.quality_failures)
+                self.assertEqual(result.analysis["acceptance"]["resolved"], result.resolved)
                 self.assertEqual(result.coverage["uncovered_samples"], 0)
                 self.assertEqual(result.coverage["overlapping_samples"], 0)
                 self.assertEqual(result.coverage["outside_samples"], 0)
                 self.assertEqual(result.grid.inverted_cells, 0)
-                self.assertEqual(
-                    result.graph.total_index(),
-                    4 * result.domain.euler_characteristic,
-                )
+                # Counted from the faces, edges and vertices; the total index
+                # is 4 * chi for any manifold quad graph and proves nothing.
+                self.assertEqual(result.graph.euler(), result.domain.euler_characteristic)
 
     def test_single_body_case_has_no_junction(self):
         result = run_case("single_ellipse")
@@ -859,6 +912,40 @@ class InvarianceTests(unittest.TestCase):
             second.grid.maximum_non_orthogonality.value,
             0.02,
         )
+
+
+class EquivalentInputTests(unittest.TestCase):
+    """The block graph is a function of the geometry, not of how it is written.
+
+    Measured on all thirteen external fixtures with twelve equivalent inputs
+    each - rotations by 37, 90 and 180 degrees, a mirror, scaling by 1000, a
+    translation by 1e4, the start a third of the way round, both reversals,
+    every segment densified and a repeated closing point - no graph changes,
+    at raster widths 420 and 700 alike.  Before the layout fixes nine of the
+    thirteen did; the fixtures and inputs here are the ones that changed, and
+    a half-wall clamp in the gate unwrapping later broke five of them under
+    the half turn and the mirror.
+    """
+
+    VARIANTS = {
+        "half turn": lambda loops: cases.transform(loops, rotate=math.pi),
+        "mirror": cases.mirror,
+        "start a third round": lambda loops: cases.roll(loops, 1.0 / 3.0),
+        "plain reversal": cases.reverse_plainly,
+        "densified": cases.densify,
+    }
+
+    def test_the_block_graph_follows_the_geometry_only(self):
+        options = dataclasses.replace(CAVITY_FAST, evaluate_grid=False)
+        for name in ("single_ellipse", "two_circles", "concave_and_convex", "sharp_bodies", "blunt_foil"):
+            names, loops = cases.CASES[name]()
+            reference = pipeline.run_external(names, loops, options)
+            self.assertTrue(reference.topology_valid, (name, reference.problems))
+            for label, variant in self.VARIANTS.items():
+                result = pipeline.run_external(names, variant(loops), options)
+                with self.subTest(case=name, variant=label):
+                    self.assertIsNotNone(result.graph, result.errors)
+                    self.assertEqual(result.graph.summary(), reference.graph.summary())
 
 
 class DiagnosticTests(unittest.TestCase):
@@ -993,8 +1080,6 @@ class PeriodicHillGeometryTests(unittest.TestCase):
         self.assertEqual(case.boundary("top_wall").kind, "wall")
 
 
-if __name__ == "__main__":  # pragma: no cover
-    unittest.main()
 
 
 # ---------------------------------------------------------------------------
@@ -1135,6 +1220,21 @@ def cusp_cavity(graph, options=None):
 
 class SegmentRelationTests(unittest.TestCase):
     """Every forbidden relation is classified, at any place and size."""
+
+    def test_a_shallow_crossing_is_found_in_either_argument_order(self):
+        """A short segment crossing a long one at a tiny angle: measuring the
+        long one's far end against the short one's extrapolated line used to
+        call the pair disjoint when the short segment was passed first."""
+        tolerance = 1.0e-6
+        angle = 0.5e-3
+        short = (np.zeros(2), np.asarray([1.0e-3, 0.0]))
+        centre = np.asarray([0.5e-3, 0.0])
+        direction = np.asarray([math.cos(angle), math.sin(angle)])
+        long = (centre - 0.5 * direction, centre + 0.5 * direction)
+        first = g2.segment_relation(*short, *long, tolerance=tolerance)["kind"]
+        second = g2.segment_relation(*long, *short, tolerance=tolerance)["kind"]
+        self.assertEqual(first, second)
+        self.assertNotEqual(first, g2.DISJOINT)
 
     RELATIONS = {
         "proper_crossing": (((0, 0), (1, 0)), ((0.5, -0.5), (0.5, 0.5))),
@@ -1646,6 +1746,9 @@ class AcceptanceTests(unittest.TestCase):
             self.assertGreater(described["observed"], described["limit"])
         acceptance = result.analysis["acceptance"]
         self.assertTrue(acceptance["resolved"])
+        self.assertEqual(
+            acceptance["untangled_by_grid"], {"shape": True, "fold_check": True, "counts": True}
+        )
         self.assertTrue(acceptance["within_shape_targets"])
         self.assertTrue(acceptance["sizing_feasible"])
         self.assertFalse(acceptance["within_sizing_targets"])
@@ -1767,11 +1870,12 @@ class RegressionFixtureTests(unittest.TestCase):
         self.assertGreater(float(np.min(angles)), 85.0)
         self.assertLess(float(np.min(angles)), 95.0)
 
-    def test_the_peanut_failure_is_located_at_the_reflex_corners(self):
-        """The tangent-disk feature size is zero at the waist; the far clearance is not.
+    def test_the_tangent_disk_size_vanishes_at_the_reflex_corners(self):
+        """The tangent-disk feature size is zero at the waist; the front is not.
 
-        While the band could not be built, the failure named the two waist
-        gates; now that it can, the front keeps a positive height there.
+        While the band was built on that law it could not exist at all, and
+        the failure named the two waist gates; the level-set front keeps a
+        positive height there.
         """
         _names, loops = cases.peanut_body()
         loop = np.asarray(loops[0])
@@ -1785,22 +1889,9 @@ class RegressionFixtureTests(unittest.TestCase):
         )
         self.assertTrue(np.all(size == 0.0), size)
         result = run_case("peanut_body", CAVITY_FAST)
-        if result.admissible:
-            front = next(iter(result.assembly.fronts.values()))
-            self.assertGreater(front.minimum_height, 0.0)
-            return
-        failures = [
-            item
-            for item in result.failures
-            if item.get("stage") == "boundary_layer_front"
-        ]
-        self.assertTrue(failures, result.failures)
-        reported = np.asarray(
-            [point for item in failures for point in item["gate_points"]]
-        )
-        for corner in closed[reflex]:
-            gap = float(np.min(np.linalg.norm(reported - corner, axis=1)))
-            self.assertLess(gap, 1.0e-3 * result.scale)
+        self.assertTrue(result.admissible, (result.failures, result.problems[:2]))
+        front = next(iter(result.assembly.fronts.values()))
+        self.assertGreater(front.minimum_height, 0.0)
 
     def test_the_peanut_band_is_admissible(self):
         """A front survives a concave wall corner: it mitres instead of folding."""
@@ -1843,12 +1934,6 @@ class RegressionFixtureTests(unittest.TestCase):
         self.assertLess(gap, 0.03)
         # The medial branch between the two bodies runs through the slot.
         self.assertEqual(len(result.diagram.junctions), 2)
-        if not result.admissible:
-            located = any(
-                item.get("stage") == "boundary_layer_front"
-                for item in result.failures
-            ) or bool(result.problems)
-            self.assertTrue(located, (result.failures, result.problems))
 
     def test_the_skimming_tail_is_admissible(self):
         """Both bands fit into the slot since gates are graded out of it.
@@ -1859,6 +1944,12 @@ class RegressionFixtureTests(unittest.TestCase):
         the one expected failure of the suite until then."""
         result = run_case("skimming_tail", CAVITY_FAST)
         self.assertTrue(result.admissible, (result.failures, result.problems[:2]))
+        # Its shape miss is the tip's own seam, above the slot, not the slot.
+        _names, loops = cases.skimming_tail()
+        tip = np.asarray(loops[0])[np.argmax(_fluid_angles(np.asarray(loops[0])))]
+        misses = [item for item in result.described_failures() if item["metric"] == "maximum_wall_misalignment_degrees"]
+        for item in misses:
+            self.assertLess(float(np.linalg.norm(np.asarray(item["point"]) - tip)), 1.0e-6 * result.scale)
 
 
 class RoleAndStructureTests(unittest.TestCase):
@@ -2268,3 +2359,409 @@ class RoundedReflexCornerTests(unittest.TestCase):
         front = result.assembly.fronts[0]
         apex = int(np.argmin(np.linalg.norm(front.wall - np.asarray([-0.25, 0.0]), axis=1)))
         self.assertGreater(float(front.heights[apex]), 0.05)
+
+
+class VerdictSoundnessTests(unittest.TestCase):
+    """A verdict is a statement about evidence; missing evidence proves nothing."""
+
+    def test_unevaluated_grids_fail_closed(self):
+        names, loops = cases.single_ellipse()
+        result = pipeline.run_external(
+            names, loops, dataclasses.replace(CAVITY_FAST, evaluate_grid=False)
+        )
+        self.assertTrue(result.topology_valid, result.problems)
+        self.assertFalse(result.grids_evaluated)
+        for term in ("untangled", "within_shape_targets", "admissible", "resolved", "within_sizing_targets"):
+            with self.subTest(term=term):
+                self.assertFalse(getattr(result, term))
+        self.assertFalse(result.analysis["acceptance"]["grids_evaluated"])
+        self.assertFalse(result.analysis["acceptance"]["untangled"])
+        self.assertEqual(
+            result.analysis["acceptance"]["untangled_by_grid"],
+            {"shape": None, "fold_check": None, "counts": None},
+        )
+
+    def test_the_length_ratio_is_judged_on_every_component(self):
+        result = run_case("two_circles", CAVITY_FAST)
+        structure = pg.sizing_structure(result.graph)
+        judged = structure["worst_judged"]
+        self.assertIsNotNone(judged)
+        self.assertFalse(judged["fan_out"])
+        # The short table may hold fan-out components only; the verdict must
+        # still see the worst component that is not one.
+        below = pg.StructureLimits(max_length_ratio=0.99 * judged["length_ratio"])
+        above = pg.StructureLimits(max_length_ratio=1.01 * judged["length_ratio"])
+        metrics = lambda limits: [item["metric"] for item in pg.structure_failures(structure, limits)]
+        self.assertIn("maximum_component_length_ratio", metrics(below))
+        self.assertNotIn("maximum_component_length_ratio", metrics(above))
+        # Without the fan-out exemption the worst component overall is judged.
+        overall = structure["worst_overall"]["length_ratio"]
+        strict = pg.structure_failures(
+            structure, pg.StructureLimits(max_length_ratio=0.99 * overall), exemptions=False
+        )
+        self.assertIn("maximum_component_length_ratio", [item["metric"] for item in strict])
+
+    def test_apply_reruns_the_case_with_its_explicit_outer_boundary(self):
+        import tempfile
+
+        import research_cli
+
+        with tempfile.TemporaryDirectory() as folder:
+            arguments = ["apply", "--case", "single_ellipse", "--move", "unused", "--width", "420",
+                         "--coverage-samples", "240", "--no-grid-quality"]
+            for name, role, points in cases.c_shaped_outer():
+                path = Path(folder) / f"{name}.dat"
+                np.savetxt(path, np.asarray(points))
+                arguments += ["--outer", f"{name}:{role}={path}"]
+            parsed = research_cli.build_parser().parse_args(arguments)
+            before = research_cli.run_case(parsed)
+            after = research_cli._rerun(parsed, research_cli.build_options(parsed))
+        names = lambda result: sorted(chain.name for chain in result.domain.outer.chains)
+        self.assertEqual(names(after), names(before))
+        self.assertEqual(names(after), ["bottom", "cap", "outlet", "top"])
+
+
+class LayoutRobustnessTests(unittest.TestCase):
+    """Representation details of the input must not decide the layout."""
+
+    def test_the_start_point_of_a_loop_does_not_unwrap_a_zero_gate_step(self):
+        """Two gates on one wall station are a zero step around the wall.
+
+        Accumulating the unwrapped station turned that zero into a full turn
+        for about one start point in ten of ``sharp_bodies``' tip, and the
+        layout then refused the wall ("the gates advance 1.79 times").
+        These start points failed that way; the body frame is held fixed so
+        only the point order changes.
+        """
+        names, base = cases.sharp_bodies()
+        frame = site_module.domain_frame(base)
+        centre, radius = frame
+        spec = pipeline.farfield_spec(CAVITY_FAST)
+        reference = None
+        for roll in (0, 46, 53, 72):
+            loops = [np.roll(base[0], -roll, axis=0), base[1]]
+            outer = [pdm.circle_chain("farfield", centre, radius * spec.scale)]
+            domain = pdm.from_bodies(names, loops, outer=outer)
+            sites, scale = site_module.sites_from_domain(
+                domain, circle=(centre, radius * spec.scale), frame=frame
+            )
+            diagram = voronoi_graph.build_diagram(sites, scale=scale, grid_width=CAVITY_FAST.grid_width)
+            layout = block_layout.build_layout(diagram, CAVITY_FAST.layout)
+            cuts = [len(item) for item in layout.cuts]
+            with self.subTest(roll=roll):
+                if reference is None:
+                    reference = cuts
+                self.assertEqual(cuts, reference)
+
+    def test_a_merged_junction_cluster_refines_the_raster(self):
+        """At width 420 two junctions of ``four_bodies`` 1.8 pixels apart fell
+        into one cluster, refined to a fake degree-4 junction with a residual
+        of three percent of its clearance, and the short branch between them
+        was lost.  The diagram is rebuilt finer until every junction
+        converges, so the raster decides connectivity only."""
+        names, loops = cases.four_bodies()
+        outer, circle = pdm.fabricate_outer(loops, pipeline.farfield_spec(CAVITY_FAST))
+        domain = pdm.from_bodies(names, loops, outer=outer)
+        sites, scale = site_module.sites_from_domain(domain, circle=circle, frame=site_module.domain_frame(loops))
+        coarse = voronoi_graph.build_diagram(sites, scale=scale, grid_width=420)
+        fine = voronoi_graph.build_diagram(sites, scale=scale, grid_width=700)
+        self.assertEqual(voronoi_graph.unconverged_junctions(coarse.junctions), [])
+        self.assertEqual(len(coarse.junctions), len(fine.junctions))
+        self.assertEqual(
+            sorted(junction.degree for junction in coarse.junctions),
+            sorted(junction.degree for junction in fine.junctions),
+        )
+
+    def test_splitting_stops_when_it_no_longer_raises_the_worst_block(self):
+        """A worst patch that cannot be split (its cut would crowd another)
+        used to make the solver split the next-worst ones until the budget
+        of forty ran out - half an hour on the A-airfoil's C-grid layout -
+        while the worst block stayed where it was."""
+        import patch_solver
+
+        class FakeLayout:
+            patches = ()
+
+            def refresh(self):
+                pass
+
+        calls = {"relax": 0, "split": 0}
+
+        def relax(layout, settings, **_):
+            calls["relax"] += 1
+            return 0.1, 1
+
+        def split(layout, settings, result):
+            calls["split"] += 1
+            return True
+
+        saved = patch_solver.relax, patch_solver._split_worst
+        patch_solver.relax, patch_solver._split_worst = relax, split
+        try:
+            result = patch_solver.solve(FakeLayout(), patch_solver.SolverOptions(accept_quality=0.0))
+        finally:
+            patch_solver.relax, patch_solver._split_worst = saved
+        self.assertEqual(calls["split"], patch_solver.SolverOptions.futile_splits)
+        self.assertIn("did not raise the worst block", result.failures[-1]["reason"])
+
+    def test_both_corners_of_a_blunt_base_are_gates(self):
+        """Snapping gates onto sharp vertices moved the nearest gate onto
+        each in turn, so the second base corner took the gate just snapped
+        onto the first and the 250.5 degree corner lay inside a band block's
+        wall edge."""
+        names, loops = cases.blunt_foil()
+        result = run_case("blunt_foil", CAVITY_FAST)
+        loop = np.asarray(loops[0])
+        corners = loop[_fluid_angles(loop) > 200.0]
+        self.assertEqual(len(corners), 2)
+        gates = np.asarray([vertex.point for key, vertex in result.graph.vertices.items() if key[0] == "gate"])
+        for corner in corners:
+            self.assertLess(float(np.min(np.linalg.norm(gates - corner, axis=1))), 1.0e-9 * result.scale)
+
+    def test_unwrapping_treats_coincident_gates_as_a_zero_step(self):
+        class FakeCut:
+            def __init__(self, station, pinned=False):
+                self.wall_station = station
+                self.pinned = pinned
+
+        # Values for which stepping from the accumulated station rounds the
+        # final zero step to ``total - 4e-16``: winding 1.84 instead of 0.84.
+        total = 2.561404013454236
+        station = 2.0406373527932953
+        cuts = [FakeCut(2.4463, True), FakeCut(0.1973), FakeCut(0.5180), FakeCut(station), FakeCut(station)]
+        _order, unwrapped, winding = block_layout._unwrap_gates(cuts, total)
+        self.assertEqual(unwrapped[-1], unwrapped[-2])
+        self.assertLess(winding, 1.0)
+
+    def test_the_clamp_acts_only_on_gates_out_of_ring_order(self):
+        """An unpinned gate behind its predecessor takes a zero step; a long
+        step that is in order is kept.
+
+        The stations behind the out-of-order gate are the rear foil's gates in
+        ``tandem_foils --wake``: the unpinned gate at 0.65216 projects just
+        behind the pinned one at 0.65766, and read forward it wound the gates
+        twice round the wall.  The first clamp treated every unpinned step
+        longer than half the wall as such a step back, which also collapsed
+        the second of two gates half a wall apart - the outer cell of an
+        ellipse whose two tips are its first anchors - and made the layout
+        follow the orientation of the input.  The clamp now acts only when
+        the plain reading winds more than once: on a wall with one pin, a gate
+        on the pin's own station at the end of the ring order is a full turn
+        on (the C-shaped teardrop's tip, where a chain break projects), and
+        reading it as a step back collapsed it onto its predecessor."""
+        class FakeCut:
+            def __init__(self, station, pinned=False):
+                self.wall_station = station
+                self.pinned = pinned
+
+        _order, unwrapped, winding = block_layout._unwrap_gates(
+            [FakeCut(0.0), FakeCut(1.02)], 2.0, clamp_unpinned=True
+        )
+        self.assertEqual(unwrapped, [0.0, 1.02])
+        rear = [(0.20998, False), (0.35003, False), (0.41456, False), (0.47764, True), (0.65766, True),
+                (0.65216, False), (0.81711, False), (1.6624, True), (1.99089, False)]
+        cuts = [FakeCut(station, pinned) for station, pinned in rear]
+        _order, unwrapped, winding = block_layout._unwrap_gates(cuts, 2.2)
+        self.assertGreater(winding, 1.0)
+        order, unwrapped, winding = block_layout._unwrap_gates(cuts, 2.2, clamp_unpinned=True)
+        self.assertLess(winding, 1.0)
+        self.assertEqual(unwrapped[order.index(5)], unwrapped[order.index(4)])
+        self.assertTrue(all(b >= a for a, b in zip(unwrapped, unwrapped[1:])))
+        # Every gate that was in order keeps its station.
+        for position, index in enumerate(order):
+            if index != 5:
+                self.assertAlmostEqual(unwrapped[position] % 2.2, rear[index][0], places=12)
+        tip = [(1.9343, True), (1.9343, False), (0.1547, False), (0.6519, False), (1.1535, False), (1.9343, False)]
+        cuts = [FakeCut(station, pinned) for station, pinned in tip]
+        _order, unwrapped, winding = block_layout._unwrap_gates(cuts, 2.5614, clamp_unpinned=True)
+        self.assertAlmostEqual(winding, 1.0, places=12)
+        self.assertAlmostEqual(unwrapped[-1], 1.9343 + 2.5614, places=12)
+
+
+class BoundaryFidelityTests(unittest.TestCase):
+    """Every named chain reaches the session as its own patch, on its own geometry."""
+
+    @staticmethod
+    def _slot_hill():
+        base = cases.periodic_hill()
+        bottom = base.boundary("bottom_wall").points
+        first = int(np.argmin(np.abs(bottom[:, 0] - 1.0)))
+        last = int(np.argmin(np.abs(bottom[:, 0] - 1.4)))
+        rest = [chain for chain in base.boundaries if chain.name != "bottom_wall"]
+        return cases.InternalFlowCase(
+            "slot_hill",
+            (
+                cases.BoundaryChain("wall_up", "wall", bottom[: first + 1]),
+                cases.BoundaryChain("slot", "inlet", bottom[first : last + 1]),
+                cases.BoundaryChain("wall_down", "wall", bottom[last:]),
+                *rest,
+            ),
+            periodic_translation=base.periodic_translation,
+        )
+
+    def test_a_chain_join_on_a_guide_is_a_block_vertex(self):
+        """A slot on the hill's wall used to be relaxed away and exported as
+        the wall beside it, while the run reported ``resolved``."""
+        domain = pdm.from_internal_case(self._slot_hill())
+        result = _no_crash(pipeline.run_internal(domain, FAST))
+        self.assertTrue(result.topology_valid, result.problems or result.failures)
+        self.assertEqual(pg.boundary_problems(result.graph, result.domain), [])
+        self.assertIn("slot", result.model.boundaries)
+        slot = domain.chain("slot")
+        stations = {tuple(np.round(slot.points[0], 9)), tuple(np.round(slot.points[-1], 9))}
+        vertices = {tuple(np.round(vertex.point, 9)) for vertex in result.graph.vertices.values()}
+        self.assertLessEqual(stations, vertices)
+
+    def test_a_mislabelled_boundary_edge_is_a_problem(self):
+        result = run_internal("periodic_hill")
+        graph = result.graph.copy()
+        self.assertEqual(pg.boundary_problems(graph, result.domain), [])
+        key, edge = next(
+            (key, edge) for key, edge in graph.edges.items() if edge.boundary == "bottom_wall"
+        )
+        edge.boundary = "top_wall"
+        kinds = {problem["kind"] for problem in pg.boundary_problems(graph, result.domain)}
+        self.assertEqual(kinds, {"boundary_off_chain", "chain_not_covered"})
+
+    def test_a_self_crossing_edge_path_is_a_problem(self):
+        result = run_case("single_ellipse", CAVITY_FAST)
+        graph = result.graph.copy()
+        key, edge = max(
+            ((key, edge) for key, edge in graph.edges.items() if edge.boundary is None),
+            key=lambda item: g2.total_length(item[1].path),
+        )
+        path = np.asarray(edge.path, dtype=np.float64)
+        a, b = path[0], path[-1]
+        along, across = b - a, np.asarray([a[1] - b[1], b[0] - a[0]])
+        bow = np.asarray([a, a + 0.4 * along + 0.2 * across, a + 0.6 * along - 0.2 * across,
+                          a + 0.6 * along + 0.2 * across, a + 0.4 * along - 0.2 * across, b])
+        edge.path = bow
+        kinds = {problem["kind"] for problem in graph.problems()}
+        self.assertIn("self_crossing_edge", kinds)
+
+
+class ChosenMoveTests(unittest.TestCase):
+    """A move reported as implemented realises exactly what it names."""
+
+    def test_a_chosen_cavity_template_is_applied_below_the_incumbent(self):
+        graph, domain = cusp_strip()
+        plain = fan_cavity.repair(graph, domain, options=fan_cavity.CavityOptions())
+        record = plain.cavities[0]
+        weaker = next(
+            item for item in record["candidates"]
+            if item["accepted"] and item["score"] < record["existing"]["score"]
+        )
+        graph, domain = cusp_strip()
+        forced = fan_cavity.repair(
+            graph, domain,
+            options=fan_cavity.CavityOptions(choices=((_label_of(record), weaker["template"]),)),
+        )
+        self.assertEqual(
+            forced.cavities[0]["applied"], f"fan_cavity:{_label_of(record)}:{weaker['template']}"
+        )
+
+    def test_a_new_choice_replaces_the_earlier_one_for_that_feature(self):
+        options = dataclasses.replace(
+            CAVITY_FAST,
+            cavity=fan_cavity.CavityOptions(choices=(("node_0_2", "seam"), ("node_1_4", "band"))),
+        )
+        move = move_module.Move(
+            identifier="fan_cavity:node_0_2:band", kind="wall_feature_cavity", target={},
+            rationale="", index_change={}, index_balanced=True, complexity=0, implemented=True,
+            score=1.0, option_delta={"cavity.choices": [("node_0_2", "band")]},
+        )
+        updated = move_module.apply(options, move)
+        self.assertEqual(
+            sorted(updated.cavity.choices), [("node_0_2", "band"), ("node_1_4", "band")]
+        )
+
+
+def _label_of(record) -> str:
+    return record["applied"].split(":")[1] if record.get("applied") else fan_cavity._label(tuple(record["feature"]))
+
+
+class HostileDomainTests(unittest.TestCase):
+    """Domains the producers cannot mesh are refused by name at the domain stage."""
+
+    @staticmethod
+    def _kinds(names, loops, outer=None):
+        return {problem["kind"] for problem in pdm.from_bodies(names, loops, outer=outer).problems()}
+
+    def test_a_body_inside_another_is_refused_whichever_is_longer(self):
+        t = np.linspace(0.0, 2.0 * math.pi, 600, endpoint=False)
+        radius = 0.6 + 0.25 * np.cos(24 * t)
+        gear = np.column_stack((radius * np.cos(t), radius * np.sin(t)))
+        disk = cases.circle((0.0, 0.0), 1.0, 200)
+        # The gear's perimeter is four times the disk's, so it sorts first.
+        self.assertIn("holes_overlap", self._kinds(["disk", "gear"], [disk, gear]))
+
+    def test_a_loop_touching_itself_is_refused(self):
+        eight = np.asarray([(0, 0), (1, 0), (1, 1), (2, 1), (2, 2), (1, 2), (1, 1), (0, 1)], float)
+        hairpin = np.asarray([(0, 0), (1, 0), (1, 1), (0.5, 1), (0.5, 1.8), (0.5, 1), (0, 1)], float)
+        for loop in (eight, hairpin):
+            with self.subTest(points=len(loop)):
+                self.assertIn("self_touching_loop", self._kinds(["body"], [loop]))
+
+    def test_a_body_flush_with_the_outer_boundary_is_refused(self):
+        outer = [("box", "farfield", np.asarray([(-3, -3), (3, -3), (3, 3), (-3, 3), (-3, -3)], float))]
+        flush = np.asarray([(0, -3), (1, -3), (1, -2), (0, -2)], float)
+        self.assertIn("hole_touches_outer", self._kinds(["flush"], [flush], outer))
+
+    def test_points_blockdrawer_would_merge_are_refused_here(self):
+        loop = cases.circle((0.0, 0.0), 0.5, 100)
+        near = np.insert(loop, 10, loop[10] + np.asarray([3.0e-12, -1.0e-11]), axis=0)
+        self.assertIn("coincident_points", self._kinds(["body"], [near]))
+
+    def test_the_corpus_has_no_domain_problems(self):
+        for name, factory in cases.CASES.items():
+            names, loops = factory()
+            with self.subTest(case=name):
+                self.assertEqual(pdm.from_bodies(names, loops).problems(), [])
+
+
+class SymmetryGuideTests(unittest.TestCase):
+    """A sweep between a wall and a symmetry plane: one band, then core."""
+
+    @staticmethod
+    def _half_channel(length: float = 6.0, height: float = 1.0):
+        def line(a, b, count):
+            t = np.linspace(0.0, 1.0, count)[:, None]
+            return (1.0 - t) * np.asarray(a, float) + t * np.asarray(b, float)
+
+        return cases.InternalFlowCase(
+            "half_channel",
+            (
+                cases.BoundaryChain("bottom_wall", "wall", line((0, 0), (length, 0), 61)),
+                cases.BoundaryChain("outlet", "outlet", line((length, 0), (length, height), 11)),
+                cases.BoundaryChain("top_symmetry", "symmetry", line((length, height), (0, height), 61)),
+                cases.BoundaryChain("inlet", "inlet", line((0, height), (0, 0), 11)),
+            ),
+        )
+
+    def test_the_band_stays_below_the_symmetry_plane(self):
+        domain = pdm.from_internal_case(self._half_channel())
+        result = _no_crash(pipeline.run_internal(domain, FAST))
+        self.assertTrue(result.resolved, result.failures or result.problems or result.described_failures())
+        roles = {face.role for face in result.graph.faces}
+        self.assertEqual(roles, {"layer", "core"})
+        # No band block touches the symmetry plane, and no grading request
+        # ends on it.
+        symmetry = {
+            vertex
+            for key, edge in result.graph.edges.items() if edge.boundary == "top_symmetry"
+            for vertex in key
+        }
+        for face in result.graph.faces:
+            if face.role == "layer":
+                self.assertFalse(set(face.corners) & symmetry)
+        for request in sizing.layer_grading_requests(result.graph, result.metric):
+            self.assertNotIn(request.wall_vertex, symmetry)
+        heights = [
+            float(vertex.point[1]) for vertex in result.graph.vertices.values()
+            if vertex.provenance == "front"
+        ]
+        self.assertLess(max(heights), 1.0)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    unittest.main()

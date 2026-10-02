@@ -307,6 +307,22 @@ def junction_anchors(diagram: Diagram) -> list[Anchor]:
     return anchors
 
 
+# Two forced anchors on one branch closer than this fraction of the ring
+# separation floor are one cut pinned on both walls (``AnchorSet._merge``).
+MERGE_FRACTION = 0.1
+
+
+# A curvature anchor marks an extremum: the smoothed curvature falls by this
+# fraction within this fraction of the perimeter on both sides of it (a 1.5:1
+# ellipse's tip falls 22 percent within five percent, a 2:1 ellipse's 49;
+# ripples on a plateau of the Gaussian-smoothed curvature are below 1e-5).
+PEAK_DROP = 0.02
+PEAK_WINDOW = 0.05
+# Width of the Gaussian that turns vertex turning into curvature, as a
+# fraction of the perimeter: the old resampling's smoothing reach.
+CURVATURE_SMOOTHING = 0.004
+
+
 def curvature_anchors(
     diagram: Diagram,
     cells: list[Cell],
@@ -319,10 +335,17 @@ def curvature_anchors(
 ) -> list[Anchor]:
     """Wall curvature extrema projected outwards onto the cell ring.
 
-    Curvature is measured on a uniform arc-length resampling so that a dense
-    input point list does not turn discretisation noise into anchors.  Both the
-    resampling density and the prominence threshold are relative, so the result
-    follows translation, rotation, uniform scaling and point-list reversal.
+    The curvature is the supplied vertices' turning convolved with a narrow
+    periodic Gaussian (``CURVATURE_SMOOTHING`` of the perimeter) and evaluated
+    on ``samples`` uniform stations: a function of the geometry alone, so a
+    dense input point list does not turn discretisation noise into anchors and
+    where the list starts does not matter.  (It used to be measured on a
+    uniform resampling of the polyline, which cuts the supplied corners
+    wherever its samples fall, and the ripples that left on a circular nose
+    became anchors that followed the start point.)  Each peak is placed between
+    the stations by a parabola.  The smoothing width and the prominence
+    threshold are relative, so the result follows translation, rotation,
+    uniform scaling, point-list reversal and the start point.
     """
     anchors: list[Anchor] = []
     for cell in cells:
@@ -330,26 +353,45 @@ def curvature_anchors(
         if site.curve.kind != "wall":
             continue
         loop = site.curve.loop()
-        uniform = g2.resample(loop, samples + 1)
-        curvature = np.abs(g2.discrete_curvature(uniform))
-        window = np.array([0.25, 0.5, 0.25])
-        smoothed = sum(
-            weight * np.roll(curvature, shift)
-            for weight, shift in zip(window, (-1, 0, 1))
-        )
+        loop_stations = g2.cumulative_length(loop)
+        perimeter = float(loop_stations[-1])
+        vertex_count = len(loop) - 1
+        if perimeter <= 0.0 or vertex_count < 3:
+            continue
+        theta = np.abs(g2.turning_angles(loop, closed=True))[:vertex_count]
+        sigma = CURVATURE_SMOOTHING * perimeter
+        grid = np.arange(samples) * (perimeter / samples)
+        offsets = (grid[:, None] - loop_stations[None, :vertex_count] + 0.5 * perimeter) % perimeter - 0.5 * perimeter
+        kernel = np.exp(-0.5 * (offsets / sigma) ** 2) / (sigma * math.sqrt(2.0 * math.pi))
+        smoothed = kernel @ theta
         median = float(np.median(smoothed))
         if median <= 0.0:
             continue
-        nodes = uniform[:-1]
+        nodes = grid
+        # A peak must be an extremum of the curvature, not a ripple on a
+        # plateau: on a circular nose every resampled point sits at the same
+        # curvature give or take where the samples fall between the supplied
+        # vertices, and those ripples - which follow the list's start point -
+        # used to become anchors.  The smoothed curvature has to fall by
+        # ``PEAK_DROP`` on both sides within ``PEAK_WINDOW`` of the perimeter.
+        reach = max(2, int(round(PEAK_WINDOW * samples)))
+        count = len(nodes)
+
+        def falls_away(index: int) -> bool:
+            left = [smoothed[(index - step) % count] for step in range(1, reach + 1)]
+            right = [smoothed[(index + step) % count] for step in range(1, reach + 1)]
+            return min(left) <= (1.0 - PEAK_DROP) * smoothed[index] and min(right) <= (1.0 - PEAK_DROP) * smoothed[index]
+
         peaks = [
             index
             for index in range(len(nodes))
             if smoothed[index] >= prominence * median
             and smoothed[index] >= smoothed[index - 1]
             and smoothed[index] >= smoothed[(index + 1) % len(nodes)]
+            and falls_away(index)
         ]
         peaks.sort(key=lambda index: -smoothed[index])
-        stations = g2.cumulative_length(uniform)
+        stations = np.concatenate((grid, [perimeter]))
         # A sharp corner is a curvature peak of its own; the resampled peak
         # lands a step away from the vertex, and the corner anchor already
         # names that feature.  Skip peaks within two steps of one.
@@ -358,14 +400,27 @@ def curvature_anchors(
         turning = g2.turning_angles(loop, closed=True)
         corner_stations = g2.cumulative_length(loop)[:-1][np.abs(turning) >= corner_turn]
         for index in peaks[:limit]:
-            station = float(stations[index])
+            # The resampling starts at the list's first point, so a peak
+            # sample sits up to half a step from the true extremum depending
+            # on where the list starts.  A parabola through the peak and its
+            # neighbours places it to a small fraction of a step, which makes
+            # the anchor station independent of the start point and of the
+            # direction the list runs in.
+            before = float(smoothed[(index - 1) % count])
+            here = float(smoothed[index])
+            after = float(smoothed[(index + 1) % count])
+            denominator = before - 2.0 * here + after
+            shift = 0.0
+            if denominator < 0.0:
+                shift = min(0.5, max(-0.5, 0.5 * (before - after) / denominator))
+            station = (float(stations[index]) + shift * step) % total
             if len(corner_stations):
                 gaps = np.abs(corner_stations - station)
                 gaps = np.minimum(gaps, total - gaps)
                 if float(np.min(gaps)) <= 2.0 * step:
                     continue
             anchor = anchor_from_wall(
-                diagram, cell, float(stations[index]), "curvature"
+                diagram, cell, station, "curvature"
             )
             if anchor is not None:
                 anchors.append(anchor)
@@ -676,6 +731,9 @@ class AnchorSet:
                 # ring is their inner side - and the producer does not build
                 # on them.
                 judged = site.curve.kind == "wall" or not self.floor_by_wall_gap
+                if force and ring_gap < limit and self._merge(anchor, cell_index, station, limit):
+                    # Pinned onto the existing cut instead of beside it.
+                    return True
                 if not force and judged and ring_gap < limit:
                     self.rejected.append(
                         (
@@ -694,6 +752,54 @@ class AnchorSet:
         self.by_branch[anchor.branch].append(anchor)
         self.by_branch[anchor.branch].sort(key=lambda item: item.position)
         return True
+
+    def _merge(self, anchor: Anchor, cell_index: int, station: float, limit: float) -> bool:
+        """Pin a forced anchor onto an existing cut that crowds it, if one can take it.
+
+        Two forced anchors a sliver apart on one branch - a square body's
+        corner and the corner of a box with equal margins, both on the box
+        diagonal - are one spoke: kept as two near-coincident cuts, the
+        unpinned one's projection onto the other wall flips across the
+        diagonal and the gates wind round the box almost twice.  The existing
+        anchor takes the new one's wall pin as its second pin, as a wake
+        anchor pins both of its walls.
+        """
+        # Only ordinary wall anchors merge.  A wake anchor is a scaffold
+        # element the wake writer finds by its own identity, and a fixed or
+        # doubly pinned anchor has no pin to spare.
+        if anchor.hint is None or anchor.fixed or anchor.extra_hint is not None or anchor.kind == "wake":
+            return False
+        cell = self.cells[cell_index]
+        for existing in self.by_branch[anchor.branch]:
+            if existing.junction is not None or existing.fixed or existing.kind == "wake":
+                continue
+            gap = _cyclic_gap(cell.station_of(existing.branch, existing.position), station, cell.ring_length)
+            # Only near-coincident anchors are one spoke (the square in its
+            # box: 2 to 5 percent of the floor); a forced anchor merely inside
+            # the floor (a teardrop tip 40 percent of it from an outlet
+            # corner) keeps its own cut.
+            if gap >= MERGE_FRACTION * limit:
+                continue
+            if existing.hint_for(anchor.hint[0]) is not None:
+                return False
+            if existing.hint is None:
+                existing.hint = anchor.hint
+            elif existing.extra_hint is None:
+                existing.extra_hint = anchor.hint
+            else:
+                return False
+            # Refresh the crowding record of the existing cut on that wall.
+            for other_index in self._cells_of(existing.branch):
+                if self.cells[other_index].site != anchor.hint[0]:
+                    continue
+                measured = self._measure(other_index, existing)
+                records = self._stations[other_index]
+                for position, (ring, _wall, clearance) in enumerate(records):
+                    if abs(ring - measured[0]) <= 1.0e-12 * self.scale:
+                        records[position] = (ring, measured[1], clearance)
+            self.rejected.append((anchor, "merged into an existing forced cut on the same branch"))
+            return True
+        return False
 
     def cuts(self) -> list[list[Cut]]:
         result: list[list[Cut]] = []
@@ -744,7 +850,7 @@ def relax_gates(site: Site, cuts: list[Cut], balance: float) -> None:
     total = site.curve.length()
     count = len(cuts)
     for _ in range(count + 1):
-        order, unwrapped, winding = _unwrap_gates(cuts, total)
+        order, unwrapped, winding = _unwrap_gates(cuts, total, clamp_unpinned=True)
         if winding <= 1.0 + 1e-9:
             break
         # A pinned feature gate can contradict the ring order.  Give up the
@@ -809,7 +915,7 @@ def relax_gates(site: Site, cuts: list[Cut], balance: float) -> None:
             # spreading between them is all that is left.
             break
         weaker.unpin()
-        order, unwrapped, _ = _unwrap_gates(cuts, total)
+        order, unwrapped, _ = _unwrap_gates(cuts, total, clamp_unpinned=True)
     if float(np.min(spans - floors)) >= 0.0:
         return
     fixed = [0] + [
@@ -858,16 +964,69 @@ def _pin_priority(cut: Cut) -> int:
     return _PIN_PRIORITY.get(cut.anchor.kind, 0)
 
 
-def _unwrap_gates(cuts: list[Cut], total: float):
-    """Ring-ordered gate stations forced to be non-decreasing."""
+def _unwrap_gates(cuts: list[Cut], total: float, *, clamp_unpinned: bool = False):
+    """Ring-ordered gate stations forced to be non-decreasing.
+
+    With ``clamp_unpinned``, and only when the plain reading winds the gates
+    more than once round the wall, an unpinned gate - whose closest-point
+    station is not authoritative, since spreading places it - is held inside
+    the run between the pinned gates around it: a projection just behind its
+    predecessor, or just beyond the next pin, takes a zero step instead of
+    the spurious full turn that reading it forward gives.  A configuration
+    that is already in ring order is returned as it is.  (The first clamp
+    treated every unpinned step longer than half the wall as a step back,
+    which also collapsed legitimate long steps - a wall with two gates
+    always has one - and made the layout of an ellipse follow the raster
+    and the orientation; the second measured gates from the start of their
+    run, so a gate on the pin's own station at the end of the ring order -
+    one full turn on - was read as a step back.)
+    """
     count = len(cuts)
     start = next((index for index, cut in enumerate(cuts) if cut.pinned), 0)
     order = [(start + offset) % count for offset in range(count)]
-    unwrapped = [cuts[order[0]].wall_station]
-    for index in order[1:]:
-        unwrapped.append(
-            unwrapped[-1] + (cuts[index].wall_station - unwrapped[-1]) % total
-        )
+    # Steps are taken between raw stations, never from the accumulated value:
+    # two gates on one wall station (several ring anchors projecting onto a
+    # convex corner) are a zero step, and ``(w - (w + k * total)) % total``
+    # rounds to just below ``total`` - one spurious full turn.  A step within
+    # rounding of a full turn is that zero step.
+    tolerance = 1.0e-9 * total
+
+    def forward(station: float, origin: float) -> float:
+        step = (station - origin) % total
+        return 0.0 if step > total - tolerance else step
+
+    stations = [cuts[index].wall_station for index in order]
+    unwrapped = [stations[0]]
+    for position in range(1, count):
+        unwrapped.append(unwrapped[-1] + forward(stations[position], stations[position - 1]))
+    winding = (unwrapped[-1] - unwrapped[0]) / total
+    if not clamp_unpinned or winding <= 1.0 + 1.0e-9:
+        return order, unwrapped, winding
+    # The runs between consecutive pinned gates; with one pin or none, the
+    # whole loop from the first gate round to itself.
+    pins = [position for position in range(count) if cuts[order[position]].pinned] or [0]
+    unwrapped = [stations[0]] + [0.0] * (count - 1)
+    for number, first in enumerate(pins):
+        last = pins[number + 1] if number + 1 < len(pins) else count
+        end = stations[last % count] if len(pins) > 1 else stations[first]
+        length = total if len(pins) == 1 else forward(end, stations[first])
+        offset, previous = 0.0, stations[first]
+        for position in range(first + 1, last):
+            station = stations[position]
+            step = forward(station, previous)
+            if offset + step > length:
+                # Outside the run: just beyond the next pin, or behind its
+                # predecessor (read forward, nearly a full turn), whichever
+                # is nearer.
+                if offset + step - length <= total - step:
+                    step, station = length - offset, end
+                else:
+                    step, station = 0.0, previous
+            offset += step
+            previous = station
+            unwrapped[position] = unwrapped[first] + offset
+        if last < count:
+            unwrapped[last] = unwrapped[first] + length
     return order, unwrapped, (unwrapped[-1] - unwrapped[0]) / total
 
 
@@ -921,6 +1080,45 @@ def _ring_section(cell: Cell, start: float, end: float) -> np.ndarray:
     return g2.loop_section(cell.ring, start, end, forward=True)
 
 
+def _turning_midpoint(loop: np.ndarray, start: float, length: float) -> float | None:
+    """Arc length from ``start`` at which half the turning over ``length`` is reached.
+
+    The turning is a density along the closed loop: vertex ``k``'s absolute
+    turning is spread uniformly from the middle of its incoming segment to
+    the middle of its outgoing one, so the turning between two stations, and
+    the station halving it, vary continuously with the stations.
+    """
+    stations = g2.cumulative_length(loop)
+    total = float(stations[-1])
+    count = len(loop) - 1
+    turning = np.abs(g2.turning_angles(loop, closed=True))[:count]
+    whole = float(np.sum(turning))
+    if total <= 0.0 or whole <= 0.0:
+        return None
+    middles = 0.5 * (stations[:count] + stations[1:count + 1])
+    # Breakpoints of the cumulative turning, over two periods.
+    xs = np.concatenate(([middles[-1] - total], middles))
+    values = np.concatenate(([0.0], np.cumsum(turning)))
+    xs = np.concatenate((xs, xs[1:] + total))
+    values = np.concatenate((values, values[1:] + whole))
+    first = float(start) % total
+    if first < xs[0]:
+        first += total
+    low = float(np.interp(first, xs, values))
+    high = float(np.interp(first + length, xs, values))
+    if high - low <= 0.0:
+        return None
+    target = 0.5 * (low + high)
+    # The inverse of a non-decreasing piecewise-linear map: the first station
+    # reaching the target.
+    index = int(np.searchsorted(values, target, side="left"))
+    index = min(max(index, 1), len(values) - 1)
+    span = values[index] - values[index - 1]
+    fraction = 0.0 if span <= 0.0 else (target - values[index - 1]) / span
+    station = xs[index - 1] + fraction * (xs[index] - xs[index - 1])
+    return float(station - first)
+
+
 def split_anchor(
     diagram: Diagram, cells: list[Cell], patch: Patch, *, by_turning: bool
 ) -> Anchor | None:
@@ -934,14 +1132,18 @@ def split_anchor(
     wall_length = g2.total_length(patch.wall)
     if wall_length <= 0.0 or len(patch.wall) < 3:
         return None
-    stations = g2.cumulative_length(patch.wall)
     if by_turning:
-        turning = np.abs(g2.turning_angles(patch.wall, closed=False))
-        if not len(turning) or float(np.sum(turning)) <= 0.0:
+        # The turning of the whole loop as a density - each vertex's turning
+        # spread over its two half-segments - integrated between the gates.
+        # Counting only the vertices strictly inside the section made the
+        # midpoint jump whenever a gate passed a strongly turning vertex: an
+        # ellipse tip's 5.7 degrees moved from one patch to the next as the
+        # gate moved by a fraction of a segment, and with it the split by
+        # four vertices - which depended on where the point list started.
+        site = diagram.sites[cell.site]
+        offset = _turning_midpoint(site.curve.loop(), patch.wall_start, wall_length)
+        if offset is None:
             return None
-        cumulative = np.concatenate(([0.0], np.cumsum(turning)))
-        index = int(np.searchsorted(cumulative, 0.5 * cumulative[-1])) + 1
-        offset = float(stations[min(max(index, 1), len(patch.wall) - 2)])
     else:
         offset = 0.5 * wall_length
     offset = min(max(offset, 0.1 * wall_length), 0.9 * wall_length)
@@ -967,6 +1169,10 @@ class Layout:
     cuts: list[list[Cut]]
     patches: list[Patch]
     notes: list[str] = field(default_factory=list)
+    # The wall turning one patch may span, as the layout enforced it; the
+    # relaxation keeps it (``patch_solver``), or sliding the gates undoes the
+    # cuts that turning made.
+    wall_turning_limit: float | None = None
 
     def refresh(self) -> None:
         """Recompute ring geometry and patches from the current variables.
@@ -1231,4 +1437,4 @@ def build_layout(diagram: Diagram, options: LayoutOptions | None = None) -> Layo
                 f"{len(cell_cuts)} cuts; an annulus needs at least "
                 f"{settings.minimum_cuts}"
             )
-    return Layout(diagram, cells, anchors, cuts, patches, notes)
+    return Layout(diagram, cells, anchors, cuts, patches, notes, wall_turning_limit=turning_limit)

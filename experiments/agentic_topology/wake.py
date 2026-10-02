@@ -183,6 +183,9 @@ def plan(layout, options: WakeOptions | None = None) -> list[dict]:
                 ),
                 "planned": False,
                 "applied": False,
+                # The writers read the clearance a neighbouring anchor keeps
+                # from the wake band from the record, not from the options.
+                "clearance_ratio": float(settings.clearance_ratio),
             }
             records.append(record)
             # A blunt base: another convex corner a few thousandths of the
@@ -210,6 +213,20 @@ def plan(layout, options: WakeOptions | None = None) -> list[dict]:
                     else (other, index)
                 )
                 _plan_base(record, layout, settings, cell_index, cell, site, loop, stations, angles, first, second, outer_index, outer, outer_loop)
+                continue
+            # Just beyond the base rule: a second convex corner a little more
+            # than ``blunt_ratio`` away along a nearly straight wall is still
+            # the other corner of a base.  A wake from this corner alone would
+            # cut the base lopsidedly (a wing section's flat back of a few
+            # percent of the chord), so it is refused with the remedy.
+            wider = _wider_base_partner(index, convex, stations, total, loop, settings)
+            if wider is not None:
+                record["reason"] = (
+                    f"this corner and the convex corner {wider:.4g} along the wall form a blunt "
+                    f"base wider than the base rule ({settings.blunt_ratio:g} of the perimeter, "
+                    f"{settings.blunt_ratio * total:.4g}); a wake from one corner would cut the base "
+                    "lopsidedly - raise --wake-blunt-ratio to build it as a base"
+                )
                 continue
             direction = bisector
             if settings.direction is not None:
@@ -929,7 +946,13 @@ def _make_room_at(layout, cell, cuts, position, front, record, labels, settings,
                     break
                 order = cuts.index(neighbour)
                 nbr_front = front.point_at(order, "out" if step < 0 else "in")
-                corners = [nbr_front, seam, crossing, neighbour.ring_point] if step < 0 else [seam, nbr_front, neighbour.ring_point, crossing]
+                # The cut is rebuilt only after this pass, so an anchor slid
+                # above still carries its old ring point: read the current one.
+                ring_point = neighbour.ring_point
+                current = cell.station_of(neighbour.anchor.branch, neighbour.anchor.position)
+                if min((current - neighbour.ring_station) % total, (neighbour.ring_station - current) % total) > 1.0e-12 * total:
+                    ring_point = g2.sample_at_arclength(cell.ring, [current % total])[0]
+                corners = [nbr_front, seam, crossing, ring_point] if step < 0 else [seam, nbr_front, ring_point, crossing]
                 if g2.strictly_convex(np.asarray(corners)):
                     break
                 anchor = neighbour.anchor
@@ -2335,6 +2358,35 @@ def _problem_signature(problem: dict) -> str:
     import json
 
     return json.dumps({key: value for key, value in problem.items() if key != "block"}, sort_keys=True, default=str)
+
+
+# How far beyond the base rule a second corner still makes a base, and how
+# straight the wall between the two corners must be.
+WIDER_BASE_FACTOR = 4.0
+BASE_STRAIGHTNESS = math.radians(30.0)
+
+
+def _wider_base_partner(index, convex, stations, total, loop, settings) -> float | None:
+    """The wall distance to a convex corner just beyond the base rule, if any."""
+    turning = np.abs(g2.turning_angles(loop, closed=True))
+    count = len(loop) - 1
+    for other in (int(item) for item in convex):
+        if other == index:
+            continue
+        forward = (stations[other] - stations[index]) % total
+        backward = (stations[index] - stations[other]) % total
+        gap = min(forward, backward)
+        if not settings.blunt_ratio * total < gap <= WIDER_BASE_FACTOR * settings.blunt_ratio * total:
+            continue
+        step = 1 if forward <= backward else -1
+        between = []
+        position = (index + step) % count
+        while position != other % count:
+            between.append(position)
+            position = (position + step) % count
+        if float(np.sum(turning[between])) <= BASE_STRAIGHTNESS:
+            return float(gap)
+    return None
 
 
 def record_clearance(record: dict) -> float:

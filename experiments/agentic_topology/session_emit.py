@@ -27,6 +27,30 @@ from blockdrawer.model import MeshModel
 from blockdrawer.session import save_session
 
 COORDINATE_TOLERANCE = 2.0e-9
+# How far, as a fraction of its chord, an exported spline may leave the
+# polyline the graph validated.  A through-point Catmull-Rom spline overshoots
+# where the supplied spacing is unbalanced - 4.7 percent of the chord at a
+# teardrop's flank, enough to fold a refined band - while one through dense,
+# evenly spaced points stays within about 1e-4 of it.
+SPLINE_TOLERANCE = 2.0e-3
+
+
+def _spline_departure(model: MeshModel, current, path) -> tuple[float, bool]:
+    """Largest distance of the exported spline from ``path`` and whether it loops."""
+    import geometry2d as g2
+
+    polyline = np.asarray(path, dtype=np.float64)
+    # Sample every span, not the edge uniformly: the spline's parameter is
+    # chord length, so a short span beside a long one occupies a sliver of
+    # the parameter, and the overshoot sits in it (64 uniform samples saw 1e-4
+    # of the chord where 2048 saw 2.8e-2).
+    cumulative = g2.cumulative_length(polyline)
+    total = float(cumulative[-1]) if float(cumulative[-1]) > 0.0 else 1.0
+    spans = [np.linspace(a, b, 33) for a, b in zip(cumulative[:-1], cumulative[1:])]
+    fractions = np.unique(np.clip(np.concatenate([np.linspace(0.0, total, 257), *spans]) / total, 0.0, 1.0))
+    samples = np.asarray(model.edge_points(current, fractions))
+    distance = float(np.max(g2.distance_to_polyline(polyline, samples)))
+    return distance, bool(g2.self_intersections(samples, closed=False))
 
 
 def _patch_name(name: str, used: set[str]) -> str:
@@ -158,6 +182,7 @@ def build_model_from_graph(
     grading=(),
     reference_curves: bool = True,
     default_cells: int = 10,
+    notes: list | None = None,
 ) -> tuple[MeshModel, dict, list[dict]]:
     """Turn a validated patch graph into an ordinary BlockDrawer session.
 
@@ -203,6 +228,29 @@ def build_model_from_graph(
         if not thinned:
             continue
         model.edge_geometry[current] = EdgeGeometry(edge.kind, thinned)
+        if edge.kind == "spline":
+            # What is exported must be what was validated: the graph checked
+            # the polyline through these points.  A spline that leaves it, or
+            # loops, is exported as that polyline instead.
+            chord = max(math.dist(start, end), COORDINATE_TOLERANCE)
+            departure, loops = _spline_departure(model, current, edge.path)
+            if loops or departure > SPLINE_TOLERANCE * chord:
+                model.edge_geometry[current] = EdgeGeometry("polyLine", thinned)
+                if notes is not None:
+                    notes.append(
+                        {
+                            "edge": list(current),
+                            "departure": departure,
+                            "chord": chord,
+                            "loops": loops,
+                            "reason": (
+                                "the through-point spline leaves the validated polyline "
+                                f"by {departure / chord:.3g} of its chord"
+                                + (" and crosses itself" if loops else "")
+                                + "; exported as that polyLine"
+                            ),
+                        }
+                    )
 
     used: set[str] = {model.z_min_patch_name, model.z_max_patch_name}
     patches: dict[str, str] = {}
@@ -265,6 +313,25 @@ def build_model_from_graph(
                 }
             )
             continue
+        if request.first_width * cells >= length:
+            # A first cell no smaller than the uniform width can only be met
+            # by cells shrinking away from the wall: the band would be graded
+            # backwards (on 30P30N down to a total ratio of 6e-23, which
+            # collapses rows).  The uniform edge already beats the request.
+            refused.append(
+                {
+                    "edge": list(current),
+                    "requested_first_width": float(request.first_width),
+                    "edge_length": float(length),
+                    "cells": int(cells),
+                    "reason": (
+                        "the requested first cell is not smaller than the uniform "
+                        "width length/cells; grading towards it would run backwards, "
+                        "so the edge is left uniform"
+                    ),
+                }
+            )
+            continue
         try:
             model.set_edge_grading(current, parameter, float(request.first_width))
         except Exception as error:  # pragma: no cover - reported, not raised
@@ -288,5 +355,12 @@ def build_model_from_graph(
                 name=f"{chain.name}_points",
                 show_points=False,
             )
+    # The research output is a 2-D topology: both extrusion faces are empty,
+    # so checkMesh judges the 2-D mesh rather than a unit-depth 3-D slab
+    # (whose z faces alone fail its aspect-ratio check).
+    model.set_export_settings(
+        model.z_cells, model.z_min, model.z_max, model.scale,
+        model.z_min_patch_name, "empty", model.z_max_patch_name, "empty",
+    )
     model.validate()
     return model, identifiers, refused

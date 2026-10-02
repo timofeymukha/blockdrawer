@@ -152,6 +152,19 @@ def _outer_section(site, first: float, second: float, style: str):
 # ---------------------------------------------------------------------------
 
 
+def outer_boundary_refusal(domain) -> str | None:
+    """Why the domain's outer boundary cannot carry a C-grid, before any layout.
+
+    The C-grid needs a cap, two legs and one outlet; checking that first
+    keeps a single-body ``--wake`` run in a circle or a rectangle from paying
+    for a second layout and relaxation that ``build`` would refuse anyway.
+    """
+    chains = domain.outer.chains
+    if len(chains) != 4 or [chain.role for chain in chains].count("outlet") != 1:
+        return "the C-grid needs a four-chain outer boundary with one outlet: cap, leg, outlet, leg"
+    return None
+
+
 def build(layout, domain, metric, wake_record: dict, *, layer_options=None,
           options: CGridOptions | None = None, wall_edge_style: str = "polyLine") -> CGridResult:
     """Build the single-body C-grid or raise ``CGridError`` with the reason."""
@@ -301,8 +314,13 @@ def build(layout, domain, metric, wake_record: dict, *, layer_options=None,
     ]
     fractions = fraction_positions(level_polys[0], level_points[0])
     fractions[0], fractions[-1] = 0.0, 1.0
-    if any(b <= a for a, b in zip(fractions, fractions[1:])):
-        raise CGridError("the band front's gate points are not ordered along the front")
+    disordered = [index for index, (a, b) in enumerate(zip(fractions, fractions[1:]), start=1) if b <= a]
+    if disordered:
+        details = ", ".join(
+            f"gate {index} at wall station {stations[index % count]:.4g} (fraction {fractions[index]:.4g} after {fractions[index - 1]:.4g})"
+            for index in disordered[:3]
+        )
+        raise CGridError(f"the band front's gate points are not ordered along the front: {details}")
     for poly_k in level_polys[1:]:
         total = g2.total_length(poly_k)
         level_points.append([g2.sample_at_arclength(poly_k, [f * total])[0] for f in fractions])
@@ -362,9 +380,17 @@ def build(layout, domain, metric, wake_record: dict, *, layer_options=None,
     # Wall gates in wall order: gate i is vertex n = i of every level for
     # 1 <= i < count; the edge (i = 0) is vertex 0 on the out side and vertex
     # count on the in side.
+    # A gate is the band front's own wall vertex.  Building the band snaps a
+    # station onto a supplied point a sliver away rather than inserting a
+    # second vertex there, so a gate placed at the unsnapped station would
+    # replace that point in the wall edge - cutting the supplied wall short -
+    # instead of ending on it.
+    wall_stations = g2.cumulative_length(fronts[0].wall)
     for i, station in enumerate(stations):
-        graph.add_vertex(key_gate(i), site.curve.point_at(station),
-                         constraint=pg.Constraint("chain", site.name, station), provenance="gate")
+        index = fronts[0].gate_indices[i]
+        snapped = float(wall_stations[index]) % total_wall
+        graph.add_vertex(key_gate(i), np.asarray(fronts[0].wall[index], dtype=np.float64),
+                         constraint=pg.Constraint("chain", site.name, snapped), provenance="gate")
     mitre_in = [te_point]
     mitre_out = [te_point]
     for k in range(1, levels + 1):
@@ -395,9 +421,12 @@ def build(layout, domain, metric, wake_record: dict, *, layer_options=None,
     # Along the outlet (forward, from c_bot to c_top) the exits must read
     # in_K ... in_1, W, out_1 ... out_K: the in side faces c_bot.
     outlet_order = [exits[(k, "in")][1] for k in range(levels, 0, -1)] + [exits[(0, "in")][1]] + [exits[(k, "out")][1] for k in range(1, levels + 1)]
-    if any(b <= a for a, b in zip(outlet_order, outlet_order[1:])):
+    # Measured forward from c_bot: the loop may start anywhere (its first
+    # chain is the one whose name sorts first), so c_top can wrap to 0.
+    along = [(station - c_bot) % total_outer for station in outlet_order]
+    if any(b <= a for a, b in zip(along, along[1:])):
         raise CGridError("the wake lines are not ordered along the outlet; a wake line crosses another")
-    if not (c_bot < min(outlet_order) and max(outlet_order) < c_top):
+    if not (0.0 < along[0] and along[-1] < outlet.length):
         raise CGridError("a wake line leaves the outlet beyond its corners")
     for k in range(levels + 1):
         for side in ("in", "out"):

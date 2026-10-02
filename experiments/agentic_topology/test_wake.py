@@ -185,7 +185,7 @@ class WakeConstructionTests(unittest.TestCase):
         self.assertEqual(len(wake_faces), 8)
 
     def test_blunt_base_continues_as_the_wake_core_strip(self):
-        """Two convex corners a hundredth of the perimeter apart are one base,
+        """Two convex corners three thousandths of the perimeter apart are one base,
         and the base template writes it: one record for the pair, two pinned
         wake anchors, the base going on downstream as the core strip with the
         two flank bands beside it."""
@@ -209,6 +209,31 @@ class WakeConstructionTests(unittest.TestCase):
         sharp = pipeline.run_external(["sharp"], [tear], WAKE)
         self.assertEqual(len(sharp.wakes.applied), 1)
         self.assertTrue(sharp.resolved, sharp.described_failures())
+
+    def test_a_base_just_wider_than_the_rule_is_refused_not_cut_from_one_corner(self):
+        """Beyond the base rule the two corners used to be planned as two
+        trailing edges: one wake written, one refused, a lopsided C-cut from
+        one corner.  The same base with the rule set just below its width
+        (0.29 percent of the perimeter against 0.2) is refused at both
+        corners with the remedy."""
+        tear = cases.teardrop((0.0, 0.0), 0.32, tip_ratio=4.0)
+        tip, arc = tear[-1], tear[:-1]
+        half, depth = math.asin(0.25), 0.02
+        blunt = np.vstack([arc, [[tip[0] - depth, -depth * math.tan(half)], [tip[0] - depth, depth * math.tan(half)]]])
+        options = replace(WAKE, wake=wake.WakeOptions(enabled=True, blunt_ratio=0.002))
+        result = pipeline.run_external(["blunt"], [blunt], options)
+        self.assertEqual(len(result.wakes.records), 2)
+        for record in result.wakes.records:
+            self.assertFalse(record["applied"])
+            self.assertIn("wider than the base rule", record["reason"])
+            self.assertIn("--wake-blunt-ratio", record["reason"])
+
+    def test_the_clearance_option_reaches_the_writers(self):
+        result = run_teardrop(replace(WAKE, wake=wake.WakeOptions(enabled=True, clearance_ratio=0.4)))
+        record = result.wakes.records[0]
+        self.assertEqual(record["clearance_ratio"], 0.4)
+        self.assertEqual(wake.record_clearance(record), 0.4)
+        self.assertEqual(wake.record_clearance(run_teardrop().wakes.records[0]), wake.WakeOptions.clearance_ratio)
 
     def test_blunt_foil_o_grid(self):
         """The single-foil O-grid with a blunt trailing edge: the base strip
@@ -253,6 +278,44 @@ class WakeConstructionTests(unittest.TestCase):
         self.assertIn("deliberately broken", result.wakes.records[0]["reason"])
         self.assertEqual(session_emit.topology_signature(result.model), signature)
         self.assertEqual(result.graph.summary(), baseline.graph.summary())
+
+    def test_exported_splines_stay_on_the_validated_wall(self):
+        """With spline walls the graph validates the polyline through the
+        points; an exported spline that overshoots it (the teardrop's flank,
+        a long span beside dense arc points) is exported as that polyline."""
+        options = replace(WAKE, wall_edge_style="spline")
+        result = run_teardrop(options, key="teardrop-spline")
+        self.assertTrue(result.admissible, result.problems or result.failures)
+        self.assertTrue(result.export_notes, "the flank's spline should have been replaced")
+        inverse = {value: key for key, value in result.identifiers.items()}
+        for current, geometry in result.model.edge_geometry.items():
+            if geometry.kind != "spline":
+                continue
+            key = result.graph.edge_key(inverse[current[0]], inverse[current[1]])
+            departure, loops = session_emit._spline_departure(result.model, current, result.graph.edges[key].path)
+            start = result.model.vertices[current[0]]
+            end = result.model.vertices[current[1]]
+            chord = math.dist((start.x, start.y), (end.x, end.y))
+            with self.subTest(edge=current):
+                self.assertFalse(loops)
+                self.assertLessEqual(departure, session_emit.SPLINE_TOLERANCE * chord)
+
+    def test_a_programming_error_in_a_trial_is_a_crash_not_a_refusal(self):
+        """A defect inside a trial must not read as "the wake does not apply"."""
+
+        def broken(*args, **kwargs):
+            raise TypeError("deliberate defect")
+
+        with mock.patch.object(wake, "make_room", side_effect=broken):
+            result = pipeline.run_external(["tear"], [teardrop_loop()], WAKE)
+        self.assertEqual(result.wakes.applied, [])
+        reason = result.wakes.records[0]["reason"]
+        self.assertIn("crashed", reason)
+        self.assertIn("TypeError", reason)
+        self.assertEqual([item["stage"] for item in result.crashes], ["wake"])
+        self.assertEqual(result.analysis["trial_crashes"][0]["stage"], "wake")
+        # The construction it fell back to is still the valid annular one.
+        self.assertTrue(result.admissible)
 
     def test_wake_follows_a_rotated_and_scaled_body(self):
         """The wake direction and the trailing-edge structure are covariant.

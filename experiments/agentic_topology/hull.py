@@ -689,9 +689,12 @@ def extend(near, domain, outer, loops, *, hull_points: np.ndarray, hull_height: 
         outer_station[key_exit(0, ("centre", index))] = centre_station
         centre_stations.append(centre_station)
     outlet_order = [exits[(k, "in")][1] for k in range(levels, -1, -1)] + centre_stations + [exits[(k, "out")][1] for k in range(0, levels + 1)]
-    if any(b <= a for a, b in zip(outlet_order, outlet_order[1:])):
+    # Measured forward from c_bot: the loop may start anywhere (its first
+    # chain is the one whose name sorts first), so c_top can wrap to 0.
+    along = [(station - c_bot) % total_outer for station in outlet_order]
+    if any(b <= a for a, b in zip(along, along[1:])):
         raise HullError("the wake lines are not ordered along the outlet; a wake line crosses another")
-    if not (c_bot < min(outlet_order) and max(outlet_order) < c_top):
+    if not (0.0 < along[0] and along[-1] < outlet.length):
         raise HullError("a wake line leaves the outlet beyond its corners")
     for k in range(levels + 1):
         for side in ("in", "out"):

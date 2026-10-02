@@ -253,6 +253,38 @@ def distance_to_polyline(poly: np.ndarray, queries, *, chunk: int = 256) -> np.n
     return answer
 
 
+def self_touches(loop: np.ndarray, tolerance: float, *, chunk: int = 256) -> list[tuple[int, int]]:
+    """Vertices of a closed loop lying within ``tolerance`` of a segment that is
+    not one of their own two: a figure-eight touching itself, a vertex on its
+    own edge, a zero-width hairpin.  Proper crossings are
+    :func:`self_intersections`; this is the touching case it does not see.
+    Returns ``(vertex, segment)`` pairs, vectorised so long loops stay cheap.
+    """
+    poly = np.asarray(loop, dtype=np.float64)
+    count = len(poly) - 1
+    if count < 4:
+        return []
+    starts = poly[:-1]
+    vectors = poly[1:] - poly[:-1]
+    lengths_squared = np.einsum("ij,ij->i", vectors, vectors)
+    safe = np.where(lengths_squared > 0.0, lengths_squared, 1.0)
+    found: list[tuple[int, int]] = []
+    for first in range(0, count, chunk):
+        sample = poly[first : min(first + chunk, count)]
+        offset_x = sample[:, None, 0] - starts[None, :, 0]
+        offset_y = sample[:, None, 1] - starts[None, :, 1]
+        fraction = np.clip((offset_x * vectors[None, :, 0] + offset_y * vectors[None, :, 1]) / safe[None, :], 0.0, 1.0)
+        offset_x -= fraction * vectors[None, :, 0]
+        offset_y -= fraction * vectors[None, :, 1]
+        distance = np.sqrt(offset_x * offset_x + offset_y * offset_y)
+        rows = np.arange(first, first + len(sample))
+        distance[np.arange(len(sample)), rows % count] = np.inf
+        distance[np.arange(len(sample)), (rows - 1) % count] = np.inf
+        hit_rows, hit_columns = np.nonzero(distance <= tolerance)
+        found.extend((int(first + row), int(column)) for row, column in zip(hit_rows, hit_columns))
+    return found
+
+
 def minimum_separation(first: np.ndarray, second: np.ndarray) -> float:
     return float(np.min(closest_on_polyline(second, first[:-1]).distance))
 
@@ -573,11 +605,40 @@ def resample_by_metric(poly: np.ndarray, sizes, *, minimum: int = 1) -> np.ndarr
 
 
 def metric_length(poly: np.ndarray, sizes) -> float:
-    """Length of a polyline measured in a per-vertex size metric."""
+    """Length of a polyline in a per-vertex size metric, the integral of ds/size.
+
+    The size is taken to vary linearly along each segment, and each segment is
+    integrated exactly for that: its length over the logarithmic mean of the
+    end sizes.  The trapezoid of ``1/size`` it replaces is exact only when
+    ``1/size`` is linear, and a segment leaving the wall - where the size grows
+    linearly with distance from a tiny first width - was overcounted by
+    ``h / (2 * first)`` against ``ln(1 + (g - 1) h / first) / (g - 1)``.
+    """
     values = np.asarray(sizes, dtype=np.float64)
-    density = 1.0 / np.where(values > 0.0, values, 1.0)
-    average = 0.5 * (density[1:] + density[:-1])
-    return float(np.sum(average * segment_lengths(poly)))
+    values = np.where(values > 0.0, values, 1.0)
+    lengths = segment_lengths(poly)
+    first, second = values[:-1], values[1:]
+    ratio = second / first
+    close = np.abs(ratio - 1.0) <= 1.0e-9
+    safe = np.where(close, 2.0, ratio)
+    logarithmic = np.where(close, 0.5 * (first + second), (second - first) / np.log(safe))
+    return float(np.sum(lengths / logarithmic))
+
+
+def subdivide(poly: np.ndarray, step: float, *, most: int = 64) -> np.ndarray:
+    """Insert points so no segment is longer than ``step`` (at most ``most`` pieces each)."""
+    points = np.asarray(poly, dtype=np.float64)
+    if len(points) < 2 or not (step > 0.0) or not math.isfinite(step):
+        return points
+    lengths = segment_lengths(points)
+    pieces = np.clip(np.ceil(lengths / step), 1, most).astype(int)
+    if int(np.max(pieces)) <= 1:
+        return points
+    parts = [points[:1]]
+    for index, count in enumerate(pieces.tolist()):
+        fractions = np.arange(1, count + 1, dtype=np.float64)[:, None] / count
+        parts.append(points[index] + fractions * (points[index + 1] - points[index]))
+    return np.vstack(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -660,7 +721,19 @@ def segment_relation(p0, p1, q0, q1, *, tolerance: float) -> dict:
             "point": (float(point[0]), float(point[1])),
             "parameters": (t, u),
         }
-    offset = abs(float(w[0] * r[1] - w[1] * r[0])) / length_r
+    # Near-parallel.  Judge it against the longer segment's line, measuring
+    # both endpoints of the shorter one: the shorter segment's own line,
+    # extrapolated to the far end of a long one, misses a shallow crossing by
+    # sin(angle) times that distance, so the verdict depended on argument
+    # order.
+    if length_r >= length_s:
+        base, direction, base_length, ends = first, r, length_r, (third, fourth)
+    else:
+        base, direction, base_length, ends = third, s, length_s, (first, second)
+    offset = max(
+        abs(float((end - base)[0] * direction[1] - (end - base)[1] * direction[0])) / base_length
+        for end in ends
+    )
     if offset > tolerance:
         return {"kind": DISJOINT, "point": None, "parameters": None}
     scale = length_r * length_r

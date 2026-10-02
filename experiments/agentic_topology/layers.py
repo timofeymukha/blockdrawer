@@ -1197,6 +1197,18 @@ def tight_concave_runs(loop: np.ndarray, fluid_sign: float, *, fraction: float =
     count = len(loop) - 1
     if count < 3:
         return []
+    # Vertices on a straight line carry no turning and no geometry: inserting
+    # one (a midpoint, say) must not split a bend's run or halve the radius
+    # estimate of its neighbours.  The runs are found on the loop without
+    # them and mapped back to the given indices.
+    straight = np.abs(math.pi - angles[:count]) <= 1.0e-9
+    if np.any(straight) and not np.all(straight) and int(np.count_nonzero(~straight)) >= 3:
+        kept = np.flatnonzero(~straight)
+        reduced = np.vstack([loop[kept], loop[kept[:1]]])
+        return [
+            {**run, "middle": int(kept[run["middle"]]), "start": int(kept[run["start"]]), "end": int(kept[run["end"]])}
+            for run in tight_concave_runs(reduced, fluid_sign, fraction=fraction)
+        ]
     turning = np.maximum(math.pi - angles[:count], 0.0)
     stations = g2.cumulative_length(loop)
     total = float(stations[-1])

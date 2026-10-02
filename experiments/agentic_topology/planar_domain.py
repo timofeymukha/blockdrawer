@@ -396,7 +396,13 @@ class PlanarDomain:
             return [*found, {"kind": "degenerate", "detail": str(error)}]
         scale = 2.0 * radius
         join = 1.0e-7 * scale
-        coincide = 1.0e-12 * scale
+        # BlockDrawer refuses points closer than its absolute coordinate
+        # tolerance, so the domain refuses them here, by name, rather than
+        # letting the session stage fail later with a generic message.
+        from blockdrawer.model import MeshModel
+
+        coincide = max(1.0e-12 * scale, MeshModel.COORDINATE_TOLERANCE)
+        touch = 1.0e-9 * scale
 
         if sum(0 if loop.hole else 1 for loop in self.loops) != 1:
             found.append({"kind": "outer_loop_count", "loops": len(self.loops)})
@@ -441,6 +447,15 @@ class PlanarDomain:
                         "segment_pairs": crossings[:8],
                     }
                 )
+            touches = g2.self_touches(points, touch)
+            if touches:
+                found.append(
+                    {
+                        "kind": "self_touching_loop",
+                        "chains": label,
+                        "vertex_segment_pairs": touches[:8],
+                    }
+                )
 
         outer_points = self.outer.points()
         for loop in self.holes:
@@ -459,12 +474,29 @@ class PlanarDomain:
                         "chains": [chain.name for chain in loop.chains],
                     }
                 )
+            elif min(
+                float(np.min(g2.distance_to_polyline(outer_points, points[:-1]))),
+                float(np.min(g2.distance_to_polyline(points, outer_points[:-1]))),
+            ) <= touch:
+                found.append(
+                    {
+                        "kind": "hole_touches_outer",
+                        "chains": [chain.name for chain in loop.chains],
+                    }
+                )
         for first in range(len(self.holes)):
             for second in range(first + 1, len(self.holes)):
                 one = self.holes[first].points()
                 other = self.holes[second].points()
-                if g2.paths_cross(one, other) or bool(
-                    np.any(g2.points_in_loop(one, other[:-1]))
+                # Containment both ways: holes are sorted by perimeter, and
+                # an inner body with the larger perimeter (a gear inside a
+                # disk) lies inside the other one, not the other way round.
+                if (
+                    g2.paths_cross(one, other)
+                    or bool(np.any(g2.points_in_loop(one, other[:-1])))
+                    or bool(np.any(g2.points_in_loop(other, one[:-1])))
+                    or float(np.min(g2.distance_to_polyline(one, other[:-1]))) <= touch
+                    or float(np.min(g2.distance_to_polyline(other, one[:-1]))) <= touch
                 ):
                     found.append(
                         {
@@ -568,8 +600,10 @@ def _rotate_chains(loop: Loop) -> Loop:
 def _loop_key(loop: Loop, center: np.ndarray, radius: float) -> tuple:
     points = loop.points()
     perimeter = g2.total_length(points) / radius
-    area = abs(g2.signed_area(points)) / (radius * radius)
     centre = g2.centroid_by_arclength(points)
+    # Relative to the loop's own centre, so the key survives a translation
+    # far from the origin (see ``sites.canonical_order``).
+    area = abs(g2.signed_area(points - centre[None, :])) / (radius * radius)
     offset = float(np.linalg.norm(centre - center)) / radius
     spread = float(
         np.mean(np.linalg.norm(points[:-1] - centre[None, :], axis=1))

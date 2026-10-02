@@ -405,11 +405,13 @@ def apply(options, move: Move):
         )
     choices = delta.pop("cavity.choices", None)
     if choices:
-        inner = dataclasses.replace(
-            updated.cavity,
-            choices=tuple(updated.cavity.choices)
-            + tuple(tuple(item) for item in choices),
-        )
+        # A new choice for a feature replaces the earlier one: with both kept
+        # the enumeration treats every named template as wanted and the
+        # ranking can apply the old choice instead of the requested one.
+        chosen = [tuple(item) for item in choices]
+        features = {key for key, _name in chosen}
+        kept = tuple(item for item in updated.cavity.choices if tuple(item)[0] not in features)
+        inner = dataclasses.replace(updated.cavity, choices=kept + tuple(chosen))
         updated = dataclasses.replace(updated, cavity=inner)
     for path, value in delta.items():
         section, _, field_name = path.partition(".")

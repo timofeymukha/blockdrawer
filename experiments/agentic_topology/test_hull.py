@@ -44,17 +44,10 @@ def staggered_near(key="staggered-near"):
     outer, circle = pdm.fabricate_outer(loops, pipeline.farfield_spec(settings))
     domain = pdm.from_bodies(names, loops, outer=outer)
     sites, _scale = site_module.sites_from_domain(domain, circle=circle, frame=site_module.domain_frame(loops))
-    _centre, radius = site_module.domain_frame(loops)
-    layer_height = pipeline._metric(domain, settings).layer_height
-    height = min(settings.hull.height_ratio * layer_height, float(radius))
-    points = hull.align_start(hull.cluster_level_set(loops, height, resolution=settings.hull.resolution), sites[-1].curve.point_at(0.0))
-    near_settings = replace(
-        settings,
-        hull=replace(settings.hull, enabled=False),
-        layer_height=layer_height,
-        layout=replace(settings.layout, band_height=layer_height, max_band_turning=math.radians(45.0), outer_by_ray=True),
-        layer=replace(settings.layer, inscribed_cap=False),
-    )
+    metric = pipeline._metric(domain, settings)
+    points, _height = pipeline.hull_outline(loops, settings, metric)
+    points = hull.align_start(points, sites[-1].curve.point_at(0.0))
+    near_settings = pipeline.hull_near_settings(settings, metric)
     _RUNS[key] = pipeline.run_external(names, loops, near_settings, outer=[("hull", "farfield", points)])
     return _RUNS[key]
 
@@ -169,15 +162,15 @@ class HullFarFieldTests(unittest.TestCase):
         self.assertIn(centre, result.graph.vertices)
         self.assertEqual(sum(centre in key for key in result.graph.edges), 3)
 
-    def test_the_annular_construction_is_the_fallback_with_a_reason(self):
+    def test_without_a_wake_the_hull_far_field_is_closed(self):
+        """Without a wake the rear tail stays a seam and no wake leaves the
+        cluster, so the far field is the closed one, mapped chain onto chain.
+        (This test used to assert only keys that are always set.)"""
         names, loops = cases.tandem_foils()
         result = run("tandem-hull-nowake", names, loops, tandem_options(wake=wake.WakeOptions(enabled=False)))
-        # Without a wake the rear tail stays a seam and no wake leaves the
-        # cluster, so the far field is the closed one; either way the record
-        # says what happened.
-        self.assertIn("applied", result.hull)
-        if not result.hull["applied"]:
-            self.assertIn("reason", result.hull)
+        self.assertTrue(result.hull["applied"], result.hull.get("reason"))
+        self.assertTrue(result.hull["closed"])
+        self.assertTrue(result.admissible, result.problems or result.failures)
 
     def test_one_body_is_the_c_grid_case(self):
         result = run("one-body", ["tear"], [cases.teardrop((0.0, 0.0), 0.32, tip_ratio=2.2)], replace(CAVITY_FAST, hull=hull.HullOptions(enabled=True)))

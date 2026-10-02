@@ -179,10 +179,21 @@ def compare(first, second) -> dict:
             "before": len(first.graph.singularities()) if first.graph else None,
             "after": len(second.graph.singularities()) if second.graph else None,
         },
+        # The counts grid: what the default sizing produced (informational).
         "grid": grid_quality.compare(
             first.grid.described() if first.grid else {},
             second.grid.described() if second.grid else {},
         ),
+        # The shape grid: the measurements ``resolved`` is judged on.
+        "shape": grid_quality.compare(
+            first.shape.described() if first.shape else {},
+            second.shape.described() if second.shape else {},
+        ),
+        "within_shape_targets": {
+            "before": first.within_shape_targets,
+            "after": second.within_shape_targets,
+        },
+        "sizing_feasible": {"before": first.sizing_feasible, "after": second.sizing_feasible},
     }
 
 

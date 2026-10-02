@@ -616,5 +616,32 @@ def reverse(loops):
     return result
 
 
+def mirror(loops):
+    """Reflect every point list in the y axis; the orientation reverses."""
+    return [np.asarray(loop, dtype=np.float64) * np.asarray([-1.0, 1.0]) for loop in loops]
+
+
+def roll(loops, fraction: float):
+    """Start every point list ``fraction`` of the way round it."""
+    return [np.roll(np.asarray(loop), -int(len(loop) * fraction), axis=0) for loop in loops]
+
+
+def reverse_plainly(loops):
+    """Reverse every point list outright: its first point becomes its last."""
+    return [np.asarray(loop)[::-1].copy() for loop in loops]
+
+
+def densify(loops):
+    """Insert the midpoint of every listed segment: the same polygon, twice the points."""
+    result = []
+    for loop in loops:
+        array = np.asarray(loop, dtype=np.float64)
+        dense = np.empty((2 * len(array) - 1, 2))
+        dense[0::2] = array
+        dense[1::2] = 0.5 * (array[:-1] + array[1:])
+        result.append(dense)
+    return result
+
+
 def permute(names, loops, order):
     return [names[index] for index in order], [loops[index] for index in order]

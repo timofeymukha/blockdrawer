@@ -48,7 +48,11 @@ result can be read either way; the session is written whenever the result is
    **The fluid is on the left of every chain**, so the outer loop is
    anticlockwise, holes are clockwise, and offsetting a chain to its left always
    moves into the fluid. Validation covers connected endpoints, orientation,
-   coincident points, hole containment, self-intersection, unique names,
+   coincident points (at BlockDrawer's own coordinate tolerance, so the domain
+   refuses what the session stage would), hole containment in both directions
+   (a body inside another of larger perimeter), self-intersection and
+   self-touching loops (a figure-eight, a hairpin, a vertex on its own edge),
+   holes touching each other or the outer boundary, unique names,
    reciprocal cyclic pairs and the geometric compatibility of paired chains.
    Normalisation makes translation, rotation, uniform scaling and reversal of the
    whole boundary representation produce the same structure. Two adapters feed
@@ -217,8 +221,12 @@ result can be read either way; the session is written whenever the result is
    band coupling. The additive `wall_tangential_normal_couplings` and
    `wall_coupled` fields supply the acceptance evidence: named wall chains and
    a tangent/normal edge pair in the same component, even outside the short
-   worst-ratio table. Coupling different walls is still rejected. The length
-   ratio limit of 20 still applies to every component. Old saved reports without
+   worst-ratio table. Coupling different walls is rejected except through a
+   wake band that lands on the second body, which is reported as a
+   `wake_landing_coupling` (step 6); its predicate is still "the component
+   touches a wake face", broader than "is the wake cut". The length ratio
+   limit of 20 applies to every component except far-field fan-out ones, and
+   the verdict without either exemption is reported. Old saved reports without
    physical evidence retain their conservative legacy verdict until remeasured.
 
    A cavity is also opened, whatever the sector, wherever it would contain a
@@ -234,6 +242,38 @@ result can be read either way; the session is written whenever the result is
    bounded coordinate descent relaxes every anchor and gate against a scale-free
    objective. What is new is that the **band front, not the wall**, is the inner
    boundary of those patches.
+
+   A junction whose Gauss-Newton refinement stops above 1e-6 of its clearance
+   is two junctions the raster merged into one cluster (`four_bodies` at the
+   suite's width of 420 lost a branch that way): the diagram is rebuilt on a
+   raster 1.5 times finer, up to three times, and any junction still not
+   converged is named in `medial.diagram_notes`. The body frame - centre,
+   radius, the scale every tolerance follows - is measured on the closed
+   loops, so the start point and the direction of a point list no longer move
+   it (a blunt foil's frame used to shift by 15 percent with its start point).
+   A curvature anchor marks a genuine extremum - the smoothed curvature falls
+   by ten percent within three percent of the perimeter on both sides - and
+   is placed between the resampled points by a parabola; ripples on a
+   circular nose, which followed where the resampling started, used to become
+   anchors. A patch is split where half its wall turning is reached with the
+   turning taken as a density along the loop, so the split no longer jumps
+   by four vertices when a gate passes a strongly turning one. Two forced
+   anchors that crowd each other on one branch - a square body's corner and
+   the corner of a box with equal margins, both on the box diagonal - become
+   one cut pinned on both walls, and the relaxation keeps every patch within
+   the wall-turning limit the layout enforced (`patch_solver.SolverOptions.turning_weight`;
+   it used to slide an 8:1 ellipse's tip gates off its tips). Gate
+   unwrapping clamps an unpinned gate into ring order only when the gates
+   would otherwise wind twice round the wall. The solver's splitting stops
+   after five consecutive splits that do not raise the worst block
+   (`SolverOptions.futile_splits`): when the worst patch cannot be split,
+   splitting the next-worst ones one at a time used to spend the whole
+   budget of forty relaxations, which took the A-airfoil's C-grid layout half
+   an hour at most raster widths without changing its worst block. With
+   these, all 13 fixtures give the same block graph under rotation by 37, 90
+   and 180 degrees, reflection, scaling by 1000, translation by 1e4, a start
+   point a third of the way round, both reversals, densification and a
+   repeated closing point (see "Generality").
 
    **Optional gap spanning** (`spanned.py`, `--span-gaps`) replaces the two
    half-core strips along a narrow body-body branch with one strip between
@@ -298,7 +338,10 @@ result can be read either way; the session is written whenever the result is
    collapse; left at its own value the slope limit dragged the corner's band
    down to a third. Sharp reflex corners keep their shadow's own values: in
    30P30N's coves the inherited clearance let a lip's band cross the next
-   element's spokes. The cove of `concave_and_convex` bottoms out in a bend
+   element's spokes. Vertices on a straight line are left out when the runs
+   are found, so a polygon densified by midpoints gives the same corners (it
+   used to break the cove's run at 38 instead of 91 degrees and invert cells).
+   The cove of `concave_and_convex` bottoms out in a bend
    of radius 0.03 turning 91 degrees, which the plain rules saw as a smooth
    bend and capped at 0.02; it now carries a full band, and its worst block
    goes from a scaled Jacobian of 0.03 to 0.40. The 45 degrees of wall
@@ -369,7 +412,16 @@ result can be read either way; the session is written whenever the result is
    the same corner the sharp edge's wake makes - which is why a thin
    trailing edge's neighbouring core block sits near 70 degrees of
    non-orthogonality in the annular construction; the C-grid avoids it with
-   its cross-wake line.
+   its cross-wake line. The base strip's two wake lines are the base's
+   wall-normal edges and are graded to the first-cell width at the corners.
+   The two-percent rule is a cliff, so a corner whose partner lies up to four
+   times as far along a nearly straight wall (at most 30 degrees of turning
+   between them) is still read as one corner of a base: its single-corner
+   wake is refused with the remedy, `--wake-blunt-ratio`, rather than written
+   as a lopsided cut from one corner (a flat-back section with a trailing
+   edge of a few percent of the chord). Without `--wake-direction` every
+   vertex sharp enough gets a wake along its own bisector, a sharp leading
+   edge included; give the direction for such bodies.
 
    **Wake over another body** (the multi-element wake, `through` in the
    record). A wake whose ray crosses the ring into another body's cell and
@@ -520,7 +572,13 @@ result can be read either way; the session is written whenever the result is
    relaxation of a dimensionless objective - rib orthogonality against both
    guides, smooth column spacing, and attraction of each cut to the feature that
    created it. Cuts come from accumulated guide turning, chain joins and the
-   metric length limit of a column. A non-monotone or crossing mapping is
+   metric length limit of a column. A chain join on a guide is a block vertex
+   and is pinned through the relaxation, so every guide edge lies on one named
+   chain (a slot or a separately named crest on a wall used to be relaxed away
+   and exported under the wall's name). A guide that carries no wall - a
+   symmetry plane - gets no band, bounds the band of the opposite wall, and its
+   row is a boundary row: the blocks beside it are core and its ribs are core
+   ribs. A non-monotone or crossing mapping is
    rejected with a structured reason. For a periodic pair the far end rib is
    constructed as the exact translate of the near one and every rib vertex is
    projected onto its end chain.
@@ -531,19 +589,41 @@ result can be read either way; the session is written whenever the result is
    oriented edges with a boundary role and provenance, quadrilateral faces,
    periodic vertex correspondence. It validates Euler characteristic, discrete
    index, face-edge incidence, boundary cycles, orientation, convexity, hanging
-   vertices, duplicate and crossing edges - and an independent raster coverage
-   test confirms the faces tile the fluid exactly, because `MeshModel.validate()`
-   is not a planar coverage test.
+   vertices, duplicate and crossing edges, and an edge path crossing itself
+   (`self_crossing_edge`) - and an independent raster coverage
+   test confirms the faces tile the fluid, because `MeshModel.validate()`
+   is not a planar coverage test. The coverage lattice cannot see the band
+   scale near a wall, so a second test (`boundary_problems`) measures every
+   named boundary edge against its own chain's point list
+   (`boundary_off_chain`) and requires the edges carrying each chain's name to
+   add up to that chain (`chain_not_covered`): a section exported under the
+   wrong patch name, or a wall edge drifting off the supplied geometry, makes
+   the result invalid. (The index-sum check is the Euler check in another
+   form, `total_index == 4 * euler` for any manifold quad graph; it screens
+   nothing on its own.)
 
 8. **Counts and grading** (`sizing.py`). BlockDrawer forces opposite edges of a
    quadrilateral to share a cell count, so the edges fall into equality
    components. Each component gets the single positive integer that minimises the
    length-weighted squared error against the metric lengths of its members -
-   which for an equality-only constraint is the weighted mean, rounded. An
-   optional global budget scales every component by one factor. Band spokes then
-   receive the requested first-cell width through `set_edge_grading`, and a
-   request BlockDrawer refuses is reported rather than dropped. No mixed-integer
-   dependency is used.
+   which for an equality-only constraint is the weighted mean, rounded. A metric
+   length is the integral of `ds / size` along the edge, taken exactly for a
+   size varying linearly along each segment (its length over the logarithmic
+   mean of the end sizes) after long segments are subdivided at a quarter of
+   the core size. The trapezoid of `1/size` at the end vertices it replaces
+   overcounted every two-point edge leaving the wall - 1.6 times at the
+   default sizing and by up to two orders of magnitude at a first cell of
+   1e-5 of the scale, where it clamped every band at 400 cells. An
+   optional global budget scales every component by one factor, and
+   `sizing.budget_met` says when even the smallest counts exceed it. Band spokes
+   then receive the requested first-cell width through `set_edge_grading`
+   (and so do the two wake lines of a blunt base's strip, the base's own
+   wall-normal edges). A request whose first cell is not smaller than the
+   uniform width `length / cells` is refused and the edge left uniform: it
+   could only be met by cells shrinking away from the wall, and on 30P30N that
+   backwards grading reached a total ratio of 6e-23 and collapsed rows into
+   "inverted" cells. Every refused request is reported rather than dropped.
+   No mixed-integer dependency is used.
 
    Before any count is chosen, `graph.sizing_structure` in the report states
    what the topology alone forces on every later sizing. Two edges in one
@@ -580,23 +660,31 @@ result can be read either way; the session is written whenever the result is
    alignment, first-cell width error, interface size jumps, and the block and
    logical indices of every worst cell.
 
-   Two grids are measured. The **shape grid** samples every block at a fixed
+   Three grids are measured. The **shape grid** samples every block at a fixed
    number of uniform parametric fractions per side (`shape_cells`, default 8),
    so it describes the block map itself and is identical whatever counts and
    grading are chosen later; it is judged against the *shape* limits only:
-   non-orthogonality, equiangle skewness and wall misalignment. The **counts
-   grid** samples the graded mesh nodes the session defines and carries the
-   *sizing* report: aspect ratio, interface size ratio and first-cell width
-   error. Acceptance is reported in these terms, and the report carries an
-   immutable copy of the limits it was judged against so it can never be
-   compared with different defaults later:
+   non-orthogonality, equiangle skewness and wall misalignment. Its values are
+   measured at that resolution and are lower bounds of the continuous
+   extremes. The **fold check** samples the same block map at 32 cells per
+   side (`fold_cells`) and is judged for inversion only, because a fold
+   between the shape grid's samples - a loop in a curved edge - is invisible
+   at eight. The **counts grid** samples the graded mesh nodes the session
+   defines and carries the *sizing* report: aspect ratio, interface size ratio
+   and first-cell width error. The non-orthogonality measured on these grids
+   is the corner-angle deviation from 90 degrees; checkMesh's is face-based,
+   and the two agree for parallelograms only (66 against 60 degrees on the
+   spanned `two_circles`). Acceptance is reported in these terms, and the
+   report carries an immutable copy of the limits it was judged against so it
+   can never be compared with different defaults later:
 
    | term | meaning |
    | ---- | ------- |
-   | `topology_valid` | incidence, planarity, exact domain coverage and periodic compatibility hold, and `MeshModel.validate()` accepted the session |
-   | `untangled` | no sampled cell is inverted on either grid and the minimum scaled Jacobian is positive |
+   | `topology_valid` | incidence, planarity, exact domain coverage, boundary fidelity hold, `MeshModel.validate()` accepted the session and `blockMeshDict` exports from it (a cyclic pair whose edges do not match fails here) |
+   | `grids_evaluated` | the shape grid, the fold check and the counts grid were all measured; when false, every grid-dependent term below is **false**, not vacuously true (`--no-grid-quality` used to report `resolved` and write sessions it had never sampled) |
+   | `untangled` | no sampled cell is inverted on the shape grid, the fold check or the counts grid, and the minimum scaled Jacobian is positive |
    | `within_shape_targets` | every **enabled** shape limit is met on the shape grid; `null` disables one explicitly rather than hiding it behind a huge number |
-   | `sizing_feasible` | no opposite-edge equality component forces a geometric length ratio above `StructureLimits.max_length_ratio` (default 20) or ties a tangential resolution to a wall-normal one - the count-independent statements of `graph.sizing_structure` |
+   | `sizing_feasible` | no opposite-edge equality component - every component, not only the short `worst` table - forces a geometric length ratio above `StructureLimits.max_length_ratio` (default 20) or ties a tangential resolution to a wall-normal one - the count-independent statements of `graph.sizing_structure`. Two exemptions apply, and `sizing.feasibility.failures_without_exemptions` reports the verdict without them: a far-field fan-out component (tangential, longest edge on a non-wall *outer* chain - large far cells, as in every O- and C-grid) is not judged, and a coupling of one body's band normals with another body's tangents through a wake band that lands on it is a `wake_landing_coupling`, not a wall coupling. Both were introduced with the case that needed them (the A-airfoil C-grid, `3fdf23e`; the tandem landing wake, `e116b8d`) |
    | `admissible` | `topology_valid and untangled` - a real mesh, so a session is written for inspection even when it misses a target |
    | `within_sizing_targets` | **informational, not part of `resolved`**: the mesh the default counts and grading define meets the sizing limits |
 
@@ -608,16 +696,33 @@ result can be read either way; the session is written whenever the result is
    limit, the comparison direction, the block and the location, so "below
    target" is never a summary word; a structural failure names the component
    and its extreme edges instead of a block. A tangled, crossed or uncovered
-   candidate writes no session at all; `run` exits 1 for anything short of
-   `resolved` and prints which term failed, then the sizing misses as
-   `sizing (informational)`.
+   candidate, or one whose grids were not evaluated, writes no session at all;
+   `run` exits 1 for anything short of `resolved` and prints which term
+   failed, then the sizing misses as `sizing (informational)`.
+
+   An opt-in stage - C-grid, wake, gap span - commits a trial only when it is
+   admissible *and* does not lower the verdict of the result it replaces
+   (inadmissible < admissible < resolved). The hull far field runs before the
+   annular construction it would replace and is not compared. An exception
+   inside a trial that is not one of the construction's own refusals
+   (`GraphError`, `HullError`, `LayoutError`, `TraceError`, `LayerError`,
+   `DomainError`, `SweepError`) is a defect: its reason says "crashed", it is
+   listed under `trial_crashes`, and the command line prints it.
 
 10. **Session** (`session_emit.py`). Only a graph with no problems and exact
     coverage becomes a `MeshModel`; it is validated, saved, reloaded, validated
     again, rendered headlessly and serialised to `blockMeshDict`. Wall edges keep
     the supplied point list, a circular far field keeps exact arcs, cyclic
     patches are paired reciprocally, and each wall chain is attached as a
-    reference curve.
+    reference curve. Both extrusion patches are `empty`: the output is a 2-D
+    mesh, and a unit-depth slab of `patch` faces failed checkMesh's aspect
+    ratio test for sessions that are fine in 2-D. With
+    `--wall-edge-type spline` every exported spline is sampled span by span
+    with BlockDrawer's own evaluation and compared with the polyline the graph
+    validated: one that leaves it by more than 0.2 percent of its chord, or
+    crosses itself, is exported as that polyline and listed under
+    `session.export_notes` (a teardrop flank's spline overshot by 2.8 percent
+    and folded 40 cells once the edge was refined).
 
 ## Agent-facing operations
 
@@ -640,7 +745,11 @@ and `--wake-fluid-angle`) asks for the C-grid wake cut at every sharp
 trailing edge. Re-quantisation is the same `run` with different metric flags -
 `--first-width-ratio`, `--core-size-ratio`, `--growth`, `--cell-budget` - and
 `--split CELL:CUT` forces an anchor where an agent asks for one. Because the
-run is stateless, that is also how `apply` realises a move.
+run is stateless, that is also how `apply` realises a move: it rebuilds the
+very case the arguments describe, explicit `--outer` chains included, with the
+move's option delta. `--wake-blunt-ratio FRACTION` sets how far apart two
+convex corners may be and still form one blunt base (default 0.02 of the
+perimeter); `--farfield-center X,Y` accepts the origin.
 
 `--layer-height-ratio FRACTION` sets the requested band height as a fraction
 of the domain scale (default 0.256, where the default sizing's wall-normal
@@ -649,17 +758,20 @@ and the shape verdict do not change with the cell sizing.
 `--layer-height-ratio series` uses the series height of the sizing in use. `--max-length-ratio RATIO` sets the
 structural feasibility limit. `--max-wall-turning DEGREES` exposes the largest
 wall turning one annular patch may span before it is cut (default 100). It is the single largest lever
-on near-wall orthogonality, and it is not monotone, which is why the default
-has not been changed:
+on near-wall orthogonality. Measured on this commit, default options otherwise:
 
-| limit | `single_ellipse` blocks / misalignment | `concave_and_convex` | `narrow_gap_tip` misalignment |
-| ----- | -------------------------------------- | -------------------- | ----------------------------- |
-| 100 deg | 12 / 35.8 deg | admissible | 5.2 deg |
-| 45 deg | 33 / 14.8 deg | **inverted cells** (min scaled Jacobian -0.334) | 5.5 deg |
-| 30 deg | 45 / 6.3 deg | admissible | 21.7 deg |
+| limit | `single_ellipse` blocks / misalignment | `concave_and_convex` blocks / misalignment | `narrow_gap_tip` blocks / misalignment |
+| ----- | -------------------------------------- | ------------------------------------------ | -------------------------------------- |
+| 100 deg | 12 / 27.1 deg, admissible | 42 / 43.1 deg, admissible | 57 / 21.7 deg, admissible |
+| 45 deg | 24 / 10.3 deg, **resolved** | 63 / 43.1 deg, admissible | 69 / 21.7 deg, admissible |
+| 30 deg | 48 / 2.9 deg, **resolved** | 63 / 44.5 deg, admissible | 77 / 5.2 deg, admissible |
 
-A tighter limit adds anchors, and the extra anchors expose the same front and
-gate placement problems the remaining limits describe.
+At the review before this commit 45 degrees folded `concave_and_convex` (a
+minimum scaled Jacobian of -0.334), which was the reason the default stayed
+at 100; with the turning barrier in the relaxation none of the three folds.
+The default has not moved yet: a tighter limit doubles the single ellipse's
+block count, `concave_and_convex`'s 43 degrees do not respond to it, and
+the whole corpus has not been re-measured at 45.
 
 `moves.py` generates and screens five families of candidate operation:
 `wall_feature_cavity`, `split_patch`, `split_singularity`, `collapse_strip` and
@@ -671,11 +783,112 @@ false` with the exact reason - which is more useful to an agent than silence.
 `wall_feature_cavity` is not a proposal: each one has already been constructed
 on a copy of the graph and validated completely, so an agent chooses among
 alternatives that are known to work rather than placing vertices. Applying one
-sets `cavity.choices` - a `(feature label, template name)` pair - and re-runs,
-which keeps the command line stateless. A refused alternative carries the exact
-reason, including the two conflicting entity ids for a crossing.
+sets `cavity.choices` - a `(feature label, template name)` pair, replacing any
+earlier choice for that feature - and re-runs, which keeps the command line
+stateless; a chosen template is committed whenever it is valid, even when the
+construction already there scores higher. A refused alternative carries the exact
+reason, including the two conflicting entity ids for a crossing. The
+"Euler/index screening" of moves is the Euler check: index balance is an
+identity for manifold quad graphs.
 
 ## Results
+
+### Current results
+
+Measured on this commit with `research_cli.py run` and default options unless
+stated, every written session checked as exported with `blockdrawer-cli check`
+(OpenFOAM 2606 `blockMesh` and `checkMesh`, `empty` z patches). Shape
+measures are the shape grid's (eight uniform cells per block side); the
+`checkMesh` column gives its verdict with its own maximum non-orthogonality
+and skewness, and the seconds are wall-clock with six runs sharing the
+machine. The subsections after this one record what each construction
+measured when it was introduced; where their numbers differ from these
+tables, these are current.
+
+| run | blocks | verdict | non-orthogonality | wall misalignment | min. scaled Jacobian | `checkMesh` | seconds |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `single_ellipse` | 12 | admissible | 38.7 | 27.1 | 0.78 | Mesh OK (36.1°, skew 0.51) | 7 |
+| `two_circles` | 32 | **resolved** | 64.9 | 7.0 | 0.42 | Mesh OK (63.3°, skew 1.42) | 4 |
+| `three_rotated_ellipses` | 80 | admissible | 80.0 | 64.6 | 0.17 | Mesh OK (79.4°, skew 2.88) | 46 |
+| `concave_and_convex` | 42 | admissible | 65.6 | 43.1 | 0.41 | Mesh OK (60.5°, skew 1.46) | 5 |
+| `four_bodies` | 53 | **resolved** | 65.7 | 13.3 | 0.41 | Mesh OK (64.0°, skew 1.00) | 17 |
+| `sharp_bodies` | 45 | admissible | 76.2 | 10.7 | 0.24 | Mesh OK (74.9°, skew 1.47) | 7 |
+| `narrow_gap_tip` | 57 | admissible | 69.6 | 21.7 | 0.35 | Mesh OK (67.9°, skew 2.07) | 11 |
+| `peanut_body` | 24 | admissible | 85.6 | 41.8 | 0.08 | Mesh OK (79.5°, skew 2.34) | 7 |
+| `skimming_tail` | 57 | admissible | 67.4 | 67.4 | 0.38 | Mesh OK (64.5°, skew 3.12) | 14 |
+| `tandem_foils` | 45 | admissible | 84.9 | 70.5 | 0.09 | Mesh OK (79.9°, skew 2.06) | 18 |
+| `blunt_foil` | 15 | admissible | 70.9 | 70.5 | 0.33 | Mesh OK (68.3°, skew 1.12) | 6 |
+| `tandem_blunt` | 45 | admissible | 83.3 | 70.5 | 0.12 | Mesh OK (79.5°, skew 2.14) | 18 |
+| `staggered_foils` | 37 | inadmissible | - | - | - | - | 16 |
+| `straight_channel` (internal) | 48 | **resolved** | 0.0 | 0.0 | 1.00 | Mesh OK (0.0°, skew 0.00) | 2 |
+| `periodic_hill` (internal) | 33 | **resolved** | 29.2 | 21.2 | 0.87 | Mesh OK (36.2°, skew 0.30) | 3 |
+| `single_ellipse`, rectangle with inlet, outlet and symmetry sides | 15 | **resolved** | 61.9 | 21.0 | 0.47 | Mesh OK (58.7°, skew 1.59) | 2 |
+| `two_circles --span-gaps` | 40 | **resolved** | 66.0 | 7.4 | 0.41 | Mesh OK (57.5°, skew 0.76) | 11 |
+| `two_circles --hull`, rectangle at scale 8 | 88 | **resolved** | 49.6 | 3.0 | 0.65 | Mesh OK (47.0°, skew 0.73) | 12 |
+| `two_circles --hull`, circle at scale 8 | 88 | **resolved** | 42.4 | 3.0 | 0.74 | Mesh OK (36.7°, skew 0.67) | 8 |
+| `make research-tandem` (`tandem_foils --wake`) | 51 | admissible | 70.5 | 21.3 | 0.33 | Mesh OK (69.0°, skew 1.44) | 30 |
+| `make research-blunt-foil` (`blunt_foil --wake`, band 0.05) | 18 | **resolved** | 67.9 | 19.3 | 0.38 | Mesh OK (84.7°, skew 2.39) | 12 |
+| `make research-tandem-15c` (`--wake --hull`, C-shape r = 15) | 110 | admissible | 70.5 | 21.7 | 0.33 | Mesh OK (54.0°, skew 1.53) | 15 |
+| `make research-staggered` (`--wake --hull`, band 0.01) | 85 | inadmissible | - | - | - | - | 489 |
+| `make research-a-airfoil` (C-grid, r = 15, raster 700) | 165 | **resolved** | 50.9 | 12.4 | 0.63 | Mesh OK (42.8°, skew 0.92) | 178 |
+
+Held-out geometries - not used to tune the engine, several of them refused at
+the review that preceded this commit:
+
+| run | blocks | verdict | non-orthogonality | wall misalignment | min. scaled Jacobian | `checkMesh` | seconds |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| circle in a square box | 12 | **resolved** | 45.6 | 5.6 | 0.70 | Mesh OK (42.8°, skew 0.80) | 3 |
+| square cylinder, circle far field | 16 | admissible | 87.0 | 0.4 | 0.05 | Mesh OK (86.8°, skew 1.41) | 15 |
+| square cylinder in a box with equal margins | 16 | admissible | 86.8 | 1.6 | 0.06 | Mesh OK (86.6°, skew 1.20) | 20 |
+| ellipse 10:1 | 15 | admissible | 74.4 | 65.1 | 0.27 | Mesh OK (67.8°, skew 2.04) | 24 |
+| four symmetric circles (degree-4 junction) | 56 | **resolved** | 64.4 | 4.4 | 0.43 | Mesh OK (62.5°, skew 0.91) | 8 |
+| three circles in line | 50 | admissible | 74.9 | 5.3 | 0.26 | Mesh OK (73.9°, skew 1.03) | 8 |
+| NACA 0012, circle far field | 16 | admissible | 87.4 | 35.5 | 0.05 | Mesh OK (85.7°, skew 0.96) | 64 |
+| NACA 0012 `--wake`, circle far field | 19 | admissible | 82.2 | 42.3 | 0.14 | Mesh OK (73.4°, skew 1.76) | 106 |
+| NACA 0012 with a blunt trailing edge, `--wake` | 21 | admissible | 82.3 | 35.7 | 0.13 | Mesh OK (84.4°, skew 1.68) | 46 |
+| NACA 0012, C-grid r = 15, band 0.1 | 165 | **resolved** | 52.9 | 11.8 | 0.60 | Mesh OK (44.0°, skew 0.70) | 288 |
+| NACA 4412 at 8 degrees, C-grid r = 15, band 0.1 | 115 | **resolved** | 57.6 | 17.4 | 0.54 | Mesh OK (46.0°, skew 0.77) | 142 |
+| NACA 4412 with the A-airfoil's options exactly | 115 | **resolved** | 53.9 | 17.5 | 0.59 | Mesh OK (42.2°, skew 1.04) | 102 |
+| A-airfoil turned 2 degrees against the far field (incidence) | 210 | **resolved** | 50.8 | 12.4 | 0.63 | Mesh OK (43.0°, skew 1.10) | 301 |
+| 30P30N, default options | 123 | inadmissible | 266.5 | 53.5 | -0.99 | - | 87 |
+| 30P30N main and flap, `--wake --hull`, C-shape r = 15, band 0.02 | 130 | inadmissible | - | - | - | - | 394 |
+
+The A-airfoil acceptance case under changes that should not matter - the
+raster width, the band height, the wake direction, half the points, the
+point list's start, and the whole set-up turned rigidly - and the Makefile
+options otherwise:
+
+| run | blocks | verdict | non-orthogonality | wall misalignment | min. scaled Jacobian | `checkMesh` | seconds |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| raster 420 | 150 | **resolved** | 51.2 | 12.4 | 0.63 | Mesh OK (42.3°, skew 0.79) | 102 |
+| raster 500 | 170 | **resolved** | 51.0 | 12.4 | 0.63 | Mesh OK (42.4°, skew 0.85) | 176 |
+| raster 600 | 160 | **resolved** | 51.0 | 12.4 | 0.63 | Mesh OK (42.4°, skew 0.72) | 170 |
+| raster 650 | 185 | **resolved** | 51.0 | 12.4 | 0.63 | Mesh OK (42.7°, skew 0.80) | 287 |
+| raster 700 (Makefile) | 165 | **resolved** | 50.9 | 12.4 | 0.63 | Mesh OK (42.8°, skew 0.92) | 178 |
+| raster 750 | 165 | **resolved** | 51.1 | 12.4 | 0.63 | Mesh OK (42.5°, skew 0.79) | 222 |
+| raster 800 | 175 | **resolved** | 51.0 | 12.4 | 0.63 | Mesh OK (42.7°, skew 0.79) | 223 |
+| raster 900 | 180 | **resolved** | 51.0 | 12.4 | 0.63 | Mesh OK (42.5°, skew 0.82) | 251 |
+| raster 1000 | 165 | **resolved** | 50.9 | 12.4 | 0.63 | Mesh OK (42.6°, skew 0.87) | 170 |
+| raster 700, band 0.12 | 165 | **resolved** | 51.9 | 12.4 | 0.62 | Mesh OK (44.5°, skew 1.15) | 157 |
+| raster 700, band 0.18 | 165 | **resolved** | 49.7 | 12.4 | 0.65 | Mesh OK (43.4°, skew 0.92) | 154 |
+| raster 700, wake at 10 degrees | 165 | **resolved** | 50.2 | 10.9 | 0.64 | Mesh OK (42.1°, skew 0.90) | 153 |
+| raster 700, wake at 16 degrees | 165 | **resolved** | 51.8 | 13.9 | 0.62 | Mesh OK (43.4°, skew 0.95) | 157 |
+| raster 700, every second point dropped | 155 | **resolved** | 51.1 | 12.4 | 0.63 | Mesh OK (42.4°, skew 0.67) | 123 |
+| airfoil, far field and wake as explicit chains | 165 | **resolved** | 50.9 | 12.4 | 0.63 | Mesh OK (42.8°, skew 0.92) | 154 |
+| the same turned 2 degrees together | 160 | **resolved** | 51.3 | 12.4 | 0.62 | Mesh OK (43.6°, skew 1.03) | 121 |
+| the same turned 90 degrees together | 180 | **resolved** | 50.9 | 12.4 | 0.63 | Mesh OK (42.9°, skew 1.00) | 208 |
+| raster 700, point list starting at point 468 | 99 | **resolved** | 55.6 | 12.4 | 0.56 | Mesh OK (53.5°, skew 0.62) | 138 |
+| raster 700, point list starting at point 741 | 99 | **resolved** | 50.9 | 12.4 | 0.63 | Mesh OK (47.9°, skew 0.92) | 137 |
+| raster 700, point list starting at point 1326 | 99 | **resolved** | 50.9 | 12.4 | 0.63 | Mesh OK (43.0°, skew 0.93) | 147 |
+| raster 700, closing point dropped | 165 | **resolved** | 50.9 | 12.4 | 0.63 | Mesh OK (42.8°, skew 0.92) | 136 |
+
+Every one of these is resolved and passes `checkMesh`, with 12.4 degrees of
+wall misalignment (10.9 and 13.9 with the wake turned to 10 and 16 degrees);
+the review before this commit found four of the nine
+raster widths and two of the four start points unresolved or refused, and
+the 2-degree incidence change refused. The block count still follows the
+raster (150 to 185) and the start point (165 from the trailing edge, 99 from
+three other starts), because the C-grid's gate count does.
 
 ### Explicit outer boundary
 
@@ -927,7 +1140,7 @@ python experiments/agentic_topology/research_cli.py run --case two_circles \
 | two circles, rectangle at scale 8 | 45 blocks, admissible, 78 degrees | **88 blocks, resolved** |
 | two circles, circle at scale 8 | 42 blocks, admissible, 78 degrees | **88 blocks, resolved** once the levels map between the kinks; by plain fraction the peanut-shaped level twisted one sector onto the round boundary to 79 degrees |
 | tandem with a blunt rear edge (`tandem_blunt`), C-shape of radius 15, `--wake` | - | **113 blocks, admissible**: the front wake lands on the rear foil, the rear's base leaves the hull as three strips to the outlet |
-| 30P30N main and flap, C-shape of radius 15, `--wake`, band 0.02 | 75 blocks, inadmissible | **179 blocks, admissible**, closed far field with four levels (0.24 to 1.92); neither wake applies yet (the main's passes over the flap, the flap's base leaves the hull), and the near field's worst block is at 89 degrees |
+| 30P30N main and flap, C-shape of radius 15, `--wake`, band 0.02 | 75 blocks, inadmissible | **179 blocks, admissible** when measured, closed far field with four levels (0.24 to 1.92); neither wake applies yet (the main's passes over the flap, the flap's base leaves the hull), and the near field's worst block is at 89 degrees. **Inadmissible on the current commit** (see the remaining limits) |
 
 The near field is the annular producer's own: the hull is just its outer
 boundary, so the 51 to 63 near-field blocks are the same bands, wakes and
@@ -998,10 +1211,10 @@ Jacobian 0.402, maximum non-orthogonality 66.32 degrees and wall misalignment
 Its session reloads and exports with the same curved boundary sections.
 OpenFOAM 2606 also accepts that session: `blockMesh` produces 3,145 cells,
 6,504 points and 12,688 faces; `checkMesh` reports `Mesh OK`, maximum
-non-orthogonality 59.58 degrees, skewness 0.495 and aspect ratio 80.71. The
-production suite runs 410 tests (27 integration tests skipped there); those
-27 pass separately against OpenFOAM. The research suite runs 113 tests with
-the former expected failure for `skimming_tail`, which now passes.
+non-orthogonality 59.58 degrees, skewness 0.495 and aspect ratio 80.71. At
+that checkpoint the production suite ran 410 tests (27 integration tests
+skipped there, passing separately against OpenFOAM) and the research suite
+113, with the former expected failure for `skimming_tail`, which then passed.
 
 The physical coupling audit corrects a false rejection at the previous
 checkpoint. The mouth puts a cross-gap `core_rung`, the merged `ring`, and a
@@ -1189,16 +1402,72 @@ exactly the mistake the baseline made.
 
 ## Generality
 
-No step inspects a case, chain or body name to choose topology. There is no
-assumed streamwise direction, unit scale, body count or junction count; every
+No step inspects a case, chain or body name to choose topology. That now
+includes the names of the outer chains: the C-grid's and the hull's outlet
+checks measure stations from the bottom leg round the outer loop, so naming
+the legs differently no longer switches either construction off
+(`test_chain_names_do_not_decide_the_c_grid`). There is no assumed
+streamwise direction, unit scale, body count or junction count; every
 tolerance derives from the domain scale, the local feature size, curvature,
-metric size or numerical precision. The self-tests cover one ellipse, two
-circles of unequal radius, three rotated ellipses, a concave body with a convex
-one, four bodies, a body with a sharp tip, a sharp tip aimed into a narrow gap
-beside a second body, a body whose only sharp features are two concave corners,
-a sharp tail skimming a second body, a rectangular channel with inlet and
-outlet, and the periodic hill - plus permuted, reversed, translated, rotated
-and 1000x scaled copies.
+metric size or numerical precision - BlockDrawer's own convexity test
+included, which compares a corner's cross product with its two edge lengths,
+so a fixture drawn at a thousandth of its size is still a valid topology.
+
+The self-tests cover one ellipse, two circles of unequal radius, three rotated
+ellipses, a concave body with a convex one, four bodies, a body with a sharp
+tip, a sharp tip aimed into a narrow gap beside a second body, a body whose
+only sharp features are two concave corners, a sharp tail skimming a second
+body, a blunt-based foil, tandem foils with a sharp and with a blunt rear
+edge, staggered foils, a rectangular channel with inlet and outlet, a channel
+with a wall and a symmetry plane, the periodic hill, and domains that must be
+refused with their reason - a body inside another, a loop touching itself, a
+body flush with the outer boundary, points BlockDrawer would merge.
+
+**Equivalent inputs.** Each of the thirteen external fixtures was run as
+twelve equivalent inputs: rotations by 37, 90 and 180 degrees, a mirror,
+scaling by 1000, a translation by 1e4, the start point a third of the way
+round, both reversals (keeping the first point, and plain), every segment
+densified, and a repeated closing point. None of them changes its block
+graph, at raster widths 420 and 700 alike (graph only); before the fixes
+listed here nine of the thirteen did. Six representation details used to
+decide the layout, and each is now a function of the geometry:
+
+* the body frame - the scale every tolerance, the far field and the band
+  request derive from - is measured on the closed loop; it dropped the
+  closing segment and moved by up to 15 percent with the start point;
+* bodies are ordered by their area about their own centroid, not on raw
+  coordinates, which a translation by 1e4 rounded differently;
+* curvature anchors come from the supplied vertices' turning convolved with
+  a narrow periodic Gaussian and are placed between stations by a parabola,
+  not from a resampling that starts at the list's first point;
+* a patch is split where half its turning is reached, with the turning
+  spread over each vertex's two half-segments, so a gate passing a strongly
+  turning vertex no longer moves the split by several vertices;
+* gate unwrapping steps between raw stations, so two gates on one station
+  are a zero step and not a full turn, and an unpinned gate is clamped only
+  when the gates would otherwise wind more than once round the wall;
+* tight concave runs ignore collinear vertices, so densifying a wall does not
+  change which bends are rounded reflex corners.
+
+`EquivalentInputTests` runs five fixtures under the half turn, the mirror,
+the shifted start, the plain reversal and densification on every suite run,
+comparing the whole graph summary; with an earlier, half-wall form of the
+gate clamp back in, six of its subtests fail.
+
+The block graph is invariant; its geometry is not quite. Vertex positions
+follow the bisector polylines' discretisation, whose walk starts at the
+junction the raster finds first, and the relaxation sweeps its variables in
+ring order from that junction, so the gates of the same graph land up to a
+pixel apart in different orientations. Mostly that moves the shape measures
+by a few degrees; on two fixtures it is more (see the remaining limits).
+
+**Raster width.** Every fixture gives the same block graph at raster widths
+400, 700 and 1000. A junction whose equidistance refinement stops above
+1e-6 of its clearance is two junctions whose pixel clusters merged; the
+diagram is then rebuilt 1.5 times finer, up to three times, and a junction
+that still does not converge is reported in the notes rather than kept
+(`four_bodies` at widths 400 and 420 needs one refinement). The A-airfoil
+C-grid still follows the raster through its gate count (see its results).
 
 `narrow_gap_tip` is the sharp-feature regression fixture. Its tip carries a 315
 degree fluid sector and the medial scaffold bends hard around the 0.11-wide gap,
@@ -1219,14 +1488,12 @@ with bisector spokes to the mitre; its quality misses are the 45 degree block
 corners that construction leaves at the waist. `skimming_tail` is a sharp tail
 whose lower flank runs horizontally two percent of the scale above a hull
 whose highest point lies just downstream of the tip, the configuration a
-deployed flap makes with the main element; a band cannot be built in the slot
-and the fixture is **expected to fail** until the gap topology changes. Each
-carries a stable test on where the failure is located and, while it fails, an
-`expectedFailure` on admissibility, so the moment a construction handles the
-fixture the suite reports an unexpected success and the test has to be
-flipped. Every synthetic fixture gives the same block graph at raster widths
-400, 700 and 1000, and a test guards that; 30P30N does not (see the remaining
-limits).
+deployed flap makes with the main element. It is admissible since the
+clearance-jump rule grades the hull's gates out of the slot; its misses are
+67 degrees of wall misalignment at the tip's own seam and a forced length
+ratio of 111. Each carries a test on where its misses are. No `expectedFailure`
+is open in the suite; the remaining 30P30N failure modes - the flap-gap
+crossing and the slot under the main's wake - have no small fixture yet.
 
 ## Dependencies and limits
 
@@ -1282,11 +1549,35 @@ installations whose LAPACK/BLAS build is broken.
   leaves the four junctions identical to four decimals but gives 106 faces
   and 18 singularities against 115 and 24, with different cavity templates
   chosen: the anchor set and the relaxation depend on the branch
-  discretisation. Every synthetic fixture is raster-invariant, so this is not
-  yet reproduced in a small case.
+  discretisation (measured before the review fixes). Every synthetic fixture
+  is raster-invariant at widths 400, 700 and 1000, so this is not reproduced
+  in a small case; the A-airfoil C-grid's gate count, and with it its block
+  count, follows the raster (150 to 185 blocks over widths 420 to 1000) and
+  the start point (165 or 99), although every variant measured resolves.
+* **The geometry of a graph still follows the orientation.** The block graph
+  is the same for every equivalent input, but the bisector polylines' walk
+  starts at the junction the raster finds first, and the relaxation sweeps
+  its gates in ring order from it, so the same graph's gates land up to a
+  pixel apart. On `concave_and_convex` a half turn moves the rounded cove's
+  anchor half a pixel to the other side of the axis and the relaxation then
+  leaves a core patch at the cove mouth with one inverted sampled cell:
+  admissible in every other orientation, inadmissible turned through 180
+  degrees. `three_rotated_ellipses` has 13 or 65 degrees of wall
+  misalignment depending on the orientation. The wake stages inherit it:
+  under `--wake`, `blunt_foil` and `sharp_bodies` keep their graph under
+  rotation, mirror, start and reversal, `tandem_foils` keeps 51 blocks except
+  mirrored (55), and `tandem_blunt` loses both wakes turned through 180 or
+  270 degrees - one trial has an inverted sampled cell, the other a front
+  crossing a core spoke - where it builds both otherwise. Starting each ring at its
+  largest-clearance junction fixes the rotations of the second but not the
+  first; an order-free relaxation and bisector vertices placed from a
+  canonical start are the remaining work.
 * **A band block may span 100 degrees of wall turning**, which is what gives
-  the single ellipse its 36 degree wall misalignment under transfinite
-  interpolation. `--max-wall-turning` exposes the limit; the measured table
+  the single ellipse its 27 degree wall misalignment under transfinite
+  interpolation. The relaxation keeps that limit (a barrier on each band
+  patch's turning), so thin ellipses up to 15:1 are admissible; band blocks
+  are still judged by their straight corner quadrilateral, so a body much
+  thinner than that at its tips can still fail its band. `--max-wall-turning` exposes the limit; the measured table
   above shows why the default has not moved.
 * **The through-cut cavity template is built for three sectors only.** More
   sectors need a transition strip between the sector chain and the core
@@ -1304,18 +1595,42 @@ installations whose LAPACK/BLAS build is broken.
   `--wake` and a C-shaped far field, and needs exactly one body, one planned
   wake and the four-chain cap-leg-outlet-leg boundary. A rectangle or a circle
   around a single airfoil still gets the annular construction and its wake
-  rewrite. A blunt trailing edge, a wake ending on another body, and the
-  multi-element case remain open. The far-field spokes are straight lines
+  rewrite. Several bodies in a C-shaped far field take the hull far field
+  instead (`--hull`). The far-field spokes are straight lines
   from the outermost level set to the cap, so their angle to that level set
   is what the sector count allows (51 degrees non-orthogonality on the
   A-airfoil); curved spokes would improve it.
-* **The wake separatrix is opt-in and straight.** One line per sharp feature,
-  from the feature through the body's own ring to the outer boundary. A wake
-  that would enter another body's cell - the slat and main trailing edges of
-  30P30N, every teardrop tip in `sharp_bodies` and `narrow_gap_tip` - is
-  refused with that reason; a wake ending on another body's front, or a curved
-  wake following the medial branch, is not built. The wake band is as thick as
+* **The wake separatrix is opt-in and straight.** One line per sharp feature
+  or blunt base, from the feature through the body's own ring: to the outer
+  boundary, onto a downstream body's band, or through another body's cell
+  (lens and three spokes). A wake that would cross another medial branch,
+  meet the outer boundary across a chain break, or enter a third body's cell
+  is refused with its reason; a curved wake following the medial branch is
+  not built. Wake rewrites whose anchors are ring neighbours do not compose:
+  each writer expects the untouched annular faces round its anchor, so a
+  slotted flap whose own trailing edge sits beside the main's wake fails.
+  Without `--wake-direction` every sharp vertex, a sharp leading edge
+  included, gets a wake along its own bisector. The wake band is as thick as
   the band at the edge, which the clearance cap makes thin at a sharp tip.
+  The blunt-base rule is a cliff at two percent of the perimeter; a base up
+  to four times wider along a nearly straight wall is refused with the
+  remedy (`--wake-blunt-ratio`) rather than cut from one corner. The base
+  strip's wall-normal edges are graded to the first-cell width, but the
+  first-cell check does not measure the strip.
+* **The hull far field continues one exiting wake only.** Two exiting
+  wakes - 30P30N's main and flap, the staggered foils - fall back to the
+  annular construction, so the through-cell wake and its lens are not yet
+  part of a complete exported result. 30P30N's main and flap with `--hull`
+  regressed with the gate-unwrapping clamp: its hull's first level gives a
+  non-convex block in one of 18 sectors and the annular fallback has an edge
+  crossing, where the committed engine's plain pin release built the hull
+  (179 blocks, admissible; 174 with the current code and no clamp). Leaving
+  the clamp out restores it but loses the
+  tandem front wake and gives the A-airfoil's C-grid layout back the
+  committed engine's 11 gates at width 500, where that engine left the
+  airfoil unresolved. The hull trial is not compared with the
+  annular result it replaces; the C-grid, wake and spanning trials are, and
+  never lower the verdict.
 * **The outer boundary is one site.** Its chains become patches and its
   corners and chain breaks become gates, but a wall chain on the outer
   boundary gets no boundary-layer band from the external producer: the bands

@@ -56,6 +56,7 @@ from pointlist import (  # noqa: E402
     parse_curve_argument,
     parse_direction,
     parse_outer_argument,
+    parse_point,
     parse_sides,
     read_open_point_list,
     read_point_list,
@@ -87,7 +88,7 @@ def add_input_arguments(parser: argparse.ArgumentParser) -> None:
         help="absolute radius of a circle or C-shaped far field instead of --farfield-scale",
     )
     parser.add_argument(
-        "--farfield-center", type=parse_direction, default=None, metavar="X,Y",
+        "--farfield-center", type=parse_point, default=None, metavar="X,Y",
         help="absolute centre of a circle or C-shaped far field (default: the body frame centre)",
     )
     parser.add_argument(
@@ -150,6 +151,14 @@ def add_input_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--wake-direction", type=parse_direction, default=None, metavar="DX,DY",
         help="fixed wake direction for every wake instead of each feature's bisector",
+    )
+    parser.add_argument(
+        "--wake-blunt-ratio", type=float, default=wake.WakeOptions.blunt_ratio,
+        metavar="FRACTION",
+        help=(
+            "two convex corners within this fraction of the perimeter are one blunt "
+            "base, built with the base template (default %(default)s)"
+        ),
     )
     parser.add_argument(
         "--wake-fluid-angle", type=float, default=wake.WakeOptions.fluid_angle,
@@ -282,6 +291,7 @@ def build_options(arguments) -> pipeline.PipelineOptions:
             enabled=arguments.wake,
             direction=arguments.wake_direction,
             fluid_angle=arguments.wake_fluid_angle,
+            blunt_ratio=arguments.wake_blunt_ratio,
         ),
         grid_width=arguments.width,
         farfield_scale=arguments.farfield_scale,
@@ -331,8 +341,14 @@ def read_outer(arguments):
     return chains
 
 
-def run_case(arguments) -> pipeline.PipelineResult:
-    options = build_options(arguments)
+def run_case(arguments, options: pipeline.PipelineOptions | None = None) -> pipeline.PipelineResult:
+    """Build the case the arguments describe; ``options`` overrides theirs.
+
+    ``apply`` re-runs through here with the move's option delta, so the
+    domain - including an explicit ``--outer`` - is the one the move was
+    computed for.
+    """
+    options = options or build_options(arguments)
     outer = read_outer(arguments)
     if arguments.case and arguments.case in cases.INTERNAL_CASES:
         domain = pdm.from_internal_case(cases.INTERNAL_CASES[arguments.case]())
@@ -401,8 +417,11 @@ def write_artifacts(result, arguments) -> list[Path]:
             )
     elif getattr(arguments, "session", None):
         analysis["session_not_written"] = (
-            "the topology is not a mesh - it is crossed, uncovered, or has an "
-            "inverted sampled cell - so no partial session is written"
+            "the sampled grids were not evaluated, so the result is not proven "
+            "to be a mesh and no session is written"
+            if result.topology_valid and not result.grids_evaluated
+            else "the topology is not a mesh - it is crossed, uncovered, or has "
+            "an inverted sampled cell - so no partial session is written"
         )
     if result.admissible and not result.resolved:
         analysis.setdefault("session", {})["below_quality_targets"] = (
@@ -458,6 +477,17 @@ def command_run(arguments) -> int:
             result.resolved,
         )
     )
+    for crash in result.crashes:
+        print(
+            f"trial crashed ({crash['stage']}): {crash['error']} - a defect, not a refusal",
+            file=sys.stderr,
+        )
+    if result.topology_valid and not result.grids_evaluated:
+        print(
+            "grid quality not evaluated: untangled, admissible and resolved "
+            "are false because nothing was sampled",
+            file=sys.stderr,
+        )
     if not result.topology_valid or not result.untangled:
         for error in result.errors:
             print(f"{error['stage']} stage failed: {error['error']}", file=sys.stderr)
@@ -579,15 +609,8 @@ def command_focus(arguments) -> int:
 
 
 def _rerun(arguments, options):
-    if arguments.case and arguments.case in cases.INTERNAL_CASES:
-        domain = pdm.from_internal_case(cases.INTERNAL_CASES[arguments.case]())
-        return pipeline.run_internal(domain, options)
-    if arguments.case:
-        names, loops = cases.CASES[arguments.case]()
-        return pipeline.run_external(names, loops, options)
-    names = [name for name, _path in arguments.curve]
-    loops = [read_point_list(path) for _name, path in arguments.curve]
-    return pipeline.run_external(names, loops, options)
+    """The same case with different options (``apply``): see ``run_case``."""
+    return run_case(arguments, options)
 
 
 def build_parser() -> argparse.ArgumentParser:
