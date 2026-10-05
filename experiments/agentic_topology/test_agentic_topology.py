@@ -948,6 +948,59 @@ class EquivalentInputTests(unittest.TestCase):
                     self.assertEqual(result.graph.summary(), reference.graph.summary())
 
 
+class HeldOutEquivalentInputTests(unittest.TestCase):
+    """The same property on simple bodies that no layout rule was tuned on.
+
+    Each still fails, and carries ``expectedFailure`` until it is fixed (the
+    reference is the list as generated):
+
+    * ``circle_24``: 18 blocks, 21 reversed or with any shifted start;
+    * ``ellipse_2to1_40``: 12 blocks, 18 starting five vertices later;
+    * ``ellipse_10to1``: 15 blocks, 21 to 27 reversed, densified or one or
+      five vertices on, and topology-invalid starting a third of the way round;
+    * ``naca0012_coarse``: 19 blocks, topology-invalid reversed.
+
+    The coarse lists space their vertices wider than the curvature smoothing,
+    so every vertex is its own curvature peak and the anchors are picked among
+    near-ties by list position - or by round-off: the same 24-gon and 10:1
+    ellipse generated another way, 9e-16 apart, give 21 and 18 blocks.
+    """
+
+    VARIANTS = {
+        **EquivalentInputTests.VARIANTS,
+        "start one vertex on": lambda loops: [np.roll(np.asarray(loop), -1, axis=0) for loop in loops],
+        "start five vertices on": lambda loops: [np.roll(np.asarray(loop), -5, axis=0) for loop in loops],
+    }
+
+    def assert_follows_the_geometry_only(self, name):
+        options = dataclasses.replace(CAVITY_FAST, evaluate_grid=False)
+        names, loops = cases.HELD_OUT[name]()
+        reference = pipeline.run_external(names, loops, options)
+        self.assertTrue(reference.topology_valid, (name, reference.problems))
+        for label, variant in self.VARIANTS.items():
+            result = pipeline.run_external(names, variant(loops), options)
+            with self.subTest(case=name, variant=label):
+                self.assertIsNotNone(result.graph, result.errors)
+                self.assertTrue(result.topology_valid, result.problems)
+                self.assertEqual(result.graph.summary(), reference.graph.summary())
+
+    @unittest.expectedFailure
+    def test_a_coarse_circle(self):
+        self.assert_follows_the_geometry_only("circle_24")
+
+    @unittest.expectedFailure
+    def test_a_coarse_ellipse(self):
+        self.assert_follows_the_geometry_only("ellipse_2to1_40")
+
+    @unittest.expectedFailure
+    def test_a_thin_ellipse(self):
+        self.assert_follows_the_geometry_only("ellipse_10to1")
+
+    @unittest.expectedFailure
+    def test_a_coarse_naca_section(self):
+        self.assert_follows_the_geometry_only("naca0012_coarse")
+
+
 class DiagnosticTests(unittest.TestCase):
     def test_coverage_sees_a_removed_block(self):
         # This one mutates what it is given, so it must not share a cached run.
@@ -2032,8 +2085,8 @@ class RoleAndStructureTests(unittest.TestCase):
 class RasterInvarianceTests(unittest.TestCase):
     """The raster decides connectivity only; the block graph must not follow it.
 
-    Every synthetic fixture gives the same graph at widths 400, 700 and 1000.
-    The 30P30N acceptance geometry does not: at width 1400 it has 106 faces and
+    Every synthetic fixture gave the same graph at widths 400, 700 and 1000
+    when measured; this test checks two of them at 300 and 600.  The 30P30N acceptance geometry does not: at width 1400 it has 106 faces and
     18 singularities against 115 and 24 at width 700, with the same four
     junctions.  Until that is reproduced in a small fixture, this test guards
     the property where it holds.

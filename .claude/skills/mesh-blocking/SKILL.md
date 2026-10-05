@@ -20,12 +20,18 @@ acceptance term or an option changes there, update the decision points here.**
 ## 1. Collect before drawing
 
 - **Geometry**: one closed point list per solid body (`x y` per line), or a
-  CAD file assembled into closed contours. Orientation, start point and
-  point density do not change the engine's block graph; the tools normalise
-  them. (Gate positions can still move by a raster pixel between
-  orientations, which has flipped one fixture's verdict: judge a candidate in
-  the orientation you export.) Keep the supplied points; never resample geometry from a
-  picture or a raster.
+  CAD file assembled into closed contours. On the engine's thirteen test
+  fixtures, orientation, start point and point density do not change the
+  block graph. Off the corpus they can: a 24-gon, a 40-point ellipse, a
+  180-point 10:1 ellipse and a NACA 0012 with 35 points per side change their
+  graph with the start point or the direction, and two of them become
+  topology-invalid (`HeldOutEquivalentInputTests`). No point spacing is known
+  to be safe yet, so when a run is refused or unresolved, retry with the list
+  reversed and with a shifted start before changing anything else, and keep
+  the best verdict. Gate positions can also move by a
+  raster pixel between orientations, which has flipped one fixture's
+  verdict: judge a candidate in the orientation you export. Keep the
+  supplied points; never resample geometry from a picture or a raster.
 - **Physics**: Reynolds number and the target first-point $y^+$; Mach and angle
   of attack are solver inputs - keep the chord aligned and impose incidence
   through the free-stream velocity. Far-field distance: at least 30 chords for
@@ -204,8 +210,10 @@ as `domain.domain_scale`). Read the report's
 acceptance terms - `topology_valid`, `grids_evaluated`, `untangled`,
 `within_shape_targets`, `sizing_feasible`, `admissible`, `resolved` - and the
 refusal reasons (`trial_crashes` lists defects, never geometry); with
-`--no-grid-quality` nothing is sampled, so the grid terms are false and no
-session is written; the
+`--no-grid-quality` the annular result is not sampled, so its grid terms are
+false and it writes no session. An opt-in trial (`--wake`, the C-grid,
+`--hull`, `--span-gaps`) always samples its own grids to be judged, so a trial
+that commits is fully evaluated and does write its session; the
 `describe`, `cavities`, `candidates`, `apply --move` and `focus` subcommands
 let you choose among validated alternatives instead of placing vertices.
 

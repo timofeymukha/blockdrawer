@@ -253,7 +253,11 @@ def add_input_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--no-grid-quality",
         action="store_true",
-        help="skip the sampled transfinite-grid evaluation",
+        help=(
+            "skip the sampled transfinite-grid evaluation of the annular "
+            "result, which then fails closed and writes no session; opt-in "
+            "trials still sample their own grids to be judged"
+        ),
     )
     parser.add_argument(
         "--no-reference-curves",

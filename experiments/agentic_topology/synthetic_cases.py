@@ -552,6 +552,38 @@ CASES = {
 
 
 # ---------------------------------------------------------------------------
+# Held-out geometries
+# ---------------------------------------------------------------------------
+
+
+def naca_symmetric(thickness: float = 0.12, per_side: int = 35) -> np.ndarray:
+    """A closed NACA four-digit symmetric section of unit chord, anticlockwise.
+
+    Cosine-spaced in chord with ``per_side`` stations on each surface, the
+    trailing edge closed to one sharp vertex and listed first.
+    """
+    beta = np.linspace(0.0, math.pi, per_side)
+    x = 0.5 * (1.0 - np.cos(beta))
+    y = 5.0 * thickness * (
+        0.2969 * np.sqrt(x) - 0.126 * x - 0.3516 * x**2 + 0.2843 * x**3 - 0.1036 * x**4
+    )
+    upper = np.column_stack((x[::-1], y[::-1]))
+    lower = np.column_stack((x[1:-1], -y[1:-1]))
+    return np.vstack((upper, lower))
+
+
+# Simple single bodies that no layout rule was tuned on.  Coarse point lists
+# are the point: the vertex spacing is wider than the curvature smoothing, so
+# they probe whether the layout depends on where a list starts.
+HELD_OUT = {
+    "circle_24": lambda: (["body"], [circle((0.0, 0.0), 1.0, 24)]),
+    "ellipse_2to1_40": lambda: (["body"], [ellipse((0.0, 0.0), 2.0, 1.0, 0.0, 40)]),
+    "ellipse_10to1": lambda: (["body"], [ellipse((0.0, 0.0), 1.0, 0.1, 0.0, 180)]),
+    "naca0012_coarse": lambda: (["foil"], [naca_symmetric(0.12, 35)]),
+}
+
+
+# ---------------------------------------------------------------------------
 # Explicit outer boundaries
 # ---------------------------------------------------------------------------
 

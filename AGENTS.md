@@ -338,9 +338,16 @@ them in the canvas widgets.
   reflection, reversal, start point, scaling, translation, densification
   and raster width (`EquivalentInputTests` guards five of them); the
   geometry of that graph, and on `concave_and_convex` turned through 180
-  degrees the verdict, still follow the orientation. A regression fixture
-  that reproduces a known failure carries an `expectedFailure` test while it
-  fails, so a fix cannot land unnoticed; none is open now. It may use NumPy and Pillow and keeps its own self-tests beside it.
+  degrees the verdict, still follow the orientation. The invariance holds
+  on those fixtures only: coarse or thin held-out bodies (a 24-gon, a
+  40-point ellipse, a 10:1 ellipse, a 35-point-per-side NACA 0012) change
+  their graph with the start point or the direction, two become
+  topology-invalid, and round-off alone can change the graph of a symmetric
+  list. The opt-in trials always sample their own grids, so a trial that
+  commits writes its session even under `--no-grid-quality`. A regression
+  fixture that reproduces a known failure carries an `expectedFailure` test
+  while it fails, so a fix cannot land unnoticed; the four held-out bodies
+  in `HeldOutEquivalentInputTests` are open. It may use NumPy and Pillow and keeps its own self-tests beside it.
   It imports BlockDrawer but nothing in `blockdrawer/` may import it, and none
   of its numerical code belongs in the package until it earns its way in. Its
   experimental agent operations stay in `research_cli.py`; do not widen the

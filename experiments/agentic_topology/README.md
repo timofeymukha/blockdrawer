@@ -1454,7 +1454,29 @@ the shifted start, the plain reversal and densification on every suite run,
 comparing the whole graph summary; with an earlier, half-wall form of the
 gate clamp back in, six of its subtests fail.
 
-The block graph is invariant; its geometry is not quite. Vertex positions
+**Off the corpus the property does not hold.** These six fixes were chosen
+and measured on the thirteen fixtures. `HeldOutEquivalentInputTests` runs
+four simple bodies that no rule was tuned on, under the same five inputs
+plus starts one and five vertices on; each still fails and carries
+`expectedFailure`:
+
+| body | as generated | equivalent inputs |
+| --- | --- | --- |
+| circle, 24 points | 18 blocks | 21 reversed or with any shifted start |
+| ellipse 2:1, 40 points | 12 blocks | 18 starting five vertices on |
+| ellipse 10:1, 180 points | 15 blocks | 21 to 27 reversed, densified or one or five vertices on; topology-invalid a third of the way round |
+| NACA 0012, 35 points per side | 19 blocks | topology-invalid reversed |
+
+The 24-gon and the 10:1 ellipse generated another way, 9e-16 apart, give 21
+and 18 blocks: on these lists round-off alone decides the graph. The likely
+cause is the curvature anchors. The smoothing width, 0.004 of the
+perimeter, is narrower than the vertex spacing of a coarse list, so every
+vertex becomes its own curvature peak, and the anchors are chosen among
+near-ties by list position. The invariance claim is therefore a property of
+the thirteen fixtures, not of the construction.
+
+On the thirteen fixtures the block graph is invariant; its geometry is not
+quite. Vertex positions
 follow the bisector polylines' discretisation, whose walk starts at the
 junction the raster finds first, and the relaxation sweeps its variables in
 ring order from that junction, so the gates of the same graph land up to a
@@ -1491,8 +1513,9 @@ whose highest point lies just downstream of the tip, the configuration a
 deployed flap makes with the main element. It is admissible since the
 clearance-jump rule grades the hull's gates out of the slot; its misses are
 67 degrees of wall misalignment at the tip's own seam and a forced length
-ratio of 111. Each carries a test on where its misses are. No `expectedFailure`
-is open in the suite; the remaining 30P30N failure modes - the flap-gap
+ratio of 111. Each carries a test on where its misses are. The open
+`expectedFailure` tests are the four held-out equivalent-input bodies (see
+"Equivalent inputs"); the remaining 30P30N failure modes - the flap-gap
 crossing and the slot under the main's wake - have no small fixture yet.
 
 ## Dependencies and limits
@@ -1554,8 +1577,21 @@ installations whose LAPACK/BLAS build is broken.
   in a small case; the A-airfoil C-grid's gate count, and with it its block
   count, follows the raster (150 to 185 blocks over widths 420 to 1000) and
   the start point (165 or 99), although every variant measured resolves.
-* **The geometry of a graph still follows the orientation.** The block graph
-  is the same for every equivalent input, but the bisector polylines' walk
+* **Coarse and thin bodies change their block graph with the start point.**
+  A 24-gon, a 40-point ellipse, a 10:1 ellipse and a NACA 0012 with 35
+  points per side change their graph under a shifted start or a reversal,
+  and the last two become topology-invalid. On the two symmetric lists a
+  9e-16 perturbation also changes the graph. The likely cause is curvature
+  anchors on lists coarser than the smoothing width, chosen among near-ties
+  (`HeldOutEquivalentInputTests`, four `expectedFailure` tests).
+* **`--no-grid-quality` does not reach the opt-in trials.** The C-grid,
+  wake, hull and spanning trials always sample their own grids, because they
+  are judged before they commit. A trial that commits under the flag
+  therefore carries a fully evaluated verdict and writes its session, while
+  the annular result alone fails closed and writes none.
+* **The geometry of a graph still follows the orientation.** On the
+  thirteen fixtures the block graph is the same for every equivalent input,
+  but the bisector polylines' walk
   starts at the junction the raster finds first, and the relaxation sweeps
   its gates in ring order from it, so the same graph's gates land up to a
   pixel apart. On `concave_and_convex` a half turn moves the rounded cove's
