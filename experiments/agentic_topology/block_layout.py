@@ -153,6 +153,11 @@ class Patch:
         )
 
     def wall_turning(self) -> float:
+        # The section polyline's vertex turnings: a vertex under a gate
+        # belongs to neither block.  (Read as the density ``TurningDensity``
+        # defines, half of a 10:1 ellipse's 20-degree tip vertex fell to each
+        # neighbouring patch and the layout, tuned to this sum, lost its
+        # band; the density serves the split midpoint only.)
         return g2.total_turning(self.wall)
 
     def ring_turning(self) -> float:
@@ -319,8 +324,26 @@ MERGE_FRACTION = 0.1
 PEAK_DROP = 0.02
 PEAK_WINDOW = 0.05
 # Width of the Gaussian that turns vertex turning into curvature, as a
-# fraction of the perimeter: the old resampling's smoothing reach.
+# fraction of the perimeter: the old resampling's smoothing reach.  It is a
+# floor: a vertex's kernel is at least as wide as its spacing to the
+# neighbouring turning vertices, since a point list has no curvature below
+# its own resolution (on a 24-gon every vertex used to be its own peak).
 CURVATURE_SMOOTHING = 0.004
+# A vertex turning less than this is collinear with its neighbours and does
+# not count as a sample of the wall's curvature (``layers.tight_concave_runs``
+# ignores the same vertices), so densifying a wall changes no kernel width.
+COLLINEAR_TURNING = 1.0e-9
+# Peaks whose heights differ by less than this fraction are one group: the
+# anchor limit takes a whole group or none of it, never a list-order prefix.
+PEAK_TIE = 1.0e-3
+# A curvature peak where the wall turns a corner's worth (``corner_turn``)
+# within this fraction of the perimeter on each side is a rounded convex
+# corner - a thin ellipse's tip, an airfoil's nose - and its gate is forced
+# and pinned like a sharp corner's: a band block whose wall wraps a nose of
+# radius a hundredth of the chord is a bow-tie at any height, and the
+# relaxation, which judges straight quads, slid such gates a sixth of the
+# radius off the tip.  (``layers.tight_concave_runs`` is the concave case.)
+TIP_WINDOW = 0.01
 
 
 def curvature_anchors(
@@ -335,17 +358,21 @@ def curvature_anchors(
 ) -> list[Anchor]:
     """Wall curvature extrema projected outwards onto the cell ring.
 
-    The curvature is the supplied vertices' turning convolved with a narrow
-    periodic Gaussian (``CURVATURE_SMOOTHING`` of the perimeter) and evaluated
-    on ``samples`` uniform stations: a function of the geometry alone, so a
-    dense input point list does not turn discretisation noise into anchors and
-    where the list starts does not matter.  (It used to be measured on a
-    uniform resampling of the polyline, which cuts the supplied corners
-    wherever its samples fall, and the ripples that left on a circular nose
-    became anchors that followed the start point.)  Each peak is placed between
-    the stations by a parabola.  The smoothing width and the prominence
-    threshold are relative, so the result follows translation, rotation,
-    uniform scaling, point-list reversal and the start point.
+    The curvature is the supplied vertices' turning convolved with a periodic
+    Gaussian - ``CURVATURE_SMOOTHING`` of the perimeter wide, or as wide as
+    the vertex's spacing to the neighbouring turning vertices when the list is
+    coarser than that - so it is a function of the polygon alone, read at the
+    polygon's own resolution: a dense list does not turn discretisation noise
+    into anchors, a coarse one does not turn every vertex into a peak, and
+    collinear vertices change nothing.  (It used to be measured on a uniform
+    resampling of the polyline, which cuts the supplied corners wherever its
+    samples fall, and the ripples that left on a circular nose became anchors
+    that followed the start point.)  ``samples`` uniform stations only find
+    the peaks; each is then located and measured on the curvature itself, so
+    neither its station nor its rank depends on where the stations start,
+    and the limit takes equal peaks together or not at all.  Everything is
+    relative, so the result follows translation, rotation, uniform scaling,
+    point-list reversal, the start point and densification.
     """
     anchors: list[Anchor] = []
     for cell in cells:
@@ -358,69 +385,117 @@ def curvature_anchors(
         vertex_count = len(loop) - 1
         if perimeter <= 0.0 or vertex_count < 3:
             continue
-        theta = np.abs(g2.turning_angles(loop, closed=True))[:vertex_count]
-        sigma = CURVATURE_SMOOTHING * perimeter
-        grid = np.arange(samples) * (perimeter / samples)
-        offsets = (grid[:, None] - loop_stations[None, :vertex_count] + 0.5 * perimeter) % perimeter - 0.5 * perimeter
-        kernel = np.exp(-0.5 * (offsets / sigma) ** 2) / (sigma * math.sqrt(2.0 * math.pi))
-        smoothed = kernel @ theta
+        turning = g2.turning_angles(loop, closed=True)
+        theta = np.abs(turning)[:vertex_count]
+        turning_vertices = np.flatnonzero(theta > COLLINEAR_TURNING)
+        if len(turning_vertices) < 3:
+            continue
+        theta = theta[turning_vertices]
+        centres = loop_stations[turning_vertices]
+        # Half the arc between the previous and the next turning vertex: the
+        # wall length this vertex's turning stands for.
+        gaps_before = (centres - np.roll(centres, 1)) % perimeter
+        gaps_after = (np.roll(centres, -1) - centres) % perimeter
+        sigma = np.maximum(CURVATURE_SMOOTHING * perimeter, 0.5 * (gaps_before + gaps_after))
+        norm = theta / (sigma * math.sqrt(2.0 * math.pi))
+
+        def _offsets(stations) -> np.ndarray:
+            return (np.asarray(stations, dtype=np.float64)[:, None] - centres[None, :] + 0.5 * perimeter) % perimeter - 0.5 * perimeter
+
+        def curvature(stations) -> np.ndarray:
+            offsets = _offsets(stations)
+            return np.exp(-0.5 * (offsets / sigma[None, :]) ** 2) @ norm
+
+        def slope(station: float) -> float:
+            offsets = _offsets([station])
+            return float(((np.exp(-0.5 * (offsets / sigma[None, :]) ** 2) * (-offsets / sigma[None, :] ** 2)) @ norm)[0])
+
+        step = perimeter / samples
+        grid = np.arange(samples) * step
+        smoothed = curvature(grid)
         median = float(np.median(smoothed))
         if median <= 0.0:
             continue
-        nodes = grid
         # A peak must be an extremum of the curvature, not a ripple on a
         # plateau: on a circular nose every resampled point sits at the same
         # curvature give or take where the samples fall between the supplied
         # vertices, and those ripples - which follow the list's start point -
-        # used to become anchors.  The smoothed curvature has to fall by
-        # ``PEAK_DROP`` on both sides within ``PEAK_WINDOW`` of the perimeter.
+        # used to become anchors.  The curvature has to fall by ``PEAK_DROP``
+        # on both sides within ``PEAK_WINDOW`` of the perimeter, measured
+        # from the located peak so that the test does not move with the grid.
         reach = max(2, int(round(PEAK_WINDOW * samples)))
-        count = len(nodes)
+        side = step * np.arange(1, reach + 1)
 
-        def falls_away(index: int) -> bool:
-            left = [smoothed[(index - step) % count] for step in range(1, reach + 1)]
-            right = [smoothed[(index + step) % count] for step in range(1, reach + 1)]
-            return min(left) <= (1.0 - PEAK_DROP) * smoothed[index] and min(right) <= (1.0 - PEAK_DROP) * smoothed[index]
+        def locate(index: int) -> tuple[float, float]:
+            # The grid finds the peak to a step; the zero of the curvature's
+            # slope, bisected on the curvature itself, places it to round-off
+            # - a maximum of the value alone is only good to the square root
+            # of that - so the station and the height are the polygon's and
+            # not the grid's.
+            low = grid[index] - step
+            high = grid[index] + step
+            slope_low = slope(low)
+            slope_high = slope(high)
+            if not (slope_low > 0.0 and slope_high < 0.0):
+                station = float(grid[index]) % perimeter
+                return station, float(curvature([station])[0])
+            for _ in range(80):
+                middle = 0.5 * (low + high)
+                if middle <= low or middle >= high:
+                    break
+                if slope(middle) > 0.0:
+                    low = middle
+                else:
+                    high = middle
+            station = (0.5 * (low + high)) % perimeter
+            height = float(curvature([station])[0])
+            if height < smoothed[index]:
+                # Two extrema within a step: the slope's zero was a minimum.
+                station = float(grid[index]) % perimeter
+                height = float(smoothed[index])
+            return station, height
 
-        peaks = [
-            index
-            for index in range(len(nodes))
-            if smoothed[index] >= prominence * median
-            and smoothed[index] >= smoothed[index - 1]
-            and smoothed[index] >= smoothed[(index + 1) % len(nodes)]
-            and falls_away(index)
-        ]
-        peaks.sort(key=lambda index: -smoothed[index])
-        stations = np.concatenate((grid, [perimeter]))
-        # A sharp corner is a curvature peak of its own; the resampled peak
+        peaks: list[tuple[float, float, int]] = []
+        for index in range(samples):
+            if (
+                smoothed[index] < prominence * median
+                or smoothed[index] < smoothed[index - 1]
+                or smoothed[index] < smoothed[(index + 1) % samples]
+            ):
+                continue
+            station, height = locate(index)
+            if height < prominence * median:
+                continue
+            left = float(np.min(curvature(station - side)))
+            right = float(np.min(curvature(station + side)))
+            if left > (1.0 - PEAK_DROP) * height or right > (1.0 - PEAK_DROP) * height:
+                continue
+            peaks.append((station, height, index))
+        peaks.sort(key=lambda peak: (-peak[1], peak[2]))
+        # Peaks located from neighbouring grid stations may be one extremum.
+        distinct: list[tuple[float, float, int]] = []
+        for peak in peaks:
+            if all(_cyclic_gap(peak[0], other[0], perimeter) > 0.5 * step for other in distinct):
+                distinct.append(peak)
+        chosen = distinct[:limit]
+        if len(distinct) > limit:
+            floor = (1.0 - PEAK_TIE) * distinct[limit - 1][1]
+            chosen = [peak for peak in distinct if peak[1] >= floor]
+        # A sharp corner is a curvature peak of its own; the located peak
         # lands a step away from the vertex, and the corner anchor already
         # names that feature.  Skip peaks within two steps of one.
-        total = float(stations[-1])
-        step = total / samples
-        turning = g2.turning_angles(loop, closed=True)
-        corner_stations = g2.cumulative_length(loop)[:-1][np.abs(turning) >= corner_turn]
-        for index in peaks[:limit]:
-            # The resampling starts at the list's first point, so a peak
-            # sample sits up to half a step from the true extremum depending
-            # on where the list starts.  A parabola through the peak and its
-            # neighbours places it to a small fraction of a step, which makes
-            # the anchor station independent of the start point and of the
-            # direction the list runs in.
-            before = float(smoothed[(index - 1) % count])
-            here = float(smoothed[index])
-            after = float(smoothed[(index + 1) % count])
-            denominator = before - 2.0 * here + after
-            shift = 0.0
-            if denominator < 0.0:
-                shift = min(0.5, max(-0.5, 0.5 * (before - after) / denominator))
-            station = (float(stations[index]) + shift * step) % total
+        corner_stations = loop_stations[:-1][np.abs(turning) >= corner_turn]
+        density = _turning_density(loop)
+        for station, _, _ in chosen:
             if len(corner_stations):
                 gaps = np.abs(corner_stations - station)
-                gaps = np.minimum(gaps, total - gaps)
+                gaps = np.minimum(gaps, perimeter - gaps)
                 if float(np.min(gaps)) <= 2.0 * step:
                     continue
+            window = TIP_WINDOW * perimeter
+            tight = density is not None and density.between(station - window, 2.0 * window) >= corner_turn
             anchor = anchor_from_wall(
-                diagram, cell, station, "curvature"
+                diagram, cell, station, "tip" if tight else "curvature"
             )
             if anchor is not None:
                 anchors.append(anchor)
@@ -547,9 +622,10 @@ def anchor_from_wall(
                 hit = (t, step.branch, arclength)
     if hit is None:
         chosen = closest
-    elif kind in ("corner", "reflex") or site.curve.kind != "wall":
-        # Corners always take the ray; so does a hull's chain break, whose
-        # closest ring point at a pointed end of the hull is arbitrary.
+    elif kind in ("corner", "reflex", "tip") or site.curve.kind != "wall":
+        # Corners, sharp or rounded, always take the ray; so does a hull's
+        # chain break, whose closest ring point at a pointed end of the hull
+        # is arbitrary.
         chosen = hit
     else:
         # The closest point is the default; the ray replaces it only when it
@@ -954,6 +1030,7 @@ _PIN_PRIORITY = {
     "chain": 6,
     "reflex": 5,
     "corner": 4,
+    "tip": 4,
     "curvature": 3,
     "turning": 2,
     "seed": 1,
@@ -1080,43 +1157,132 @@ def _ring_section(cell: Cell, start: float, end: float) -> np.ndarray:
     return g2.loop_section(cell.ring, start, end, forward=True)
 
 
-def _turning_midpoint(loop: np.ndarray, start: float, length: float) -> float | None:
-    """Arc length from ``start`` at which half the turning over ``length`` is reached.
+# A vertex turning at least this much is a corner (``LayoutOptions.corner_turn``
+# has the same default): its turning is a point mass at the vertex, not a
+# density spread over its spans, so a gate placed on it - a corner anchor
+# always is - gives neither neighbouring block any of it.  A spread gave each
+# block beside a teardrop's 150-degree tip 75 degrees it does not turn.
+SHARP_TURNING = math.radians(45.0)
 
-    The turning is a density along the closed loop: vertex ``k``'s absolute
-    turning is spread uniformly from the middle of its incoming segment to
-    the middle of its outgoing one, so the turning between two stations, and
-    the station halving it, vary continuously with the stations.
+
+@dataclass(frozen=True)
+class TurningDensity:
+    """The turning of a closed loop as a function of the wall station.
+
+    Smooth vertices' turning is a density: vertex ``k``'s absolute turning
+    spread uniformly from halfway back to the previous turning vertex to
+    halfway on to the next one, so the turning between two stations varies
+    continuously with the stations and a gate on a vertex sees half of its
+    turning on each side.  Collinear vertices (``COLLINEAR_TURNING``) carry
+    no turning and bound no span, so a wall densified by midpoints has the
+    density of the wall it came from (an inserted point beside an ellipse's
+    tip once moved the tip's turning two-thirds to one side and the flank
+    split by three degrees).  Sharp vertices (``SHARP_TURNING``) are point
+    masses: counted when strictly inside a span, by neither block when a
+    gate sits on them.
+
+    ``xs`` and ``values`` are the smooth cumulative turning's breakpoints
+    over three periods, so a span starting anywhere in the second and
+    reaching almost a full turn on stays inside them (``np.interp`` clamps
+    outside).
     """
+
+    xs: np.ndarray
+    values: np.ndarray
+    total: float
+    mass_stations: np.ndarray
+    masses: np.ndarray
+
+    def _frame(self, station: float) -> float:
+        first = float(station) % self.total
+        if first < self.xs[0]:
+            first += self.total
+        return first
+
+    def _smooth(self, station: float) -> float:
+        return float(np.interp(station, self.xs, self.values))
+
+    def _inside(self, first: float, length: float) -> np.ndarray:
+        tolerance = 1.0e-9 * self.total
+        offsets = (self.mass_stations - first) % self.total
+        return (offsets > tolerance) & (offsets < length - tolerance)
+
+    def between(self, start: float, length: float) -> float:
+        """Turning of the wall from ``start`` over ``length``."""
+        first = self._frame(start)
+        turning = self._smooth(first + length) - self._smooth(first)
+        if len(self.masses):
+            turning += float(np.sum(self.masses[self._inside(first, length)]))
+        return turning
+
+    def _invert_smooth(self, value: float) -> float:
+        # The inverse of a non-decreasing piecewise-linear map: the first
+        # station reaching the value.
+        index = int(np.searchsorted(self.values, value, side="left"))
+        index = min(max(index, 1), len(self.values) - 1)
+        span = self.values[index] - self.values[index - 1]
+        fraction = 0.0 if span <= 0.0 else (value - self.values[index - 1]) / span
+        return float(self.xs[index - 1] + fraction * (self.xs[index] - self.xs[index - 1]))
+
+    def midpoint(self, start: float, length: float) -> float | None:
+        """Arc length from ``start`` at which half the turning over ``length`` is reached."""
+        whole = self.between(start, length)
+        if whole <= 0.0:
+            return None
+        target = 0.5 * whole
+        first = self._frame(start)
+        base = self._smooth(first)
+        inside = self._inside(first, length)
+        offsets = (self.mass_stations[inside] - first) % self.total
+        order = np.argsort(offsets)
+        counted = 0.0
+        for offset, mass in zip(offsets[order], self.masses[inside][order]):
+            if self._smooth(first + offset) - base + counted >= target:
+                break
+            counted += float(mass)
+            if self._smooth(first + offset) - base + counted >= target:
+                return float(offset)
+        station = self._invert_smooth(base + target - counted)
+        return min(max(station - first, 0.0), length)
+
+
+def _turning_density(loop: np.ndarray) -> TurningDensity | None:
+    """``TurningDensity`` of a closed loop, or ``None`` for one without turning."""
     stations = g2.cumulative_length(loop)
     total = float(stations[-1])
     count = len(loop) - 1
     turning = np.abs(g2.turning_angles(loop, closed=True))[:count]
-    whole = float(np.sum(turning))
-    if total <= 0.0 or whole <= 0.0:
+    keep = np.flatnonzero(turning > COLLINEAR_TURNING)
+    if total <= 0.0 or len(keep) == 0 or float(np.sum(turning[keep])) <= 0.0:
         return None
-    middles = 0.5 * (stations[:count] + stations[1:count + 1])
-    # Breakpoints of the cumulative turning, over two periods.
+    turning = turning[keep]
+    centres = stations[keep]
+    sharp = turning >= SHARP_TURNING
+    smooth = np.where(sharp, 0.0, turning)
+    whole = float(np.sum(smooth))
+    # Halfway between consecutive turning vertices, the last wrapped round.
+    middles = 0.5 * (centres + np.concatenate((centres[1:], [centres[0] + total])))
     xs = np.concatenate(([middles[-1] - total], middles))
-    values = np.concatenate(([0.0], np.cumsum(turning)))
-    xs = np.concatenate((xs, xs[1:] + total))
-    values = np.concatenate((values, values[1:] + whole))
-    first = float(start) % total
-    if first < xs[0]:
-        first += total
-    low = float(np.interp(first, xs, values))
-    high = float(np.interp(first + length, xs, values))
-    if high - low <= 0.0:
-        return None
-    target = 0.5 * (low + high)
-    # The inverse of a non-decreasing piecewise-linear map: the first station
-    # reaching the target.
-    index = int(np.searchsorted(values, target, side="left"))
-    index = min(max(index, 1), len(values) - 1)
-    span = values[index] - values[index - 1]
-    fraction = 0.0 if span <= 0.0 else (target - values[index - 1]) / span
-    station = xs[index - 1] + fraction * (xs[index] - xs[index - 1])
-    return float(station - first)
+    values = np.concatenate(([0.0], np.cumsum(smooth)))
+    xs = np.concatenate((xs, xs[1:] + total, xs[1:] + 2.0 * total))
+    values = np.concatenate((values, values[1:] + whole, values[1:] + 2.0 * whole))
+    return TurningDensity(xs, values, total, centres[sharp], turning[sharp])
+
+
+def turning_between(loop: np.ndarray, start: float, length: float) -> float:
+    """Turning of the loop's wall from ``start`` over ``length``, as a density."""
+    density = _turning_density(loop)
+    return 0.0 if density is None else density.between(start, length)
+
+
+def _turning_midpoint(loop: np.ndarray, start: float, length: float) -> float | None:
+    """Arc length from ``start`` at which half the turning over ``length`` is reached.
+
+    The turning is the density ``TurningDensity`` defines, so the station
+    halving it varies continuously with the gates.
+    """
+    density = _turning_density(loop)
+    return None if density is None else density.midpoint(start, length)
 
 
 def split_anchor(
@@ -1340,10 +1506,14 @@ def build_layout(diagram: Diagram, options: LayoutOptions | None = None) -> Layo
         limit=settings.curvature_limit,
         corner_turn=settings.corner_turn,
     ):
-        anchors.add(anchor)
-    cuts = anchors.cuts()
-    for cell_index, cell_cuts in enumerate(cuts):
-        if len(cell_cuts) < 2:
+        # A rounded convex corner must be a block corner as a sharp one must.
+        anchors.add(anchor, force=anchor.kind == "tip")
+    for cell_index in range(len(cells)):
+        # Read the cuts afresh: a seed on a shared branch cuts the cell on
+        # the other side too, and a far-field cell seeded again on a ring the
+        # body had just seeded gave four or eight spokes depending on how the
+        # two lists' quarter points happened to align.
+        if len(anchors.cuts()[cell_index]) < 2:
             bootstrap_anchors(diagram, cells, anchors, cell_index)
     cuts = anchors.cuts()
     patches = build_patches(diagram, cells, cuts)

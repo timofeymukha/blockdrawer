@@ -284,7 +284,11 @@ them in the canvas widgets.
   percent of the perimeter turning through a reflex corner's worth together -
   is a rounded reflex corner: anchored and mitred at its turning midpoint
   (`layers.tight_concave_runs`, `effective_fluid_angles`), and the wall in
-  a rounded corner's mitre shadow carries the corner's far clearance.
+  a rounded corner's mitre shadow carries the corner's far clearance. A
+  tight convex bend - a curvature peak where the wall turns a corner's worth
+  within a hundredth of the perimeter on each side, an ellipse tip or an
+  airfoil nose - is a rounded convex corner, a forced and pinned gate like a
+  sharp corner's (`block_layout.TIP_WINDOW`, anchor kind `tip`).
   `hull.py` is the opt-in `--hull` far field for two or more bodies: the
   hull is the cluster's wall-distance level set at six band heights (capped
   by the body frame), carrying the outer boundary's chains at the same
@@ -338,16 +342,21 @@ them in the canvas widgets.
   reflection, reversal, start point, scaling, translation, densification
   and raster width (`EquivalentInputTests` guards five of them); the
   geometry of that graph, and on `concave_and_convex` turned through 180
-  degrees the verdict, still follow the orientation. The invariance holds
-  on those fixtures only: coarse or thin held-out bodies (a 24-gon, a
-  40-point ellipse, a 10:1 ellipse, a 35-point-per-side NACA 0012) change
-  their graph with the start point or the direction, two become
-  topology-invalid, and round-off alone can change the graph of a symmetric
-  list. The opt-in trials always sample their own grids, so a trial that
-  commits writes its session even under `--no-grid-quality`. A regression
-  fixture that reproduces a known failure carries an `expectedFailure` test
-  while it fails, so a fix cannot land unnoticed; the four held-out bodies
-  in `HeldOutEquivalentInputTests` are open. It may use NumPy and Pillow and keeps its own self-tests beside it.
+  degrees the verdict, still follow the orientation. Four held-out coarse
+  or thin bodies (`HeldOutEquivalentInputTests`) found what the fixtures
+  hid: curvature is now smoothed at least over the vertex spacing with peaks
+  located on the curvature itself, the split midpoint comes from a turning
+  density on the turning vertices (collinear vertices carry none, a sharp
+  corner is a point mass), the solver reads a gate
+  past the wall's origin inside its window, a closed ring is traced from its
+  least clearance, and a cell is seeded only while it lacks cuts. The
+  24-gon and the 40-point ellipse keep their graph under every input; the
+  10:1 ellipse densified and the coarse NACA reversed reach the solver
+  equal to 1e-12 and leave it in different local optima, so those two stay
+  `expectedFailure`. The opt-in trials always sample their own grids, so a
+  trial that commits writes its session even under `--no-grid-quality`. A
+  regression fixture that reproduces a known failure carries an
+  `expectedFailure` test while it fails, so a fix cannot land unnoticed. It may use NumPy and Pillow and keeps its own self-tests beside it.
   It imports BlockDrawer but nothing in `blockdrawer/` may import it, and none
   of its numerical code belongs in the package until it earns its way in. Its
   experimental agent operations stay in `research_cli.py`; do not widen the

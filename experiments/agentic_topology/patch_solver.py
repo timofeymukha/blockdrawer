@@ -247,6 +247,24 @@ class _Variable:
     bounds: object
     blocks: tuple
     cuts: tuple
+    # The coordinate's period - a wall's length, a closed branch's - so the
+    # search can read the current value in the frame its bounds are given
+    # in; ``None`` for an open branch.
+    period: float | None = None
+
+    def current(self, low: float) -> float:
+        """The current value, unwrapped into ``[low, low + period)``.
+
+        The bounds run on from the previous gate and may pass the wall's
+        origin, where the stored station wraps to zero; read as stored, the
+        gate just past the origin seemed to lie far below its window, which
+        collapsed, and that gate alone was never refined.  Which gate that
+        was depended on where the point list started.
+        """
+        value = float(self.read())
+        if self.period is None or self.period <= 0.0:
+            return value
+        return low + (value - low) % self.period
 
 
 def _collect_variables(
@@ -261,7 +279,7 @@ def _collect_variables(
         for position, cut in enumerate(cuts):
             if cut.pinned and (
                 cut.anchor.kind in ("reflex", "chain", "wake")
-                or (cut.anchor.kind == "corner" and not free_corner_gates)
+                or (cut.anchor.kind in ("corner", "tip") and not free_corner_gates)
             ):
                 # A sharp wall corner should stay a block corner: an edge that
                 # runs through the kink describes the boundary badly.  The
@@ -283,6 +301,7 @@ def _collect_variables(
                     ),
                     ((cell_index, (position - 1) % count), (cell_index, position)),
                     ((cell_index, position),),
+                    total,
                 )
             )
     seen: set[tuple] = set()
@@ -313,6 +332,7 @@ def _collect_variables(
                     bounds,
                     tuple(blocks),
                     tuple(touched),
+                    branch.length if branch.closed else None,
                 )
             )
     return variables
@@ -465,7 +485,7 @@ def relax(
             low, high = variable.bounds()
             if high <= low:
                 continue
-            best_position = variable.read()
+            best_position = variable.current(low)
             best_value = evaluator.penalty(variable.blocks, variable.cuts)
             window = (low, high)
             for _ in range(options.refinements):

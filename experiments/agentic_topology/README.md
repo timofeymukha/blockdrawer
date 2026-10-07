@@ -252,12 +252,18 @@ result can be read either way; the session is written whenever the result is
    loops, so the start point and the direction of a point list no longer move
    it (a blunt foil's frame used to shift by 15 percent with its start point).
    A curvature anchor marks a genuine extremum - the smoothed curvature falls
-   by ten percent within three percent of the perimeter on both sides - and
-   is placed between the resampled points by a parabola; ripples on a
-   circular nose, which followed where the resampling started, used to become
-   anchors. A patch is split where half its wall turning is reached with the
-   turning taken as a density along the loop, so the split no longer jumps
-   by four vertices when a gate passes a strongly turning one. Two forced
+   by ten percent within three percent of the perimeter on both sides - of
+   the vertex turning smoothed by a kernel at least as wide as the vertex
+   spacing, so a coarse list is read at its own resolution (every vertex of
+   a 24-gon used to be a peak); each peak is located on the curvature itself,
+   not on the sample grid, and the anchor limit takes equal peaks together or
+   not at all. A patch is split where half its wall turning is reached, with
+   the turning taken as a density along the loop - collinear vertices carry
+   none, a vertex under a gate gives half to each side, a sharp corner is a
+   point mass that a gate on it gives to neither block - so the split no
+   longer jumps by four vertices when a gate passes a strongly turning one
+   and an inserted midpoint does not move it; the turning a patch is judged
+   by stays the sum over its section's vertices. Two forced
    anchors that crowd each other on one branch - a square body's corner and
    the corner of a box with equal margins, both on the box diagonal - become
    one cut pinned on both walls, and the relaxation keeps every patch within
@@ -807,51 +813,51 @@ tables, these are current.
 
 | run | blocks | verdict | non-orthogonality | wall misalignment | min. scaled Jacobian | `checkMesh` | seconds |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `single_ellipse` | 12 | admissible | 38.7 | 27.1 | 0.78 | Mesh OK (36.1°, skew 0.51) | 7 |
+| `single_ellipse` | 12 | admissible | 38.8 | 30.6 | 0.78 | Mesh OK (35.1°, skew 0.64) | 3 |
 | `two_circles` | 32 | **resolved** | 64.9 | 7.0 | 0.42 | Mesh OK (63.3°, skew 1.42) | 4 |
-| `three_rotated_ellipses` | 80 | admissible | 80.0 | 64.6 | 0.17 | Mesh OK (79.4°, skew 2.88) | 46 |
-| `concave_and_convex` | 42 | admissible | 65.6 | 43.1 | 0.41 | Mesh OK (60.5°, skew 1.46) | 5 |
-| `four_bodies` | 53 | **resolved** | 65.7 | 13.3 | 0.41 | Mesh OK (64.0°, skew 1.00) | 17 |
+| `three_rotated_ellipses` | 80 | admissible | 80.0 | 64.6 | 0.17 | Mesh OK (79.4°, skew 2.88) | 16 |
+| `concave_and_convex` | 42 | admissible | 65.6 | 43.5 | 0.41 | Mesh OK (60.5°, skew 1.46) | 5 |
+| `four_bodies` | 53 | **resolved** | 65.7 | 13.3 | 0.41 | Mesh OK (64.0°, skew 1.00) | 7 |
 | `sharp_bodies` | 45 | admissible | 76.2 | 10.7 | 0.24 | Mesh OK (74.9°, skew 1.47) | 7 |
-| `narrow_gap_tip` | 57 | admissible | 69.6 | 21.7 | 0.35 | Mesh OK (67.9°, skew 2.07) | 11 |
-| `peanut_body` | 24 | admissible | 85.6 | 41.8 | 0.08 | Mesh OK (79.5°, skew 2.34) | 7 |
-| `skimming_tail` | 57 | admissible | 67.4 | 67.4 | 0.38 | Mesh OK (64.5°, skew 3.12) | 14 |
-| `tandem_foils` | 45 | admissible | 84.9 | 70.5 | 0.09 | Mesh OK (79.9°, skew 2.06) | 18 |
-| `blunt_foil` | 15 | admissible | 70.9 | 70.5 | 0.33 | Mesh OK (68.3°, skew 1.12) | 6 |
-| `tandem_blunt` | 45 | admissible | 83.3 | 70.5 | 0.12 | Mesh OK (79.5°, skew 2.14) | 18 |
-| `staggered_foils` | 37 | inadmissible | - | - | - | - | 16 |
+| `narrow_gap_tip` | 57 | admissible | 69.6 | 21.7 | 0.35 | Mesh OK (67.9°, skew 2.07) | 8 |
+| `peanut_body` | 24 | admissible | 79.1 | 40.7 | 0.19 | Mesh OK (79.1°, skew 2.35) | 3 |
+| `skimming_tail` | 50 | admissible | 67.4 | 67.4 | 0.38 | Mesh OK (64.3°, skew 2.87) | 9 |
+| `tandem_foils` | 49 | admissible | 76.4 | 70.5 | 0.23 | Mesh OK (73.3°, skew 1.96) | 17 |
+| `blunt_foil` | 15 | admissible | 70.9 | 70.5 | 0.33 | Mesh OK (68.3°, skew 1.13) | 6 |
+| `tandem_blunt` | 45 | admissible | 83.3 | 70.5 | 0.12 | Mesh OK (79.5°, skew 2.14) | 14 |
+| `staggered_foils` | 47 | inadmissible | - | - | - | - | 22 |
 | `straight_channel` (internal) | 48 | **resolved** | 0.0 | 0.0 | 1.00 | Mesh OK (0.0°, skew 0.00) | 2 |
-| `periodic_hill` (internal) | 33 | **resolved** | 29.2 | 21.2 | 0.87 | Mesh OK (36.2°, skew 0.30) | 3 |
-| `single_ellipse`, rectangle with inlet, outlet and symmetry sides | 15 | **resolved** | 61.9 | 21.0 | 0.47 | Mesh OK (58.7°, skew 1.59) | 2 |
-| `two_circles --span-gaps` | 40 | **resolved** | 66.0 | 7.4 | 0.41 | Mesh OK (57.5°, skew 0.76) | 11 |
-| `two_circles --hull`, rectangle at scale 8 | 88 | **resolved** | 49.6 | 3.0 | 0.65 | Mesh OK (47.0°, skew 0.73) | 12 |
-| `two_circles --hull`, circle at scale 8 | 88 | **resolved** | 42.4 | 3.0 | 0.74 | Mesh OK (36.7°, skew 0.67) | 8 |
-| `make research-tandem` (`tandem_foils --wake`) | 51 | admissible | 70.5 | 21.3 | 0.33 | Mesh OK (69.0°, skew 1.44) | 30 |
-| `make research-blunt-foil` (`blunt_foil --wake`, band 0.05) | 18 | **resolved** | 67.9 | 19.3 | 0.38 | Mesh OK (84.7°, skew 2.39) | 12 |
-| `make research-tandem-15c` (`--wake --hull`, C-shape r = 15) | 110 | admissible | 70.5 | 21.7 | 0.33 | Mesh OK (54.0°, skew 1.53) | 15 |
-| `make research-staggered` (`--wake --hull`, band 0.01) | 85 | inadmissible | - | - | - | - | 489 |
-| `make research-a-airfoil` (C-grid, r = 15, raster 700) | 165 | **resolved** | 50.9 | 12.4 | 0.63 | Mesh OK (42.8°, skew 0.92) | 178 |
+| `periodic_hill` (internal) | 33 | **resolved** | 29.2 | 21.2 | 0.87 | Mesh OK (36.2°, skew 0.30) | 2 |
+| `single_ellipse`, rectangle with inlet, outlet and symmetry sides | 18 | **resolved** | 51.2 | 15.0 | 0.63 | Mesh OK (49.1°, skew 1.21) | 2 |
+| `two_circles --span-gaps` | 40 | **resolved** | 66.0 | 7.4 | 0.41 | Mesh OK (57.5°, skew 0.76) | 6 |
+| `two_circles --hull`, rectangle at scale 8 | 88 | **resolved** | 49.6 | 3.0 | 0.65 | Mesh OK (47.0°, skew 0.73) | 10 |
+| `two_circles --hull`, circle at scale 8 | 88 | **resolved** | 42.4 | 3.0 | 0.74 | Mesh OK (36.7°, skew 0.67) | 7 |
+| `make research-tandem` (`tandem_foils --wake`) | 51 | admissible | 70.5 | 17.9 | 0.33 | Mesh OK (69.1°, skew 1.59) | 29 |
+| `make research-blunt-foil` (`blunt_foil --wake`, band 0.05) | 18 | **resolved** | 67.9 | 17.9 | 0.38 | Mesh OK (84.7°, skew 2.39) | 7 |
+| `make research-tandem-15c` (`--wake --hull`, C-shape r = 15) | 122 | admissible | 70.5 | 6.3 | 0.33 | Mesh OK (55.4°, skew 1.14) | 18 |
+| `make research-staggered` (`--wake --hull`, band 0.01) | 73 | inadmissible | - | - | - | - | 286 |
+| `make research-a-airfoil` (C-grid, r = 15, raster 700) | 200 | **resolved** | 50.7 | 12.4 | 0.63 | Mesh OK (43.0°, skew 1.11) | 261 |
 
 Held-out geometries - not used to tune the engine, several of them refused at
 the review that preceded this commit:
 
 | run | blocks | verdict | non-orthogonality | wall misalignment | min. scaled Jacobian | `checkMesh` | seconds |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| circle in a square box | 12 | **resolved** | 45.6 | 5.6 | 0.70 | Mesh OK (42.8°, skew 0.80) | 3 |
-| square cylinder, circle far field | 16 | admissible | 87.0 | 0.4 | 0.05 | Mesh OK (86.8°, skew 1.41) | 15 |
-| square cylinder in a box with equal margins | 16 | admissible | 86.8 | 1.6 | 0.06 | Mesh OK (86.6°, skew 1.20) | 20 |
-| ellipse 10:1 | 15 | admissible | 74.4 | 65.1 | 0.27 | Mesh OK (67.8°, skew 2.04) | 24 |
-| four symmetric circles (degree-4 junction) | 56 | **resolved** | 64.4 | 4.4 | 0.43 | Mesh OK (62.5°, skew 0.91) | 8 |
-| three circles in line | 50 | admissible | 74.9 | 5.3 | 0.26 | Mesh OK (73.9°, skew 1.03) | 8 |
-| NACA 0012, circle far field | 16 | admissible | 87.4 | 35.5 | 0.05 | Mesh OK (85.7°, skew 0.96) | 64 |
-| NACA 0012 `--wake`, circle far field | 19 | admissible | 82.2 | 42.3 | 0.14 | Mesh OK (73.4°, skew 1.76) | 106 |
-| NACA 0012 with a blunt trailing edge, `--wake` | 21 | admissible | 82.3 | 35.7 | 0.13 | Mesh OK (84.4°, skew 1.68) | 46 |
-| NACA 0012, C-grid r = 15, band 0.1 | 165 | **resolved** | 52.9 | 11.8 | 0.60 | Mesh OK (44.0°, skew 0.70) | 288 |
-| NACA 4412 at 8 degrees, C-grid r = 15, band 0.1 | 115 | **resolved** | 57.6 | 17.4 | 0.54 | Mesh OK (46.0°, skew 0.77) | 142 |
-| NACA 4412 with the A-airfoil's options exactly | 115 | **resolved** | 53.9 | 17.5 | 0.59 | Mesh OK (42.2°, skew 1.04) | 102 |
-| A-airfoil turned 2 degrees against the far field (incidence) | 210 | **resolved** | 50.8 | 12.4 | 0.63 | Mesh OK (43.0°, skew 1.10) | 301 |
-| 30P30N, default options | 123 | inadmissible | 266.5 | 53.5 | -0.99 | - | 87 |
-| 30P30N main and flap, `--wake --hull`, C-shape r = 15, band 0.02 | 130 | inadmissible | - | - | - | - | 394 |
+| circle in a square box | 12 | **resolved** | 45.6 | 5.6 | 0.70 | Mesh OK (42.8°, skew 0.80) | 2 |
+| square cylinder, circle far field | 16 | admissible | 87.0 | 0.4 | 0.05 | Mesh OK (86.8°, skew 1.41) | 14 |
+| square cylinder in a box with equal margins | 16 | admissible | 86.8 | 1.6 | 0.06 | Mesh OK (86.6°, skew 1.20) | 11 |
+| ellipse 10:1 | 21 | admissible | 73.9 | 73.9 | 0.28 | Mesh OK (63.3°, skew 1.75) | 10 |
+| four symmetric circles (degree-4 junction) | 56 | **resolved** | 64.4 | 4.4 | 0.43 | Mesh OK (62.5°, skew 0.91) | 7 |
+| three circles in line | 50 | admissible | 74.9 | 5.3 | 0.26 | Mesh OK (73.9°, skew 1.03) | 6 |
+| NACA 0012, circle far field | 19 | admissible | 86.4 | 30.7 | 0.06 | Mesh OK (85.6°, skew 0.92) | 20 |
+| NACA 0012 `--wake`, circle far field | 22 | admissible | 82.0 | 36.5 | 0.14 | Mesh OK (71.8°, skew 1.45) | 33 |
+| NACA 0012 with a blunt trailing edge, `--wake` | 21 | admissible | 82.5 | 36.5 | 0.13 | Mesh OK (84.2°, skew 1.31) | 30 |
+| NACA 0012, C-grid r = 15, band 0.1 | 185 | **resolved** | 52.9 | 18.5 | 0.60 | Mesh OK (44.1°, skew 0.74) | 320 |
+| NACA 4412 at 8 degrees, C-grid r = 15, band 0.1 | 225 | **resolved** | 58.1 | 11.8 | 0.53 | Mesh OK (48.2°, skew 1.20) | 197 |
+| NACA 4412 with the A-airfoil's options exactly | 225 | **resolved** | 54.3 | 14.3 | 0.58 | Mesh OK (43.8°, skew 1.02) | 191 |
+| A-airfoil turned 2 degrees against the far field (incidence) | 210 | **resolved** | 50.7 | 12.4 | 0.63 | Mesh OK (43.0°, skew 1.11) | 303 |
+| 30P30N, default options | 134 | inadmissible | - | - | - | - | 138 |
+| 30P30N main and flap, `--wake --hull`, C-shape r = 15, band 0.02 | 126 | inadmissible | - | - | - | - | 377 |
 
 The A-airfoil acceptance case under changes that should not matter - the
 raster width, the band height, the wake direction, half the points, the
@@ -860,35 +866,37 @@ options otherwise:
 
 | run | blocks | verdict | non-orthogonality | wall misalignment | min. scaled Jacobian | `checkMesh` | seconds |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| raster 420 | 150 | **resolved** | 51.2 | 12.4 | 0.63 | Mesh OK (42.3°, skew 0.79) | 102 |
-| raster 500 | 170 | **resolved** | 51.0 | 12.4 | 0.63 | Mesh OK (42.4°, skew 0.85) | 176 |
-| raster 600 | 160 | **resolved** | 51.0 | 12.4 | 0.63 | Mesh OK (42.4°, skew 0.72) | 170 |
-| raster 650 | 185 | **resolved** | 51.0 | 12.4 | 0.63 | Mesh OK (42.7°, skew 0.80) | 287 |
-| raster 700 (Makefile) | 165 | **resolved** | 50.9 | 12.4 | 0.63 | Mesh OK (42.8°, skew 0.92) | 178 |
-| raster 750 | 165 | **resolved** | 51.1 | 12.4 | 0.63 | Mesh OK (42.5°, skew 0.79) | 222 |
-| raster 800 | 175 | **resolved** | 51.0 | 12.4 | 0.63 | Mesh OK (42.7°, skew 0.79) | 223 |
-| raster 900 | 180 | **resolved** | 51.0 | 12.4 | 0.63 | Mesh OK (42.5°, skew 0.82) | 251 |
-| raster 1000 | 165 | **resolved** | 50.9 | 12.4 | 0.63 | Mesh OK (42.6°, skew 0.87) | 170 |
-| raster 700, band 0.12 | 165 | **resolved** | 51.9 | 12.4 | 0.62 | Mesh OK (44.5°, skew 1.15) | 157 |
-| raster 700, band 0.18 | 165 | **resolved** | 49.7 | 12.4 | 0.65 | Mesh OK (43.4°, skew 0.92) | 154 |
-| raster 700, wake at 10 degrees | 165 | **resolved** | 50.2 | 10.9 | 0.64 | Mesh OK (42.1°, skew 0.90) | 153 |
-| raster 700, wake at 16 degrees | 165 | **resolved** | 51.8 | 13.9 | 0.62 | Mesh OK (43.4°, skew 0.95) | 157 |
-| raster 700, every second point dropped | 155 | **resolved** | 51.1 | 12.4 | 0.63 | Mesh OK (42.4°, skew 0.67) | 123 |
-| airfoil, far field and wake as explicit chains | 165 | **resolved** | 50.9 | 12.4 | 0.63 | Mesh OK (42.8°, skew 0.92) | 154 |
-| the same turned 2 degrees together | 160 | **resolved** | 51.3 | 12.4 | 0.62 | Mesh OK (43.6°, skew 1.03) | 121 |
-| the same turned 90 degrees together | 180 | **resolved** | 50.9 | 12.4 | 0.63 | Mesh OK (42.9°, skew 1.00) | 208 |
-| raster 700, point list starting at point 468 | 99 | **resolved** | 55.6 | 12.4 | 0.56 | Mesh OK (53.5°, skew 0.62) | 138 |
-| raster 700, point list starting at point 741 | 99 | **resolved** | 50.9 | 12.4 | 0.63 | Mesh OK (47.9°, skew 0.92) | 137 |
-| raster 700, point list starting at point 1326 | 99 | **resolved** | 50.9 | 12.4 | 0.63 | Mesh OK (43.0°, skew 0.93) | 147 |
-| raster 700, closing point dropped | 165 | **resolved** | 50.9 | 12.4 | 0.63 | Mesh OK (42.8°, skew 0.92) | 136 |
+| raster 420 | 205 | **resolved** | 50.7 | 12.4 | 0.63 | Mesh OK (43.0°, skew 1.11) | 279 |
+| raster 500 | 205 | **resolved** | 50.7 | 12.4 | 0.63 | Mesh OK (43.0°, skew 1.11) | 281 |
+| raster 600 | 205 | **resolved** | 50.7 | 12.4 | 0.63 | Mesh OK (43.0°, skew 1.11) | 279 |
+| raster 650 | 205 | **resolved** | 50.7 | 12.4 | 0.63 | Mesh OK (43.0°, skew 1.11) | 280 |
+| raster 700 (Makefile) | 200 | **resolved** | 50.7 | 12.4 | 0.63 | Mesh OK (43.0°, skew 1.11) | 261 |
+| raster 750 | 205 | **resolved** | 50.7 | 12.4 | 0.63 | Mesh OK (43.0°, skew 1.11) | 281 |
+| raster 800 | 205 | **resolved** | 50.7 | 12.4 | 0.63 | Mesh OK (43.0°, skew 1.11) | 285 |
+| raster 900 | 205 | **resolved** | 50.7 | 12.4 | 0.63 | Mesh OK (43.0°, skew 1.11) | 300 |
+| raster 1000 | 200 | **resolved** | 50.7 | 12.4 | 0.63 | Mesh OK (43.0°, skew 1.11) | 268 |
+| raster 700, band 0.12 | 200 | **resolved** | 51.8 | 12.4 | 0.62 | Mesh OK (44.7°, skew 1.34) | 259 |
+| raster 700, band 0.18 | 200 | **resolved** | 49.6 | 12.4 | 0.65 | Mesh OK (43.7°, skew 1.24) | 273 |
+| raster 700, wake at 10 degrees | 200 | **resolved** | 50.3 | 10.9 | 0.64 | Mesh OK (42.3°, skew 1.08) | 259 |
+| raster 700, wake at 16 degrees | 200 | **resolved** | 51.6 | 13.9 | 0.62 | Mesh OK (43.7°, skew 1.13) | 258 |
+| raster 700, every second point dropped | 170 | **resolved** | 50.8 | 12.4 | 0.63 | Mesh OK (42.9°, skew 1.09) | 171 |
+| airfoil, far field and wake as explicit chains | 200 | **resolved** | 50.7 | 12.4 | 0.63 | Mesh OK (43.0°, skew 1.11) | 262 |
+| the same turned 2 degrees together | 200 | **resolved** | 50.7 | 12.4 | 0.63 | Mesh OK (43.0°, skew 1.11) | 258 |
+| the same turned 90 degrees together | 200 | **resolved** | 50.7 | 12.4 | 0.63 | Mesh OK (43.0°, skew 1.11) | 265 |
+| raster 700, point list starting at point 468 | 120 | **resolved** | 55.7 | 12.4 | 0.56 | Mesh OK (53.5°, skew 0.97) | 246 |
+| raster 700, point list starting at point 741 | 120 | **resolved** | 51.0 | 12.4 | 0.63 | Mesh OK (48.2°, skew 1.08) | 250 |
+| raster 700, point list starting at point 1326 | 120 | **resolved** | 50.7 | 12.4 | 0.63 | Mesh OK (43.0°, skew 1.11) | 248 |
+| raster 700, closing point dropped | 200 | **resolved** | 50.7 | 12.4 | 0.63 | Mesh OK (43.0°, skew 1.11) | 244 |
 
 Every one of these is resolved and passes `checkMesh`, with 12.4 degrees of
 wall misalignment (10.9 and 13.9 with the wake turned to 10 and 16 degrees);
 the review before this commit found four of the nine
 raster widths and two of the four start points unresolved or refused, and
 the 2-degree incidence change refused. The block count still follows the
-raster (150 to 185) and the start point (165 from the trailing edge, 99 from
-three other starts), because the C-grid's gate count does.
+raster (200 at widths 700 and 1000, 205 at the other seven; 150 to 185
+before the gate past the wall's origin was refined) and the start point
+(200 from the trailing edge, 120 from three other starts), because the
+C-grid's gate count does.
 
 ### Explicit outer boundary
 
@@ -1438,11 +1446,38 @@ decide the layout, and each is now a function of the geometry:
 * bodies are ordered by their area about their own centroid, not on raw
   coordinates, which a translation by 1e4 rounded differently;
 * curvature anchors come from the supplied vertices' turning convolved with
-  a narrow periodic Gaussian and are placed between stations by a parabola,
-  not from a resampling that starts at the list's first point;
-* a patch is split where half its turning is reached, with the turning
-  spread over each vertex's two half-segments, so a gate passing a strongly
-  turning vertex no longer moves the split by several vertices;
+  a periodic Gaussian at least as wide as the vertex spacing, each peak
+  located where the curvature's slope is zero, not from a resampling that
+  starts at the list's first point, and the anchor limit never splits a
+  group of equal peaks;
+* a patch is split where half its turning is reached, and judged by, the
+  turning as a density on the turning vertices - collinear vertices bound no
+  span and a sharp corner is a point mass - so a gate passing a strongly
+  turning vertex no longer moves the split by several vertices, an inserted
+  midpoint no longer moves it at all, and a gate a rounding error past a
+  vertex no longer adds that vertex's whole turning to its patch (a 40-gon
+  ellipse's tip-to-tip patch read 180 or 198 degrees);
+* the relaxation reads a gate whose window runs past the wall's origin
+  inside that window, where the stored station had wrapped to zero and the
+  window collapsed around it: the one gate past the origin was never refined,
+  and which gate that was followed the start point;
+* a closed medial ring is traced again from its point of least clearance,
+  measured on the bisector, so its origin and sampling follow the geometry
+  and not the raster pixel the seed landed on (two lists of one polygon gave
+  rings 2e-4 apart, now 6e-8);
+* a cell is seeded only if it still has fewer than two cuts after the cells
+  before it were seeded: the far-field cell used to seed a ring the body had
+  just seeded, giving four or eight spokes by how the two lists' quarter
+  points aligned;
+* a curvature peak where the wall turns a corner's worth within a hundredth
+  of the perimeter on each side - a thin ellipse's tip, an airfoil's nose -
+  is a *rounded convex corner*, forced and pinned like a sharp one
+  (`block_layout.TIP_WINDOW`, anchor kind `tip`). The solver bug above had
+  pinned exactly those gates by accident whenever the list started at the
+  tip, as the synthetic ellipses do; refined, they slid a sixth of the nose
+  radius off it and a band block wrapped the nose. The rule mirrors
+  `layers.tight_concave_runs` for the concave case; it costs the 15:1
+  ellipse, admissible by that accident, its band;
 * gate unwrapping steps between raw stations, so two gates on one station
   are a zero step and not a full turn, and an unpinned gate is clamped only
   when the gates would otherwise wind more than once round the wall;
@@ -1454,33 +1489,48 @@ the shifted start, the plain reversal and densification on every suite run,
 comparing the whole graph summary; with an earlier, half-wall form of the
 gate clamp back in, six of its subtests fail.
 
-**Off the corpus the property does not hold.** These six fixes were chosen
-and measured on the thirteen fixtures. `HeldOutEquivalentInputTests` runs
+**Off the corpus.** The first six fixes were chosen and measured on the
+thirteen fixtures, and did not carry: `HeldOutEquivalentInputTests` runs
 four simple bodies that no rule was tuned on, under the same five inputs
-plus starts one and five vertices on; each still fails and carries
-`expectedFailure`:
+plus starts one and five vertices on, and all four failed. Every vertex of
+a coarse list was its own curvature peak, since the smoothing was narrower
+than the vertex spacing, and the anchors were chosen among near-ties by list
+position or by round-off (the same 24-gon generated another way, 9e-16
+apart, gave 21 blocks instead of 18). The last six fixes above came from
+those bodies, and two of them now pass as ordinary tests:
 
 | body | as generated | equivalent inputs |
 | --- | --- | --- |
-| circle, 24 points | 18 blocks | 21 reversed or with any shifted start |
-| ellipse 2:1, 40 points | 12 blocks | 18 starting five vertices on |
-| ellipse 10:1, 180 points | 15 blocks | 21 to 27 reversed, densified or one or five vertices on; topology-invalid a third of the way round |
-| NACA 0012, 35 points per side | 19 blocks | topology-invalid reversed |
+| circle, 24 points | 12 blocks | 12 under all seven |
+| ellipse 2:1, 40 points | 12 blocks | 12 under all seven |
+| ellipse 10:1, 180 points | 24 blocks | topology-valid under all seven, in 24, 21 or 12 blocks |
+| NACA 0012, 35 points per side | 22 blocks | 22 under six; 14 and topology-invalid reversed |
 
-The 24-gon and the 10:1 ellipse generated another way, 9e-16 apart, give 21
-and 18 blocks: on these lists round-off alone decides the graph. The likely
-cause is the curvature anchors. The smoothing width, 0.004 of the
-perimeter, is narrower than the vertex spacing of a coarse list, so every
-vertex becomes its own curvature peak, and the anchors are chosen among
-near-ties by list position. The invariance claim is therefore a property of
-the thirteen fixtures, not of the construction.
+The two that fail carry `expectedFailure`. Their layouts are identical
+across the inputs, their rings agree to 6e-8 and the solver's starting
+states to 1e-12; the coordinate-descent relaxation then takes a different
+path on a near-tie, ends in a different local optimum (worst scaled
+Jacobian 0.0644 against 0.0587 on the NACA), and the band repair after it
+ends in a different graph, once an invalid one. That is a knife edge in the
+relaxation, not a reading of the list, and it is as open as the fixtures'
+own orientation dependence below.
+
+The turning density serves the split midpoint only. Read as the patch
+turning and the relaxation's barrier too - half of a vertex's turning on
+each side of a gate on it - it was the truer measure, but the layout's
+limits were tuned to the polyline sum: half of a 10:1 ellipse's 20-degree
+tip vertex fell to each neighbouring patch and the band was lost, and the
+`test_wake` sharp teardrop's far-field patch read 100.16 degrees instead of
+99.66 against a limit of 100 and lost `resolved`. The flip that motivated
+it - a gate a rounding error past a vertex adding that vertex's whole
+turning - is gone with the peaks located exactly.
 
 On the thirteen fixtures the block graph is invariant; its geometry is not
-quite. Vertex positions
-follow the bisector polylines' discretisation, whose walk starts at the
-junction the raster finds first, and the relaxation sweeps its variables in
-ring order from that junction, so the gates of the same graph land up to a
-pixel apart in different orientations. Mostly that moves the shape measures
+quite. Vertex positions follow the bisector polylines' discretisation, whose
+walk starts at the junction the raster finds first (a closed ring starts at
+its point of least clearance), and the relaxation sweeps its variables in
+ring order from there, so the gates of the same graph land up to a pixel
+apart in different orientations. Mostly that moves the shape measures
 by a few degrees; on two fixtures it is more (see the remaining limits).
 
 **Raster width.** Every fixture gives the same block graph at raster widths
@@ -1575,15 +1625,17 @@ installations whose LAPACK/BLAS build is broken.
   discretisation (measured before the review fixes). Every synthetic fixture
   is raster-invariant at widths 400, 700 and 1000, so this is not reproduced
   in a small case; the A-airfoil C-grid's gate count, and with it its block
-  count, follows the raster (150 to 185 blocks over widths 420 to 1000) and
-  the start point (165 or 99), although every variant measured resolves.
-* **Coarse and thin bodies change their block graph with the start point.**
-  A 24-gon, a 40-point ellipse, a 10:1 ellipse and a NACA 0012 with 35
-  points per side change their graph under a shifted start or a reversal,
-  and the last two become topology-invalid. On the two symmetric lists a
-  9e-16 perturbation also changes the graph. The likely cause is curvature
-  anchors on lists coarser than the smoothing width, chosen among near-ties
-  (`HeldOutEquivalentInputTests`, four `expectedFailure` tests).
+  count, follows the raster (200 or 205 blocks over widths 420 to 1000) and
+  the start point (200 or 120), although every variant measured resolves.
+* **The relaxation's path can decide a graph, and a verdict.** A 10:1
+  ellipse under its equivalent inputs and a coarse NACA 0012 listed
+  backwards reach the solver with the same layout, rings 6e-8 apart and
+  penalties equal to 1e-12, and leave it in different local optima; the
+  band repair then gives the ellipse 24, 21 or 12 blocks, all valid, and
+  the NACA a topology-invalid graph (`HeldOutEquivalentInputTests`, two
+  `expectedFailure` tests). The coordinate-descent grid search is path
+  dependent; a continuous polish or a convex formulation would be needed to
+  close this.
 * **`--no-grid-quality` does not reach the opt-in trials.** The C-grid,
   wake, hull and spanning trials always sample their own grids, because they
   are judged before they commit. A trial that commits under the flag
@@ -1591,8 +1643,8 @@ installations whose LAPACK/BLAS build is broken.
   the annular result alone fails closed and writes none.
 * **The geometry of a graph still follows the orientation.** On the
   thirteen fixtures the block graph is the same for every equivalent input,
-  but the bisector polylines' walk
-  starts at the junction the raster finds first, and the relaxation sweeps
+  but the bisector polylines' walk starts at the junction the raster finds
+  first (a closed ring at its least clearance), and the relaxation sweeps
   its gates in ring order from it, so the same graph's gates land up to a
   pixel apart. On `concave_and_convex` a half turn moves the rounded cove's
   anchor half a pixel to the other side of the axis and the relaxation then
@@ -1611,9 +1663,11 @@ installations whose LAPACK/BLAS build is broken.
 * **A band block may span 100 degrees of wall turning**, which is what gives
   the single ellipse its 27 degree wall misalignment under transfinite
   interpolation. The relaxation keeps that limit (a barrier on each band
-  patch's turning), so thin ellipses up to 15:1 are admissible; band blocks
-  are still judged by their straight corner quadrilateral, so a body much
-  thinner than that at its tips can still fail its band. `--max-wall-turning` exposes the limit; the measured table
+  patch's turning), so thin ellipses up to 12:1 are admissible with their
+  tips pinned as rounded corners; band blocks are still judged by their
+  straight corner quadrilateral, so a body much thinner than that at its
+  tips can still fail its band (a 15:1 ellipse does; it was admissible when
+  the solver happened to skip its tip gates, see "Equivalent inputs"). `--max-wall-turning` exposes the limit; the measured table
   above shows why the default has not moved.
 * **The through-cut cavity template is built for three sectors only.** More
   sectors need a transition strip between the sector chain and the core

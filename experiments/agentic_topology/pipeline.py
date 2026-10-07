@@ -1475,16 +1475,16 @@ LIMITATIONS = [
     "junctions do not. Junctions that fail to converge make the raster finer, "
     "but the anchor floor still follows the medial ring's discretisation, so a "
     "C-grid's gate count moves with the raster width and the start point; the "
-    "A-airfoil resolves at every width and start measured, in 99 to 185 "
+    "A-airfoil resolves at every width and start measured, in 120 to 205 "
     "blocks.",
     "Equivalent inputs - rotation, reflection, reversal, start point, scaling, "
     "translation, densification, a repeated closing point - give the same "
     "block graph for all 13 synthetic fixtures, and so do raster widths 400 "
-    "to 1000. Off the corpus they need not: a 24-gon, a 40-point ellipse, a "
-    "10:1 ellipse and a NACA 0012 with 35 points per side change their graph "
-    "with the start point or the direction, and two become topology-invalid; "
-    "on a coarse list the curvature anchors are near-ties, so retry a refused "
-    "or unresolved run reversed and with a shifted start. The graph's geometry still follows the orientation: bisector "
+    "to 1000, and a coarse 24-gon and 40-point ellipse keep theirs too. A "
+    "10:1 ellipse with midpoints inserted and a coarse NACA 0012 listed "
+    "backwards reach the relaxation equal to 1e-12 and leave it in a "
+    "different local optimum, once topology-invalid: retry a refused or "
+    "unresolved run reversed and with a shifted start. The graph's geometry still follows the orientation: bisector "
     "vertices are walked from the junction the raster finds first and the "
     "relaxation sweeps from it, so gates land up to a pixel apart; "
     "concave_and_convex turned through 180 degrees has one inverted sampled "
@@ -1493,8 +1493,8 @@ LIMITATIONS = [
     "mirrored has 55 blocks instead of 51 and tandem_blunt turned through "
     "180 degrees loses both wakes to validation.",
     "Band blocks are judged by their straight corner quadrilateral, so a body "
-    "much thinner at its tips than the 15:1 ellipse measured can still fail "
-    "its band.",
+    "much thinner at its tips than the 12:1 ellipse measured can still fail "
+    "its band (a 15:1 does).",
     "Front repair reduces whole failing blocks, requests cuts and permits a "
     "bounded global height search on the final repair round. It is deterministic "
     "but a last-bit height change still moves sharp_bodies' default cell count "

@@ -948,22 +948,148 @@ class EquivalentInputTests(unittest.TestCase):
                     self.assertEqual(result.graph.summary(), reference.graph.summary())
 
 
+class TurningDensityTests(unittest.TestCase):
+    """The wall turning the layout cuts and judges by is a density on the
+    turning vertices: continuous in the gates and blind to collinear points."""
+
+    def setUp(self):
+        import block_layout as bl
+        import geometry2d as g2
+
+        self.bl = bl
+        points = cases.ellipse((0.0, 0.0), 2.0, 1.0, 0.0, 40)
+        self.loop = g2.orient_anticlockwise(g2.close_loop(points, 0.0))
+        self.dense = g2.orient_anticlockwise(g2.close_loop(cases.densify([points])[0], 0.0))
+        stations = g2.cumulative_length(self.loop)
+        self.perimeter = float(stations[-1])
+        self.tip = 0.0
+        self.flank = float(stations[10])
+        self.far = float(stations[20])
+
+    def test_a_gate_on_a_vertex_sees_half_of_its_turning_on_each_side(self):
+        half = self.bl.turning_between(self.loop, self.tip, self.far - self.tip)
+        other = self.bl.turning_between(self.loop, self.far, self.perimeter - self.far)
+        self.assertAlmostEqual(half, math.pi, places=12)
+        self.assertAlmostEqual(other, math.pi, places=12)
+        quarter = self.bl.turning_between(self.loop, self.tip, self.flank - self.tip)
+        self.assertAlmostEqual(quarter, 0.5 * math.pi, places=12)
+
+    def test_a_sharp_corner_belongs_to_neither_block_beside_its_gate(self):
+        import geometry2d as g2
+
+        tear = g2.orient_anticlockwise(g2.close_loop(cases.teardrop((0.0, 0.0), 0.32, tip_ratio=4.0), 0.0))
+        stations = g2.cumulative_length(tear)
+        total = float(stations[-1])
+        turning = np.abs(g2.turning_angles(tear, closed=True))
+        tip = int(np.argmax(turning))
+        self.assertGreater(turning[tip], math.radians(100.0))
+        at_tip = float(stations[tip])
+        # A gate on the tip: the two halves share the smooth turning only.
+        halves = self.bl.turning_between(tear, at_tip, 0.5 * total) + self.bl.turning_between(tear, at_tip + 0.5 * total, 0.5 * total)
+        self.assertAlmostEqual(halves, 2.0 * math.pi - float(turning[tip]), places=9)
+        # A span with the tip strictly inside counts all of it, and nothing
+        # else: the flanks are straight.
+        inside = self.bl.turning_between(tear, at_tip - 0.1, 0.2)
+        self.assertAlmostEqual(inside, float(turning[tip]), places=12)
+        self.assertAlmostEqual(self.bl._turning_midpoint(tear, at_tip - 0.1, 0.2), 0.1, places=9)
+
+    def test_the_turning_is_continuous_as_a_gate_crosses_a_vertex(self):
+        step = 1.0e-7
+        before = self.bl.turning_between(self.loop, self.tip - step, self.far - self.tip)
+        after = self.bl.turning_between(self.loop, self.tip + step, self.far - self.tip)
+        # The tip vertex turns 17.9 degrees; a prefix sum of vertex turnings
+        # jumped by that much here.
+        self.assertLess(abs(before - after), math.radians(0.01))
+
+    def test_collinear_vertices_change_neither_turning_nor_midpoint(self):
+        for start, length in ((self.tip, self.far - self.tip), (0.37, 2.9), (5.1, 1.3)):
+            with self.subTest(start=start, length=length):
+                self.assertAlmostEqual(
+                    self.bl.turning_between(self.loop, start, length),
+                    self.bl.turning_between(self.dense, start, length),
+                    places=12,
+                )
+                self.assertAlmostEqual(
+                    self.bl._turning_midpoint(self.loop, start, length),
+                    self.bl._turning_midpoint(self.dense, start, length),
+                    places=9,
+                )
+        # ``densify`` leaves the closing segment alone, so the tip has a whole
+        # segment on one side and a half on the other; counting the inserted
+        # point as a vertex moved the tip's turning two-thirds to one side.
+        midpoint = self.bl._turning_midpoint(self.dense, self.tip, self.far - self.tip)
+        self.assertAlmostEqual(midpoint, self.flank - self.tip, places=9)
+
+
+class TipGateTests(unittest.TestCase):
+    """A rounded convex corner is a pinned block corner, as a sharp one is."""
+
+    def test_a_thin_ellipse_keeps_its_tips_as_gates(self):
+        options = dataclasses.replace(CAVITY_FAST, evaluate_grid=False)
+        names, loops = cases.HELD_OUT["ellipse_10to1"]()
+        result = pipeline.run_external(names, loops, options)
+        tips = [cut for cut in result.layout.cuts[0] if cut.anchor.kind == "tip"]
+        self.assertEqual(len(tips), 2)
+        for cut in tips:
+            self.assertTrue(cut.pinned)
+            # The relaxation left the gate on the tip; it used to slide a
+            # sixth of the nose radius off it, and a band block wrapped the
+            # nose.
+            self.assertAlmostEqual(abs(float(cut.wall_point[0])), 1.0, places=9)
+            self.assertAlmostEqual(float(cut.wall_point[1]), 0.0, places=9)
+        self.assertTrue(result.topology_valid, result.problems)
+
+    def test_a_round_tip_stays_a_free_curvature_gate(self):
+        options = dataclasses.replace(CAVITY_FAST, evaluate_grid=False)
+        names, loops = cases.HELD_OUT["ellipse_2to1_40"]()
+        result = pipeline.run_external(names, loops, options)
+        kinds = {cut.anchor.kind for cut in result.layout.cuts[0]}
+        self.assertIn("curvature", kinds)
+        self.assertNotIn("tip", kinds)
+
+
+class SolverVariableTests(unittest.TestCase):
+    def test_a_gate_past_the_wall_origin_is_read_inside_its_window(self):
+        # Bounds run on from the previous gate and may pass the wall's
+        # length; the stored station has wrapped to a small number.  Read as
+        # stored, the gate seemed to lie far below its window and the window
+        # collapsed around it, so the one gate past the origin was never
+        # refined - and which gate that was followed the point list's start.
+        variable = patch_solver._Variable(
+            "gate", None, lambda: 0.3, lambda: (9.5, 10.5), (), (), period=10.0
+        )
+        self.assertAlmostEqual(variable.current(9.5), 10.3)
+        self.assertAlmostEqual(variable.current(0.1), 0.3)
+        open_branch = patch_solver._Variable("anchor", None, lambda: 0.3, None, (), ())
+        self.assertAlmostEqual(open_branch.current(9.5), 0.3)
+
+
 class HeldOutEquivalentInputTests(unittest.TestCase):
     """The same property on simple bodies that no layout rule was tuned on.
 
-    Each still fails, and carries ``expectedFailure`` until it is fixed (the
-    reference is the list as generated):
+    The coarse lists space their vertices wider than the curvature smoothing
+    used to be, so every vertex was its own curvature peak and the anchors
+    were picked among near-ties by list position - or by round-off: the same
+    24-gon generated another way, 9e-16 apart, gave 21 blocks instead of 18.
+    Six fixes made the circle and the 2:1 ellipse pass: a kernel at least as
+    wide as the vertex spacing, peaks located on the curvature itself, the
+    split midpoint from a turning density that ignores collinear vertices,
+    the solver reading a gate past the wall's origin inside its window, a
+    closed ring traced from its least clearance, and the far-field cell no
+    longer seeding a ring the body had seeded.  A tight convex bend is now a
+    pinned rounded corner (``tip``), which the solver bug had done by
+    accident for lists starting at a tip.
 
-    * ``circle_24``: 18 blocks, 21 reversed or with any shifted start;
-    * ``ellipse_2to1_40``: 12 blocks, 18 starting five vertices later;
-    * ``ellipse_10to1``: 15 blocks, 21 to 27 reversed, densified or one or
-      five vertices on, and topology-invalid starting a third of the way round;
-    * ``naca0012_coarse``: 19 blocks, topology-invalid reversed.
+    Two still fail, and carry ``expectedFailure`` until fixed.  Their layouts
+    are identical across the inputs, their rings agree to 6e-8 and their
+    solver states to 1e-12; the coordinate-descent relaxation then takes a
+    different path on a near-tie, and the band repair after it ends in a
+    different graph:
 
-    The coarse lists space their vertices wider than the curvature smoothing,
-    so every vertex is its own curvature peak and the anchors are picked among
-    near-ties by list position - or by round-off: the same 24-gon and 10:1
-    ellipse generated another way, 9e-16 apart, give 21 and 18 blocks.
+    * ``ellipse_10to1``: topology-valid under every input, in 24, 21 or 12
+      blocks;
+    * ``naca0012_coarse``: 22 blocks in seven inputs, 14 and topology-invalid
+      reversed.
     """
 
     VARIANTS = {
@@ -984,11 +1110,9 @@ class HeldOutEquivalentInputTests(unittest.TestCase):
                 self.assertTrue(result.topology_valid, result.problems)
                 self.assertEqual(result.graph.summary(), reference.graph.summary())
 
-    @unittest.expectedFailure
     def test_a_coarse_circle(self):
         self.assert_follows_the_geometry_only("circle_24")
 
-    @unittest.expectedFailure
     def test_a_coarse_ellipse(self):
         self.assert_follows_the_geometry_only("ellipse_2to1_40")
 

@@ -597,6 +597,9 @@ def _trace_loop_branches(
                 "nor attached to a junction"
             )
             continue
+        path = _canonical_closed_loop(
+            sites, pair, path, scale=scale, min_step=min_step
+        )
         result.append(
             Branch(
                 len(existing) + len(result),
@@ -608,6 +611,73 @@ def _trace_loop_branches(
             )
         )
     return result
+
+
+def _canonical_closed_loop(
+    sites, pair, path: np.ndarray, *, scale: float, min_step: float
+) -> np.ndarray:
+    """Re-trace a closed bisector from its point of least clearance.
+
+    The first trace starts at the raster pixel nearest the bisector, which
+    round-off in the site distances moves between neighbouring pixels - the
+    same polygon with collinear points added started its ring a tenth of
+    the way round and sampled it differently - and the ring's origin orders
+    the layout's sweeps while its sampling shapes every patch.  The least
+    clearance is the geometry's own point: it is found between the traced
+    vertices by golden-section search on the arc length, each probe projected
+    onto the bisector, and the loop is traced again from there so that the sampling
+    too follows the geometry.  Equal minima (a circle's, an ellipse's two
+    flanks) are symmetric, so whichever is taken gives the same graph.  If
+    the second trace fails the first is kept.
+    """
+    points = np.asarray(path)
+    if len(points) < 4:
+        return points
+    stations = g2.cumulative_length(points)
+
+    def clearance(station: float) -> float:
+        # On the bisector itself: along the traced chords the sag of a
+        # tenth-of-clearance step moved the minimum by a hundredth of the
+        # ring, so two traces of one ring disagreed on where it was.
+        point = g2.sample_at_arclength(points, [station])[0]
+        try:
+            point = project_to_bisector(sites, pair, point, scale=scale)
+        except TraceError:
+            pass
+        return float(np.min(_site_measures(sites, pair, point)[0]))
+
+    sampled = np.array([float(np.min(_site_measures(sites, pair, p)[0])) for p in points[:-1]])
+    index = int(np.argmin(sampled))
+    low = float(stations[index - 1]) if index > 0 else float(stations[-2]) - float(stations[-1])
+    high = float(stations[index + 1])
+    ratio = 0.5 * (math.sqrt(5.0) - 1.0)
+    inner_low = high - ratio * (high - low)
+    inner_high = low + ratio * (high - low)
+    total = float(stations[-1])
+    value_low = clearance(inner_low % total)
+    value_high = clearance(inner_high % total)
+    for _ in range(60):
+        if value_low < value_high:
+            high = inner_high
+            inner_high, value_high = inner_low, value_low
+            inner_low = high - ratio * (high - low)
+            value_low = clearance(inner_low % total)
+        else:
+            low = inner_low
+            inner_low, value_low = inner_high, value_high
+            inner_high = low + ratio * (high - low)
+            value_high = clearance(inner_high % total)
+    origin = g2.sample_at_arclength(points, [(0.5 * (low + high)) % total])[0]
+    try:
+        start = project_to_bisector(sites, pair, origin, scale=scale)
+        _, gradient = _site_measures(sites, pair, start)
+        tangent = _tangent(gradient, None)
+    except TraceError:
+        return points
+    traced = _trace_closed_loop(
+        sites, pair, start, tangent, scale=scale, min_step=min_step
+    )
+    return points if traced is None else traced
 
 
 def _seed_point(sites, raster: Raster, pair: tuple[int, int]) -> np.ndarray | None:

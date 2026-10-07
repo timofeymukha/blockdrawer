@@ -22,13 +22,13 @@ acceptance term or an option changes there, update the decision points here.**
 - **Geometry**: one closed point list per solid body (`x y` per line), or a
   CAD file assembled into closed contours. On the engine's thirteen test
   fixtures, orientation, start point and point density do not change the
-  block graph. Off the corpus they can: a 24-gon, a 40-point ellipse, a
-  180-point 10:1 ellipse and a NACA 0012 with 35 points per side change their
-  graph with the start point or the direction, and two of them become
-  topology-invalid (`HeldOutEquivalentInputTests`). No point spacing is known
-  to be safe yet, so when a run is refused or unresolved, retry with the list
-  reversed and with a shifted start before changing anything else, and keep
-  the best verdict. Gate positions can also move by a
+  block graph, and so do a 24-gon and a 40-point ellipse; a 180-point 10:1
+  ellipse with midpoints inserted and a NACA 0012 with 35 points per side
+  listed backwards still end in a different, invalid graph, because the
+  relaxation takes a different path from a state equal to 1e-12
+  (`HeldOutEquivalentInputTests`). So when a run is refused or unresolved,
+  retry with the list reversed and with a shifted start before changing
+  anything else, and keep the best verdict. Gate positions can also move by a
   raster pixel between orientations, which has flipped one fixture's
   verdict: judge a candidate in the orientation you export. Keep the
   supplied points; never resample geometry from a picture or a raster.
@@ -59,8 +59,9 @@ case you are in.
   spoke follows the corner bisector, so two blocks share it at 45 degrees. That
   is the classical O-in-a-box; do not fight it. The engine builds it for a
   square cylinder in a box with equal margins too (a body corner and a box
-  corner on one diagonal become one spoke), and for ellipses up to 15:1;
-  thinner bodies can still fail their band at the tips.
+  corner on one diagonal become one spoke), and for ellipses up to 12:1,
+  whose tips are pinned block corners like a sharp corner; a 15:1 ellipse
+  still fails its band at the tips.
 - **Sharp trailing edge** (fluid sector of at least 250 degrees at one wall
   vertex): a **C-grid**. The band continues past the edge as a two-sided wake
   band along a straight wake line to the outlet; the far-field core is cut open
@@ -176,10 +177,10 @@ itself - band blocks without sliver corners at the requested height, at most
 again - and builds the band by wall normals, three more level sets at heights
 growing by three, the wake band along the given direction, and straight
 spokes to the cap; the A-airfoil at fifteen chords comes out `resolved` in
-165 blocks with the band at its full height, 12 degrees of wall misalignment
+200 blocks with the band at its full height, 12 degrees of wall misalignment
 and 51 degrees of non-orthogonality (raster width 700). It resolves at every
 raster width from 420 to 1000, start point, small incidence change and rigid
-turn tried, but the gate count, and with it the block count (99 to 210),
+turn tried, but the gate count, and with it the block count (120 to 225),
 still follows the raster and the start point. It refuses,
 with the reason under `medial.cgrid`, anything but one body, one wake and the
 cap-leg-outlet-leg boundary; a rectangle or circle around a single airfoil
@@ -187,7 +188,7 @@ falls back to the annular construction, which is admissible only to about
 six chords there. Two foils in tandem build in a circle far field with both
 wakes (`make research-tandem`), admissible but not resolved at the trailing
 edges' seams; multi-element bodies with coves are still hand builds. NACA
-0012 and a cambered NACA 4412 resolve in the same C-grid set-up (165 and 115
+0012 and a cambered NACA 4412 resolve in the same C-grid set-up (185 and 225
 blocks). A smooth body that misses only its wall misalignment can
 take a tighter `--max-wall-turning`: the 2:1 ellipse resolves at 45 degrees
 in 24 blocks (10 degrees of misalignment) where the default 100 gives 12
