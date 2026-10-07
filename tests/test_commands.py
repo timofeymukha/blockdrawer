@@ -217,6 +217,20 @@ class ApplyCommandTests(unittest.TestCase):
         self.assertIsNone(batch.results[5].result["boundary"])
         self.assertNotIn(edge_key("v1", "v2"), edited.edge_boundaries)
 
+    def test_rename_boundary_command(self) -> None:
+        model = MeshModel()
+        batch = apply_commands(model, [
+            "add_boundary cap",
+            "set_edge_boundary v0-v3 cap",
+            "rename_boundary cap farfield",
+        ])
+        edited = batch.model
+        self.assertEqual(sorted(edited.boundaries), ["farfield"])
+        self.assertEqual(edited.edge_boundaries[edge_key("v0", "v3")], "farfield")
+        self.assertEqual(batch.results[2].result["name"], "farfield")
+        with self.assertRaisesRegex(CommandError, "rename_boundary"):
+            apply_commands(edited, ["rename_boundary missing x"])
+
     def test_spacing_link_commands(self) -> None:
         model = MeshModel()
         batch = apply_commands(model, [

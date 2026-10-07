@@ -118,6 +118,29 @@ class MeshModelTests(unittest.TestCase):
         self.assertEqual(model.boundaries["second"].kind, "patch")
         model.validate()
 
+    def test_boundary_rename_keeps_edges_type_and_cyclic_partner(self) -> None:
+        model = MeshModel()
+        model.add_boundary("first")
+        model.add_boundary("second")
+        model.set_boundary_type("first", "cyclic", neighbour_patch="second")
+        selected = edge_key("v0", "v3")
+        model.set_edge_boundary(selected, "first")
+
+        renamed = model.rename_boundary("first", "farfield")
+
+        self.assertEqual(list(model.boundaries), ["farfield", "second"])
+        self.assertEqual(renamed.kind, "cyclic")
+        self.assertEqual(renamed.neighbour_patch, "second")
+        self.assertEqual(model.boundaries["second"].neighbour_patch, "farfield")
+        self.assertEqual(model.edge_boundaries[selected], "farfield")
+        with self.assertRaises(TopologyError):
+            model.rename_boundary("farfield", "second")
+        with self.assertRaises(TopologyError):
+            model.rename_boundary("farfield", model.z_min_patch_name)
+        with self.assertRaises(TopologyError):
+            model.rename_boundary("missing", "x")
+        model.validate()
+
     def test_extrusion_moves_boundary_assignment_to_new_outer_edge(self) -> None:
         model = MeshModel()
         model.add_boundary("inlet")

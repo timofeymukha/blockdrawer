@@ -773,6 +773,18 @@ class SessionTests(unittest.TestCase):
         )
         self.assertEqual(research_cli.build_options(parsed).farfield_center, (0.0, 0.0))
 
+    def test_sizing_can_be_given_in_the_geometry_units(self):
+        import research_cli
+
+        parsed = research_cli.build_parser().parse_args(
+            ["run", "--case", "single_ellipse", "--first-width", "0.001", "--core-size", "0.5"]
+        )
+        options = research_cli.build_options(parsed)
+        self.assertEqual(options.sizing.widths(39.6), (0.001, 0.5))
+        parsed = research_cli.build_parser().parse_args(["run", "--case", "single_ellipse"])
+        first, _ = research_cli.build_options(parsed).sizing.widths(39.6)
+        self.assertAlmostEqual(first, 2.0e-3 * 39.6)
+
     def test_internal_session_round_trip_render_and_export(self):
         from blockdrawer.foam import block_mesh_dict
 

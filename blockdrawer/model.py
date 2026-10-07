@@ -292,6 +292,36 @@ class MeshModel(
         }
         self.validate()
 
+    def rename_boundary(self, name: str, new_name: str) -> Boundary:
+        """Rename a patch, keeping its type, colour, edges and cyclic partner."""
+        if name not in self.boundaries:
+            raise TopologyError(f"Unknown boundary {name!r}")
+        if new_name == name:
+            return self.boundaries[name]
+        self._validate_boundary_name(new_name)
+        if new_name in self.boundaries:
+            raise TopologyError(f"Boundary {new_name!r} already exists")
+        if new_name in (self.z_min_patch_name, self.z_max_patch_name):
+            raise TopologyError(
+                f"Boundary {new_name!r} is already used by an extrusion patch"
+            )
+        current = self.boundaries[name]
+        renamed = Boundary(new_name, current.kind, current.color, current.neighbour_patch)
+        # Keep the patch order: boundaries are written in insertion order.
+        self.boundaries = {
+            (new_name if key == name else key): (renamed if key == name else value)
+            for key, value in self.boundaries.items()
+        }
+        for key, value in self.boundaries.items():
+            if value.neighbour_patch == name:
+                self.boundaries[key] = Boundary(value.name, value.kind, value.color, new_name)
+        self.edge_boundaries = {
+            edge: (new_name if boundary_name == name else boundary_name)
+            for edge, boundary_name in self.edge_boundaries.items()
+        }
+        self.validate()
+        return renamed
+
     def set_boundary_type(
         self,
         name: str,

@@ -615,6 +615,11 @@ def _run_remove_boundary(model: MeshModel, args: dict[str, Any]) -> dict[str, An
     return {"removed": args["name"], "boundaries": sorted(model.boundaries)}
 
 
+def _run_rename_boundary(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
+    boundary = model.rename_boundary(args["name"], args["new_name"])
+    return to_json_value(boundary)
+
+
 def _run_set_boundary_type(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
     affected = model.set_boundary_type(
         args["name"], args["type"], neighbour_patch=args["neighbour_patch"]
@@ -960,6 +965,15 @@ _register(CommandSpec(
     "Delete a patch, its edge assignments, and any cyclic pairing.",
     (Parameter("name", "str", "patch name"),),
     _run_remove_boundary,
+))
+_register(CommandSpec(
+    "rename_boundary",
+    "Rename a patch, keeping its type, edges and cyclic partner.",
+    (
+        Parameter("name", "str", "current patch name"),
+        Parameter("new_name", "str", "new unique patch name"),
+    ),
+    _run_rename_boundary,
 ))
 _register(CommandSpec(
     "set_boundary_type",

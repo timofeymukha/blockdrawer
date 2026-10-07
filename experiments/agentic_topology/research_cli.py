@@ -181,6 +181,25 @@ def add_input_arguments(parser: argparse.ArgumentParser) -> None:
         default=sizing.SizingOptions.core_size_ratio,
         help="isotropic core cell size as a fraction of the domain scale",
     )
+    parser.add_argument(
+        "--first-width",
+        type=float,
+        default=None,
+        metavar="LENGTH",
+        help=(
+            "first cell width in the geometry's units (overrides "
+            "--first-width-ratio; the domain scale a 15-chord far field gives "
+            "is about 40 chords, so the ratio default means a first cell of "
+            "0.08 chords there)"
+        ),
+    )
+    parser.add_argument(
+        "--core-size",
+        type=float,
+        default=None,
+        metavar="LENGTH",
+        help="isotropic core cell size in the geometry's units (overrides --core-size-ratio)",
+    )
     parser.add_argument("--growth", type=float, default=sizing.SizingOptions.growth)
     parser.add_argument(
         "--cell-budget", type=int, default=None, help="cap on the total cell count"
@@ -328,6 +347,8 @@ def build_options(arguments) -> pipeline.PipelineOptions:
         sizing=sizing.SizingOptions(
             first_width_ratio=arguments.first_width_ratio,
             core_size_ratio=arguments.core_size_ratio,
+            first_width=arguments.first_width,
+            core_size=arguments.core_size,
             growth=arguments.growth,
             budget=arguments.cell_budget,
         ),

@@ -245,10 +245,31 @@ The commands that carry a hand-built topology: `add_vertex`,
 `add_block_from_vertices`, `set_edge_type spline|polyLine|arc`,
 `set_control_point_count` and `set_control_point` for curved edges,
 `import_curve` plus `project ... fit=true` to put wall edges exactly on the
-supplied geometry, `add_boundary`, `set_boundary_type`, `set_edge_boundary`,
-`set_export_settings`. Prefer `split_edge` and `combine_blocks` for conformal
-refinement of a strip over rebuilding blocks by hand. Commit the batch with
-the session so the topology can be regenerated and reviewed.
+supplied geometry, `add_boundary`, `rename_boundary`, `set_boundary_type`,
+`set_edge_boundary`, `set_export_settings`. Prefer `split_edge` and
+`combine_blocks` for conformal refinement of a strip over rebuilding blocks by
+hand. Commit the batch with the session so the topology can be regenerated and
+reviewed.
+
+**Running the engine.** A run takes seconds on a synthetic body and five to
+twenty minutes on an airfoil at fifteen chords, so start it in the
+background and poll, never in a shell call with a two-minute timeout. Its
+default sizing is relative to the *domain* scale (about 40 chords for a
+15-chord far field), which gives a first cell of 0.08 chords and one cell on
+most edges: give the sizes in the geometry's units with `--first-width` and
+`--core-size` (and `--layer-height` for the band). A fabricated C-shaped far
+field is written as the patches `cap`, `top`, `bottom` and `outlet`, a
+rectangle as its four named sides: merge what the case wants as one patch
+with `set_edge_boundary` onto one of them and `rename_boundary` it, rather
+than rebuilding the assignments. When the result is admissible but not
+resolved, do not stop at the report: `quality_report worst=5` names the
+blocks that miss, `render_session` zoomed on them shows why, and the
+remedies are the ones in section 5 - a sharp or rounded corner that is not
+a block corner wants a split there, a wake or far-field block with a
+170-degree corner wants its ring vertex moved (`move_vertex`) or the strip
+split, a band capped by the inscribed-disk rule in a circular far field
+wants the C-grid producer or a hand-built nose. A hand-built layout is the
+fallback, not the first move.
 
 ## 4. Size and grade - after the topology is right
 
