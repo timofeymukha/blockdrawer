@@ -125,13 +125,21 @@ case you are in.
   when the lens has a second corner, or when the wake would enter a third
   body's cell. The staggered teardrops (`make research-staggered`) get it
   in the near field inside the hull with the rear's own wake beside it; the
-  hull far field then continues one exiting wake only, so with two the far
-  field falls back to the annular construction with that reason under
-  `medial.hull` (the two-exit hull is the next step, and 30P30N's too).
-  30P30N's main and flap get the topology, but the slot under the main's
-  trailing edge - 0.005 chords between the wake line and the flap's nose -
-  folds the graded grid there until the wake band is clearance-limited by
-  the flap as wall bands are.
+  hull far field then continues one exiting wake only, so with two it tries
+  each as the exit - the one over another body first - rebuilding the near
+  field with the other body's wake dropped and saying so under
+  `medial.hull.dropped_wakes` and `exit_attempts`. The dropped body keeps
+  its band without a wake band (the two-exit hull is still the next step).
+  30P30N's main and flap build this way: `--wake --hull --farfield-shape
+  cshape --farfield-radius 15 --farfield-center 0.8,0 --layer-height 0.03
+  --first-width 0.001 --core-size 1.0` gives 161 blocks, admissible, Mesh OK
+  at 79 degrees of non-orthogonality and aspect ratio 114 (band 0.04 builds
+  too; 0.02 fails validation and thinner bands lose the layout in the
+  0.005-chord slot), with the main's wake over the flap carried to the
+  outlet and the flap's base banded without its own wake. It is not
+  resolved: the main's trailing-edge cluster carries 85-degree corners. The
+  option region is narrow and a run takes eight minutes, so start from
+  these values rather than sweeping.
 - **Multi-element bodies** (slat, main, flap): the *effective airfoil* is a
   chain of wall pieces and **bridges** - straight cuts across a cove mouth or
   from a cusp to the next element - and the regions the chain skips are
@@ -221,7 +229,8 @@ that commits is fully evaluated and does write its session; the
 `describe`, `cavities`, `candidates`, `apply --move` and `focus` subcommands
 let you choose among validated alternatives instead of placing vertices.
 
-**Where the engine cannot** (two wakes leaving a cluster through the hull,
+**Where the engine cannot** (two wake bands leaving a cluster through the
+hull - one is dropped,
 pockets), write
 geometry code, not clicks: a layout module that computes every vertex, curve
 and block independently of BlockDrawer, and a generator that emits an
@@ -274,13 +283,13 @@ split, a band capped by the inscribed-disk rule in a circular far field
 wants the C-grid producer or a hand-built nose. A hand-built layout is the
 fallback, not the first move. A *circular* far field with `--wake` falls
 back to the annular construction, since the C-grid producer wants a cap,
-two legs and an outlet; give the circle as four `--outer` chains instead -
-an `outlet` arc of about 20 degrees either side of the wake direction, then
-the two legs and the cap as arcs - and the C-grid applies (a NACA 0012 in a
-circle of six chords went from 40 degrees of wall misalignment to a Mesh OK
-C-grid at 54 degrees of non-orthogonality that way). The outlet arc must be
-wider than the outermost wake level, or the wake line leaves through a leg;
-on a circle the block at the smooth chain break beside the wake carries a
+two legs and an outlet; add `--farfield-outlet 25` and the circle is cut
+into those four chains on the circle itself (an `outlet` arc of that
+half-angle about the wake direction) and the C-grid applies - a NACA 0012
+in a circle of six chords went from 40 degrees of wall misalignment to a
+Mesh OK C-grid at 54 degrees of non-orthogonality. The arc must be wider
+than the outermost wake level, or the wake line leaves through a leg; on a
+circle the block at the smooth chain break beside the wake carries a
 near-180-degree corner that wants a `split_edge` and a centre vertex.
 
 ## 4. Size and grade - after the topology is right

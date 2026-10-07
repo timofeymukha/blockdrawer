@@ -915,6 +915,11 @@ python experiments/agentic_topology/research_cli.py run --case single_ellipse \
 python experiments/agentic_topology/research_cli.py run --case single_ellipse \
   --outer cap:farfield=cap.dat --outer bottom:farfield=bottom.dat \
   --outer outlet:outlet=outlet.dat --outer top:farfield=top.dat
+# a circular domain cut into cap, legs and an outlet arc of 25 degrees either
+# side of the wake direction, so the C-grid producer applies to it
+python experiments/agentic_topology/research_cli.py run --curve foil=naca0012.dat \
+  --farfield-radius 6 --farfield-center 0.5,0 --farfield-outlet 25 \
+  --wake --wake-direction 1,0 --layer-height 0.1 --first-width 0.001 --core-size 0.5
 ```
 
 | case | outer boundary | blocks | outcome |
@@ -1715,10 +1720,15 @@ installations whose LAPACK/BLAS build is broken.
   remedy (`--wake-blunt-ratio`) rather than cut from one corner. The base
   strip's wall-normal edges are graded to the first-cell width, but the
   first-cell check does not measure the strip.
-* **The hull far field continues one exiting wake only.** Two exiting
-  wakes - 30P30N's main and flap, the staggered foils - fall back to the
-  annular construction, so the through-cell wake and its lens are not yet
-  part of a complete exported result. 30P30N's main and flap with `--hull`
+* **The hull far field continues one exiting wake only.** With two - 30P30N's
+  main and flap, the staggered foils - the pipeline tries each as the exit,
+  the one passing over another body first, rebuilding the near field with
+  the other body's wake excluded, and reports the drop under
+  `medial.hull.dropped_wakes` and the attempts under `exit_attempts`; an
+  exit whose far field fails (the slit hull's first level behind the passed
+  body can give a non-convex sector) yields to the next. The dropped body
+  keeps its band and no wake band. A far field carrying both wakes is still
+  to be built. 30P30N's main and flap with `--hull`
   regressed with the gate-unwrapping clamp: its hull's first level gives a
   non-convex block in one of 18 sectors and the annular fallback has an edge
   crossing, where the committed engine's plain pin release built the hull

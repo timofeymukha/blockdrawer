@@ -354,6 +354,18 @@ class WakeConstructionTests(unittest.TestCase):
             )
 
 
+class WakeExclusionTests(unittest.TestCase):
+    def test_an_excluded_body_gets_no_wake_and_says_why(self):
+        result = run_teardrop()
+        records = wake.plan(result.layout, replace(WAKE.wake, exclude=("tear",)))
+        self.assertTrue(records)
+        for record in records:
+            self.assertFalse(record["planned"])
+            self.assertIn("excluded", record["reason"])
+        planned = wake.plan(result.layout, WAKE.wake)
+        self.assertTrue(any(record["planned"] for record in planned))
+
+
 class WakeSpreadTests(unittest.TestCase):
     def test_lines_beside_the_axis_turn_away_from_it(self):
         direction = np.array([1.0, 0.0])

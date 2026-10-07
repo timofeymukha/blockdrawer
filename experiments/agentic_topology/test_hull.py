@@ -133,15 +133,28 @@ class HullFarFieldTests(unittest.TestCase):
         names, loops = cases.staggered_foils()
         result = run("staggered-hull", names, loops, staggered_options())
         record = result.hull
-        near = record["near"]
-        self.assertTrue(near["admissible"], near.get("problems") or near.get("failures") or near.get("errors"))
-        self.assertEqual({item["site"]: (item["applied"], item["target"]) for item in near["wakes"]},
+        first = record["near_attempts"][0]
+        self.assertTrue(first["admissible"], first.get("problems") or first.get("failures") or first.get("errors"))
+        self.assertEqual({item["site"]: (item["applied"], item["target"]) for item in first["wakes"]},
                          {"front": (True, "outer"), "rear": (True, "outer")})
         # Both wakes leave the cluster, and the hull far field continues one
-        # exiting wake only: the far field falls back with that reason, and
-        # the fallback keeps the hull record.
-        self.assertFalse(record["applied"])
-        self.assertIn("at most one wake", record["reason"])
+        # exiting wake only: each is tried as the exit with the other's wake
+        # excluded, the front's first since it passes over the rear.  Behind
+        # the rear the slit hull's first level gives a non-convex sector, so
+        # that attempt yields, the rear's exit builds, and both are reported.
+        attempts = record["exit_attempts"]
+        self.assertEqual([item["kept"] for item in attempts], ["front", "rear"])
+        self.assertIn("non-convex", attempts[0]["reason"])
+        self.assertIsNone(attempts[1]["reason"])
+        self.assertEqual(record["dropped_wakes"], ["front"])
+        near = record["near"]
+        wakes = {item["site"]: item for item in near["wakes"]}
+        self.assertTrue(wakes["rear"]["applied"])
+        self.assertFalse(wakes["front"]["applied"])
+        self.assertIn("excluded", wakes["front"]["reason"])
+        self.assertTrue(record["applied"], record.get("reason"))
+        self.assertEqual(record["exit_wake"], "rear")
+        self.assertTrue(result.admissible, result.problems or result.failures)
         self.assertIs(result.hull, record)
 
     def test_the_wake_over_the_rear_foil_is_written_through_its_cell(self):

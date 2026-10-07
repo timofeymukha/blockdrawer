@@ -71,8 +71,13 @@ class WakeOptions:
     # template and is refused.
     blunt_ratio: float = 0.02
     blunt_angle: float = 225.0
+    # Bodies whose features get no wake; their records say so.  The hull far
+    # field takes one exiting wake and rebuilds its near field with the
+    # others excluded.
+    exclude: tuple = ()
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "exclude", tuple(str(name) for name in self.exclude))
         if not math.isfinite(self.fluid_angle) or not 180.0 < self.fluid_angle < 360.0:
             raise ValueError("the wake fluid angle must be between 180 and 360 degrees")
         if self.direction is not None:
@@ -188,6 +193,9 @@ def plan(layout, options: WakeOptions | None = None) -> list[dict]:
                 "clearance_ratio": float(settings.clearance_ratio),
             }
             records.append(record)
+            if site.name in settings.exclude:
+                record["reason"] = f"no wake planned for {site.name!r}: excluded (the hull far field takes one exiting wake)"
+                continue
             # A blunt base: another convex corner a few thousandths of the
             # perimeter away.  The wake would leave one corner of the base and
             # run along the other side's band.

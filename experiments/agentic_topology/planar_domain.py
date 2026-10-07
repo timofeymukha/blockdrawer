@@ -700,6 +700,11 @@ class FarfieldSpec:
     inlet, an outlet and two far-field sides is the default rectangle.
     ``cshape`` gives the C-grid far field: an upstream semicircle about the
     centre, two horizontal legs and a vertical outlet one radius downstream.
+    A ``circle`` with ``outlet_degrees`` is cut into the same four chains on
+    the circle itself - an ``outlet`` arc of that half-angle about
+    ``outlet_direction`` (downstream, +x by default), the two legs and the
+    cap - so the C-grid producer applies to a circular domain (the band of a
+    body in a circle is otherwise capped by the inscribed-disk rule).
     ``scale`` multiplies the radius of the body frame; ``radius`` gives the
     absolute radius instead and ``center`` the absolute centre (the body frame
     centre by default; a C-grid usually wants the trailing edge); ``box``
@@ -713,10 +718,22 @@ class FarfieldSpec:
     box: tuple | None = None
     radius: float | None = None
     center: tuple | None = None
+    outlet_degrees: float | None = None
+    outlet_direction: tuple | None = None
 
     def __post_init__(self) -> None:
         if self.shape not in ("circle", "rectangle", "cshape"):
             raise DomainError(f"unknown farfield shape {self.shape!r}")
+        if self.outlet_degrees is not None:
+            degrees = float(self.outlet_degrees)
+            if not math.isfinite(degrees) or not 0.0 < degrees < 90.0:
+                raise DomainError("the outlet arc's half-angle must lie strictly between 0 and 90 degrees")
+            object.__setattr__(self, "outlet_degrees", degrees)
+        if self.outlet_direction is not None:
+            direction = tuple(float(value) for value in self.outlet_direction)
+            if len(direction) != 2 or not all(math.isfinite(value) for value in direction) or math.hypot(*direction) <= 0.0:
+                raise DomainError("the outlet direction is a non-zero vector of two finite numbers")
+            object.__setattr__(self, "outlet_direction", direction)
         if not math.isfinite(self.scale) or self.scale <= 1.0:
             raise DomainError("the farfield scale must be finite and larger than 1")
         if self.radius is not None:
@@ -788,6 +805,32 @@ def cshape_chains(center, radius: float, *, count: int = 360, chains=DEFAULT_CSH
     return [Chain(name, role, points) for (name, role), points in zip(chains, pieces)]
 
 
+def circle_outlet_chains(center, radius: float, half_angle: float, direction=(1.0, 0.0), *, count: int = 720, chains=DEFAULT_CSHAPE_CHAINS) -> list[Chain]:
+    """A circle cut into cap, lower leg, outlet arc and upper leg.
+
+    The outlet arc spans ``half_angle`` radians either side of ``direction``;
+    the legs run from its ends to the points a quarter turn from the
+    direction, and the cap is the upstream half.  Anticlockwise, the order
+    is cap, lower leg, outlet, upper leg, as for ``cshape_chains``.
+    """
+    cx, cy = (float(center[0]), float(center[1]))
+    radius = float(radius)
+    phi = math.atan2(float(direction[1]), float(direction[0]))
+    breaks = [phi + 0.5 * math.pi, phi + 1.5 * math.pi, phi + 2.0 * math.pi - half_angle, phi + 2.0 * math.pi + half_angle, phi + 2.5 * math.pi]
+
+    def arc(start: float, end: float) -> np.ndarray:
+        steps = max(2, int(round(count * (end - start) / (2.0 * math.pi))))
+        angles = np.linspace(start, end, steps + 1)
+        return np.column_stack((cx + radius * np.cos(angles), cy + radius * np.sin(angles)))
+
+    pieces = [arc(a, b) for a, b in zip(breaks, breaks[1:])]
+    # Share the break points exactly between neighbouring chains.
+    for first, second in zip(pieces, pieces[1:]):
+        second[0] = first[-1]
+    pieces[-1][-1] = pieces[0][0]
+    return [Chain(name, role, points) for (name, role), points in zip(chains, pieces)]
+
+
 def fabricate_outer(loops, spec: FarfieldSpec | None = None):
     """Chains of a fabricated outer boundary around the body loops.
 
@@ -806,6 +849,9 @@ def fabricate_outer(loops, spec: FarfieldSpec | None = None):
         float(settings.radius) if settings.radius is not None else radius * float(settings.scale)
     )
     if settings.shape == "circle":
+        if settings.outlet_degrees is not None:
+            direction = settings.outlet_direction or (1.0, 0.0)
+            return circle_outlet_chains(center, outer_radius, math.radians(settings.outlet_degrees), direction), None
         return [circle_chain(settings.name, center, outer_radius)], (center, outer_radius)
     if settings.shape == "cshape":
         return cshape_chains(center, outer_radius), None

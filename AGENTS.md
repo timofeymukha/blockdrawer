@@ -239,8 +239,11 @@ them in the canvas widgets.
   cannot evade the check by disconnecting front counts from wall counts.
   Cavity screening uses the same physical criterion. The component length-ratio
   limit still applies to every component, including core-to-farfield ones.
-  The outer boundary is explicit: fabricated as a circle or a rectangle whose
-  sides carry their own names and roles, or supplied chain by chain with
+  The outer boundary is explicit: fabricated as a circle, a circle cut into
+  cap, legs and an outlet arc (`--farfield-outlet DEGREES`, about the wake
+  direction, so the C-grid producer applies to a circular domain), a C-shape
+  or a rectangle whose sides carry their own names and roles, or supplied
+  chain by chain with
   `--outer NAME:ROLE=PATH`; chain breaks and convex corners of the outer loop
   are gates, every chain is its own patch, and an outer wall chain is reported
   as not banded. `wake.py` exposes an opt-in `--wake` construction: a straight
@@ -299,7 +302,10 @@ them in the canvas widgets.
   no vertex crosses the waist between two bodies - and join the outer
   boundary by spokes - cut open along one exit wake's band (a sharp edge's
   two halves or a blunt base's three strips) to the outlet, C-grid style,
-  or closed and mapped chain onto chain. In both the C-grid and the hull
+  or closed and mapped chain onto chain. With two exiting wakes the
+  pipeline tries each as the exit, the one over another body first, with
+  the other body's wake excluded (`WakeOptions.exclude`), and reports the
+  drop under `medial.hull.dropped_wakes`. In both the C-grid and the hull
   far field every wake line beside the axis leaves its mitre point at the
   `--wake-spread` slope (`CGridOptions.wake_spread`,
   `HullOptions.wake_spread`, `wake.spread_direction`), so a wake band that

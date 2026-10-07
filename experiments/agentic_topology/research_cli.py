@@ -96,6 +96,19 @@ def add_input_arguments(parser: argparse.ArgumentParser) -> None:
         "--farfield-name", default="farfield", help="patch name of a circular far field"
     )
     parser.add_argument(
+        "--farfield-outlet", type=float, default=None, metavar="DEGREES",
+        help=(
+            "cut a circular far field into cap, legs and an outlet arc of this "
+            "half-angle (about the wake direction, or downstream), the four chains "
+            "the C-grid producer wants; a body in a plain circle keeps the annular "
+            "construction and its inscribed-disk band cap"
+        ),
+    )
+    parser.add_argument(
+        "--farfield-outlet-direction", type=parse_point, default=None, metavar="DX,DY",
+        help="centre direction of the outlet arc (default: --wake-direction, else 1,0)",
+    )
+    parser.add_argument(
         "--farfield-sides",
         type=parse_sides,
         default=pdm.DEFAULT_RECTANGLE_SIDES,
@@ -335,6 +348,8 @@ def build_options(arguments) -> pipeline.PipelineOptions:
         farfield_box=arguments.farfield_box,
         farfield_radius=arguments.farfield_radius,
         farfield_center=arguments.farfield_center,
+        farfield_outlet_degrees=arguments.farfield_outlet,
+        farfield_outlet_direction=arguments.farfield_outlet_direction,
         layer_height=arguments.layer_height,
         wall_edge_style=arguments.wall_edge_type,
         coverage_samples=arguments.coverage_samples,

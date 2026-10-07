@@ -103,6 +103,25 @@ class CGridConstructionTests(unittest.TestCase):
         self.assertGreater(at_outlet, at_body)
         self.assertAlmostEqual((at_outlet - at_body) / (2.0 * length), c_options().cgrid.wake_spread, places=2)
 
+    def test_a_circle_with_an_outlet_arc_takes_the_c_grid(self):
+        """A circular far field cut into cap, legs and an outlet arc is the
+        four-chain boundary the producer wants, so a body in a circle gets the
+        C-grid and its full band instead of the annular construction's
+        inscribed-disk cap (trial B's agent had to supply the circle as four
+        --outer chains by hand)."""
+        result = run(
+            "tear-circle-outlet", [teardrop()],
+            c_options(farfield_shape="circle", farfield_radius=3.0, farfield_outlet_degrees=25.0),
+        )
+        self.assertTrue(result.cgrid["applied"], result.cgrid.get("reason"))
+        self.assertTrue(result.admissible, result.problems or result.failures)
+        self.assertEqual(sorted(result.model.boundaries), ["bottom", "cap", "outlet", "tear", "top"])
+        # Every outer vertex lies on the circle.
+        import numpy as np
+        for key, vertex in result.graph.vertices.items():
+            if key[0] in ("outer", "wake") and (key[1] == "corner" or key[1] == "cap" or (len(key) > 2 and key[2] == "outlet")):
+                self.assertAlmostEqual(float(np.hypot(vertex.point[0] - 0.704, vertex.point[1])), 3.0, places=4)
+
     def test_band_height_is_realised_and_levels_grow_geometrically(self):
         result = run("tear-c", [teardrop()], c_options())
         heights = result.cgrid["heights"]

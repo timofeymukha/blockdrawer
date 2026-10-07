@@ -58,6 +58,11 @@ class PipelineOptions:
     farfield_box: tuple | None = None
     farfield_radius: float | None = None
     farfield_center: tuple | None = None
+    # A circular far field cut into cap, legs and an outlet arc of this
+    # half-angle about ``farfield_outlet_direction`` (the wake direction when
+    # one is given, else downstream), so the C-grid producer applies to it.
+    farfield_outlet_degrees: float | None = None
+    farfield_outlet_direction: tuple | None = None
     wall_edge_style: str = "polyLine"
     coverage_samples: int = 400
     reference_curves: bool = True
@@ -351,6 +356,9 @@ def _degrades(trial: "PipelineResult", current: "PipelineResult") -> str | None:
 
 
 def farfield_spec(settings: PipelineOptions) -> pdm.FarfieldSpec:
+    direction = settings.farfield_outlet_direction
+    if direction is None and settings.wake.enabled and settings.wake.direction is not None:
+        direction = tuple(settings.wake.direction)
     return pdm.FarfieldSpec(
         settings.farfield_shape,
         settings.farfield_scale,
@@ -359,6 +367,8 @@ def farfield_spec(settings: PipelineOptions) -> pdm.FarfieldSpec:
         settings.farfield_box,
         settings.farfield_radius,
         settings.farfield_center,
+        settings.farfield_outlet_degrees,
+        direction,
     )
 
 
@@ -521,36 +531,94 @@ def _try_hull(result: PipelineResult, names, loops, settings: PipelineOptions):
         # chain onto chain, so it runs the near field again with the outer
         # boundary's chains mirrored onto the hull.
         near = near_field([("hull", "farfield", hull_points)])
-        exits = [item for item in near.wakes.applied if (item.get("target") or {}).get("kind") == "outer"] if near.wakes else []
-        if not exits and len(outer_site.chains) > 1:
-            hull_chains = hull_module.mirrored_chains(hull_points, outer_site, loops)
-            near = near_field(hull_chains)
-        record["hull_chains"] = record["near"]["chains"]
-        built = hull_module.extend(
-            near, result.domain, outer_site, loops, hull_points=hull_points, hull_height=height,
-            options=settings.hull, wall_edge_style=settings.wall_edge_style,
-        )
-        trial = PipelineResult(
-            settings, "external", domain=result.domain, scale=result.scale, sites=result.sites,
-            diagram=near.diagram, layout=near.layout, solve=near.solve, metric=metric,
-            problems=list(result.domain.problems()), assembly=near.assembly, wakes=near.wakes,
-            cavity=near.cavity, cgrid=near.cgrid, crashes=result.crashes,
-        )
-        trial.graph = built.graph
-        trial.wake_notes = list(near.wake_notes)
-        _finish(trial, replace(settings, evaluate_grid=True))
-        record.update(built.record)
-        record["notes"] = record.get("notes", []) + built.notes
-        if not trial.admissible:
-            record["problems"] = trial.problems[:6]
-            record["errors"] = trial.errors[:4]
-            record["coverage"] = trial.coverage
-            record["grid"] = {
-                "shape_inverted": None if trial.shape is None else trial.shape.inverted_cells,
-                "counts_inverted": None if trial.grid is None else trial.grid.inverted_cells,
-                "worst_cells": [] if trial.shape is None else trial.shape.worst_cells[:4],
-            }
-            raise hull_module.HullError("the hull far field failed coverage, export or sampled-grid validation")
+
+        def exits_of(near):
+            return [item for item in near.wakes.applied if (item.get("target") or {}).get("kind") == "outer"] if near.wakes else []
+
+        def attempt(near):
+            """Extend the near field to the outer boundary and judge the whole."""
+            built = hull_module.extend(
+                near, result.domain, outer_site, loops, hull_points=hull_points, hull_height=height,
+                options=settings.hull, wall_edge_style=settings.wall_edge_style,
+            )
+            trial = PipelineResult(
+                settings, "external", domain=result.domain, scale=result.scale, sites=result.sites,
+                diagram=near.diagram, layout=near.layout, solve=near.solve, metric=metric,
+                problems=list(result.domain.problems()), assembly=near.assembly, wakes=near.wakes,
+                cavity=near.cavity, cgrid=near.cgrid, crashes=result.crashes,
+            )
+            trial.graph = built.graph
+            trial.wake_notes = list(near.wake_notes)
+            _finish(trial, replace(settings, evaluate_grid=True))
+            record.update(built.record)
+            record["notes"] = record.get("notes", []) + built.notes
+            if not trial.admissible:
+                record["problems"] = trial.problems[:6]
+                record["errors"] = trial.errors[:4]
+                record["coverage"] = trial.coverage
+                record["grid"] = {
+                    "shape_inverted": None if trial.shape is None else trial.shape.inverted_cells,
+                    "counts_inverted": None if trial.grid is None else trial.grid.inverted_cells,
+                    "worst_cells": [] if trial.shape is None else trial.shape.worst_cells[:4],
+                }
+                raise hull_module.HullError("the hull far field failed coverage, export or sampled-grid validation")
+            return trial
+
+        exits = exits_of(near)
+        # The hull far field takes one exiting wake.  With two, try each as
+        # the exit - the one passing over another body first (on a high-lift
+        # wing the main element's over the flap, which carries the slot
+        # flow), else the longer body's - rebuilding the near field with the
+        # other bodies' wakes excluded, saying so, rather than refuse the
+        # whole far field: 30P30N main and flap built at one band height
+        # only, the one at which the flap's own wake happened to be refused,
+        # and the staggered foils never.  An exit whose far field fails
+        # (the slit hull's first level behind the passed body can give a
+        # non-convex sector) yields to the next.
+        if len(exits) <= 1:
+            if not exits and len(outer_site.chains) > 1:
+                hull_chains = hull_module.mirrored_chains(hull_points, outer_site, loops)
+                near = near_field(hull_chains)
+            record["hull_chains"] = record["near"]["chains"]
+            trial = attempt(near)
+        else:
+            perimeter = {name: g2.total_length(g2.close_loop(np.asarray(loop, dtype=np.float64), 0.0)) for name, loop in zip(names, loops)}
+            candidates = sorted(exits, key=lambda item: (bool(item.get("through")), perimeter.get(item["site"], 0.0)), reverse=True)
+            record["exit_attempts"] = []
+            trial = None
+            for keep in candidates:
+                dropped = sorted({item["site"] for item in exits if item["site"] != keep["site"]})
+                excluded = replace(near_settings, wake=replace(near_settings.wake, exclude=tuple(near_settings.wake.exclude) + tuple(dropped)))
+                near_k = run_external(names, loops, excluded, outer=[("hull", "farfield", hull_points)])
+                result.crashes.extend(near_k.crashes)
+                record.setdefault("near_attempts", []).append(record["near"])
+                record["near"] = {
+                    "chains": ["hull"],
+                    "blocks": None if near_k.graph is None else len(near_k.graph.faces),
+                    "admissible": near_k.admissible,
+                    "wakes": None if near_k.wakes is None else [
+                        {"site": item["site"], "applied": item["applied"], "target": (item.get("target") or {}).get("kind"), "reason": item.get("reason")}
+                        for item in near_k.wakes.records
+                    ],
+                }
+                record["hull_chains"] = ["hull"]
+                record["dropped_wakes"] = dropped
+                try:
+                    if not near_k.admissible:
+                        raise hull_module.HullError("the near field inside the hull is not admissible")
+                    trial = attempt(near_k)
+                except hull_module.HullError as error:
+                    record["exit_attempts"].append({"kept": keep["site"], "dropped": dropped, "reason": str(error)})
+                    continue
+                record["exit_attempts"].append({"kept": keep["site"], "dropped": dropped, "reason": None})
+                record.setdefault("notes", []).append(
+                    f"the hull far field takes one exiting wake: kept {keep['site']!r}, dropped {dropped}"
+                )
+                break
+            if trial is None:
+                raise hull_module.HullError(
+                    "no exit wake gives a hull far field: " + "; ".join(f"{a['kept']}: {a['reason']}" for a in record["exit_attempts"])
+                )
     except Exception as error:
         record["reason"] = f"hull far field reverted: {_trial_failure(result, 'hull', error)}"
         return None
@@ -1436,6 +1504,8 @@ LIMITATIONS = [
     "The annular producer is admissible up to about six chords of far field on "
     "a single sharp-edged body; beyond that the C-grid producer applies, and "
     "only with --wake, exactly one body, one planned wake and a cap-leg-outlet-"
+    "leg boundary (a fabricated C-shape, or a circle cut by --farfield-outlet) "
+    "- that is, a cap-leg-outlet-"
     "leg outer boundary. Its far-field spokes are straight.",
     "The wake separatrix is opt-in (--wake). It is one straight scaffold line "
     "from a sharp feature through the body's own ring: to the outer boundary, "
@@ -1450,7 +1520,9 @@ LIMITATIONS = [
     "to four times wider is refused with that remedy, not cut from one "
     "corner, and the base strip is graded but not measured by the first-cell "
     "check.",
-    "The hull far field continues one exiting wake only; two exiting wakes "
+    "The hull far field continues one exiting wake only; with two, the one "
+    "not passing over another body (else the shorter body's) is dropped and "
+    "its body banded without a wake, under medial.hull.dropped_wakes; two "
     "(30P30N's main and flap, the staggered foils) fall back to the annular "
     "construction, so the through-cell wake and its lens are not yet part of a "
     "complete exported result. The hull trial is not compared with the "
