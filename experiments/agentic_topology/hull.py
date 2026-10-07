@@ -53,6 +53,14 @@ class HullOptions:
     max_levels: int = 4
     # Raster width for the level-set extraction.
     resolution: int = 400
+    # Each wake line beyond the body - a band front, a level's mitre line, a
+    # base's edge - leaves its mitre point at this slope away from the wake
+    # axis, so a wake band that is thin at the body (a slot-limited band of
+    # 0.003 chords on 30P30N) widens towards the outlet instead of carrying
+    # its first-cell count for fifteen chords beside streamwise cells of a
+    # chord: aspect ratios of 1e4 at the outlet.  A wake does spread.  The
+    # centre line keeps its direction, so the lines stay ordered.
+    wake_spread: float = 0.05
 
     def __post_init__(self) -> None:
         if not math.isfinite(self.height_ratio) or self.height_ratio <= 0.0:
@@ -663,11 +671,12 @@ def extend(near, domain, outer, loops, *, hull_points: np.ndarray, hull_height: 
     for k in range(levels + 1):
         for side, chain_points in (("in", mitre_in), ("out", mitre_out)):
             origin = chain_points[k]
-            hits = wake_module._ray_crossings(origin, direction, outer_loop)
+            line_direction = wake_module.spread_direction(direction, origin, point_w, settings.wake_spread)
+            hits = wake_module._ray_crossings(origin, line_direction, outer_loop)
             if not hits:
                 raise HullError(f"the level {k} wake line does not reach the outer boundary")
             t, _arclength, _segment = hits[0]
-            point = origin + t * direction
+            point = origin + t * line_direction
             st = _station_of(outer, point)
             if outer.chain_at(st).name != outlet.name:
                 raise HullError(f"the level {k} wake line leaves through {outer.chain_at(st).name!r}, not the outlet")
@@ -677,11 +686,14 @@ def extend(near, domain, outer, loops, *, hull_points: np.ndarray, hull_height: 
     centre_keys = exit_keys[1:-1]
     centre_stations = []
     for index, vertex in enumerate(centre_keys):
+        # A base's two lines spread like the band fronts; a sharp edge's
+        # single centre line lies on the axis and keeps its direction.
         origin = graph_near.vertices[vertex].point
-        hits = wake_module._ray_crossings(origin, direction, outer_loop)
+        line_direction = wake_module.spread_direction(direction, origin, point_w, settings.wake_spread)
+        hits = wake_module._ray_crossings(origin, line_direction, outer_loop)
         if not hits:
             raise HullError("a wake line does not reach the outer boundary")
-        centre_point = origin + hits[0][0] * direction
+        centre_point = origin + hits[0][0] * line_direction
         centre_station = _station_of(outer, centre_point)
         if outer.chain_at(centre_station).name != outlet.name:
             raise HullError("a wake line leaves the domain off the outlet")

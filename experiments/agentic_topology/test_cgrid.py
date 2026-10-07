@@ -89,6 +89,20 @@ class CGridConstructionTests(unittest.TestCase):
         self.assertEqual(faces[te], 4)
         self.assertEqual(sorted(item["index"] for item in graph.singularities()), [-2, 1, 1])
 
+    def test_the_wake_band_widens_towards_the_outlet(self):
+        """The wake lines leave their mitre points at the spread slope, so the
+        band that is one band height wide at the trailing edge is wider at the
+        outlet, and the strips beside it do not carry first-cell-thin cells for
+        the length of the far field."""
+        result = run("tear-c", [teardrop()], c_options())
+        graph = result.graph
+        cell = next(key[1] for key in graph.vertices if key[0] == "wake" and key[2] == "outlet")
+        at_body = np.linalg.norm(graph.vertices[("front", cell, "level", 1, 0, "out")].point - graph.vertices[("front", cell, "level", 1, 0, "in")].point)
+        at_outlet = np.linalg.norm(graph.vertices[("wake", cell, "outlet", 1, "out")].point - graph.vertices[("wake", cell, "outlet", 1, "in")].point)
+        length = graph.vertices[("wake", cell, "outlet", 1, "out")].point[0] - graph.vertices[("front", cell, "level", 1, 0, "out")].point[0]
+        self.assertGreater(at_outlet, at_body)
+        self.assertAlmostEqual((at_outlet - at_body) / (2.0 * length), c_options().cgrid.wake_spread, places=2)
+
     def test_band_height_is_realised_and_levels_grow_geometrically(self):
         result = run("tear-c", [teardrop()], c_options())
         heights = result.cgrid["heights"]

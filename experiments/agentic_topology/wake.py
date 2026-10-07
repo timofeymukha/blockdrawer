@@ -2389,6 +2389,27 @@ def _wider_base_partner(index, convex, stations, total, loop, settings) -> float
     return None
 
 
+def spread_direction(direction, origin, axis_point, spread: float) -> np.ndarray:
+    """The direction of a wake line leaving ``origin`` for the outlet.
+
+    A line on the wake axis (``origin`` within round-off of ``axis_point``
+    across the wake) keeps ``direction``; one beside it turns away from the
+    axis by ``spread`` (a slope: lateral offset per unit length), so the band
+    between a pair of lines widens downstream and stays symmetric about the
+    axis.  ``spread`` 0 gives the parallel lines of before.
+    """
+    direction = np.asarray(direction, dtype=np.float64)
+    direction = direction / np.linalg.norm(direction)
+    if spread <= 0.0:
+        return direction
+    normal = np.array([-direction[1], direction[0]])
+    lateral = float((np.asarray(origin, dtype=np.float64) - np.asarray(axis_point, dtype=np.float64)) @ normal)
+    if abs(lateral) <= 1e-12 * max(1.0, float(np.linalg.norm(np.asarray(axis_point, dtype=np.float64)))):
+        return direction
+    turned = direction + math.copysign(spread, lateral) * normal
+    return turned / np.linalg.norm(turned)
+
+
 def record_clearance(record: dict) -> float:
     return float(record.get("clearance_ratio", WakeOptions.clearance_ratio))
 

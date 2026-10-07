@@ -40,6 +40,7 @@ except ImportError:  # pragma: no cover
 import agent_ops  # noqa: E402
 import analysis_plot  # noqa: E402
 import block_layout  # noqa: E402
+import cgrid  # noqa: E402
 import fan_cavity  # noqa: E402
 import hull as hull_module  # noqa: E402
 import patch_graph as pg  # noqa: E402
@@ -148,6 +149,14 @@ def add_input_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--hull-height-ratio", type=float, default=6.0, help="hull height in band heights")
     parser.add_argument("--hull-growth", type=float, default=2.0, help="height ratio between hull level sets")
+    parser.add_argument(
+        "--wake-spread", type=float, default=cgrid.CGridOptions.wake_spread, metavar="SLOPE",
+        help=(
+            "slope at which the wake band's lines leave the body for the outlet "
+            "(lateral offset per unit length; default %(default)s), in the C-grid "
+            "and hull far fields; 0 keeps them parallel"
+        ),
+    )
     parser.add_argument(
         "--wake-direction", type=parse_direction, default=None, metavar="DX,DY",
         help="fixed wake direction for every wake instead of each feature's bisector",
@@ -309,7 +318,9 @@ def build_options(arguments) -> pipeline.PipelineOptions:
             enabled=arguments.hull,
             height_ratio=arguments.hull_height_ratio,
             growth=arguments.hull_growth,
+            wake_spread=arguments.wake_spread,
         ),
+        cgrid=cgrid.CGridOptions(wake_spread=arguments.wake_spread),
         wake=wake.WakeOptions(
             enabled=arguments.wake,
             direction=arguments.wake_direction,

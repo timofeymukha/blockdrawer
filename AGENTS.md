@@ -299,7 +299,13 @@ them in the canvas widgets.
   no vertex crosses the waist between two bodies - and join the outer
   boundary by spokes - cut open along one exit wake's band (a sharp edge's
   two halves or a blunt base's three strips) to the outlet, C-grid style,
-  or closed and mapped chain onto chain. The near field is built with the hull as
+  or closed and mapped chain onto chain. In both the C-grid and the hull
+  far field every wake line beside the axis leaves its mitre point at the
+  `--wake-spread` slope (`CGridOptions.wake_spread`,
+  `HullOptions.wake_spread`, `wake.spread_direction`), so a wake band that
+  is thin at the body widens towards the outlet instead of carrying its
+  first-cell count for the length of the far field; the sizing stage grades
+  the wake strips' streamwise edges from the end nearer the wall. The near field is built with the hull as
   one chain first and with the outer boundary's chains mirrored onto it only
   when no wake leaves; a hull's chain breaks are anchored by the inward ray
   (`LayoutOptions.outer_by_ray`). The whole

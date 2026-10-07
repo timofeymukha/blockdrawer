@@ -318,4 +318,22 @@ def layer_grading_requests(graph: pg.PatchGraph, metric: SizeMetric) -> list:
         if len(ends) != 1:
             continue
         requests.append(GradingRequest(key, ends[0], metric.first))
+    # A wake strip's streamwise edges run from the body to the outlet beside
+    # the band's first cells: uniform, fourteen cells of a chord each stood
+    # next to 0.0002-wide cells on 30P30N (aspect 1e4).  Grade them from the
+    # end nearer the wall.  All of them take one first width - the metric's
+    # size just outside the band - because the two long sides of one wake
+    # block are the wake axis, which starts on the wall, and a band edge line
+    # that starts a band height off it: graded each from its own end's size
+    # they sheared the cells between them to 87 degrees in checkMesh.
+    first = float(np.asarray(metric.size_at_distance(np.asarray([metric.layer_height]))).reshape(-1)[0])
+    for key, edge in graph.edges.items():
+        if edge.role not in ("wake", "wake_front") or key in base_edges:
+            continue
+        points = np.asarray([graph.vertices[vertex].point for vertex in key], dtype=np.float64)
+        distances = metric.wall_distance(points)
+        near, far = (0, 1) if distances[0] <= distances[1] else (1, 0)
+        if distances[far] <= 2.0 * max(distances[near], metric.first):
+            continue
+        requests.append(GradingRequest(key, tuple(key)[near], first))
     return requests

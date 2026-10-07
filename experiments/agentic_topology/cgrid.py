@@ -61,10 +61,20 @@ class CGridOptions:
     reach: float = 0.35
     # At most this many level sets above the band.
     max_levels: int = 4
+    # Each wake line beyond the body - a band front, a level's mitre line, a
+    # base's edge - leaves its mitre point at this slope away from the wake
+    # axis, so a wake band that is thin at the body (a slot-limited band of
+    # 0.003 chords on 30P30N) widens towards the outlet instead of carrying
+    # its first-cell count for fifteen chords beside streamwise cells of a
+    # chord: aspect ratios of 1e4 at the outlet.  A wake does spread.  The
+    # centre line keeps its direction, so the lines stay ordered.
+    wake_spread: float = 0.05
 
     def __post_init__(self) -> None:
         if not math.isfinite(self.growth) or self.growth <= 1.0:
             raise ValueError("the level growth must be finite and above 1")
+        if not math.isfinite(self.wake_spread) or self.wake_spread < 0.0:
+            raise ValueError("the wake spread must be finite and non-negative")
         if not math.isfinite(self.reach) or not 0.0 < self.reach < 1.0:
             raise ValueError("the reach must lie strictly between 0 and 1")
         if self.max_levels < 0:
@@ -409,11 +419,12 @@ def build(layout, domain, metric, wake_record: dict, *, layer_options=None,
     for k in range(levels + 1):
         for side, chain_points in (("in", mitre_in), ("out", mitre_out)):
             origin = chain_points[k]
-            hits = wake_module._ray_crossings(origin, direction, outer_loop)
+            line_direction = wake_module.spread_direction(direction, origin, te_point, settings.wake_spread)
+            hits = wake_module._ray_crossings(origin, line_direction, outer_loop)
             if not hits:
                 raise CGridError(f"the level {k} wake line does not reach the outer boundary")
             t, arclength, _segment = hits[0]
-            point = origin + t * direction
+            point = origin + t * line_direction
             station = _station_of(outer, point)
             if outer.chain_at(station).name != outlet.name:
                 raise CGridError(f"the level {k} wake line leaves the domain through {outer.chain_at(station).name!r}, not the outlet")

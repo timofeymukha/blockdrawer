@@ -64,7 +64,10 @@ case you are in.
   still fails its band at the tips.
 - **Sharp trailing edge** (fluid sector of at least 250 degrees at one wall
   vertex): a **C-grid**. The band continues past the edge as a two-sided wake
-  band along a straight wake line to the outlet; the far-field core is cut open
+  band to the outlet, its edge lines spreading from the wake line at the
+  `--wake-spread` slope (default 0.05) so the band widens downstream - a band
+  kept at its body width for fifteen chords puts first-cell-thin cells beside
+  chord-long ones (aspect 1e4 on 30P30N); the far-field core is cut open
   along it. The edge then carries four blocks at right angles. Never leave a
   seam wedge or a fan at a production trailing edge: it collapses the
   body-normal lines into a downstream fan. Engine: `--wake`; refusals list the
@@ -175,8 +178,8 @@ the C-grid producer's case: `--wake` with `--farfield-shape cshape
 itself - band blocks without sliver corners at the requested height, at most
 45 degrees of wall turning per block, a block whose band still folds cut
 again - and builds the band by wall normals, three more level sets at heights
-growing by three, the wake band along the given direction, and straight
-spokes to the cap; the A-airfoil at fifteen chords comes out `resolved` in
+growing by three, the wake band along the given direction spreading at
+`--wake-spread`, and straight spokes to the cap; the A-airfoil at fifteen chords comes out `resolved` in
 200 blocks with the band at its full height, 12 degrees of wall misalignment
 and 51 degrees of non-orthogonality (raster width 700). It resolves at every
 raster width from 420 to 1000, start point, small incidence change and rigid
@@ -269,7 +272,16 @@ a block corner wants a split there, a wake or far-field block with a
 170-degree corner wants its ring vertex moved (`move_vertex`) or the strip
 split, a band capped by the inscribed-disk rule in a circular far field
 wants the C-grid producer or a hand-built nose. A hand-built layout is the
-fallback, not the first move.
+fallback, not the first move. A *circular* far field with `--wake` falls
+back to the annular construction, since the C-grid producer wants a cap,
+two legs and an outlet; give the circle as four `--outer` chains instead -
+an `outlet` arc of about 20 degrees either side of the wake direction, then
+the two legs and the cap as arcs - and the C-grid applies (a NACA 0012 in a
+circle of six chords went from 40 degrees of wall misalignment to a Mesh OK
+C-grid at 54 degrees of non-orthogonality that way). The outlet arc must be
+wider than the outermost wake level, or the wake line leaves through a leg;
+on a circle the block at the smooth chain break beside the wake carries a
+near-180-degree corner that wants a `split_edge` and a centre vertex.
 
 ## 4. Size and grade - after the topology is right
 

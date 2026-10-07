@@ -102,6 +102,12 @@ class HullFarFieldTests(unittest.TestCase):
         self.assertEqual(boundaries, ["bottom", "cap", "front", "outlet", "rear", "top"])
         levels = {key[2] for key in result.graph.vertices if key[:2] == ("hull", "level")}
         self.assertEqual(levels, set(range(1, record["levels"] + 1)))
+        # The exit wake's band widens towards the outlet at the spread slope.
+        vertices = result.graph.vertices
+        count = max(key[3] for key in vertices if key[:3] == ("hull", "level", 1))
+        at_hull = np.linalg.norm(vertices[("hull", "level", 1, 0)].point - vertices[("hull", "level", 1, count)].point)
+        at_outlet = np.linalg.norm(vertices[("hull", "exit", 1, "out")].point - vertices[("hull", "exit", 1, "in")].point)
+        self.assertGreater(at_outlet, at_hull)
 
     def test_a_blunt_base_leaves_the_cluster_as_three_strips(self):
         """The rear foil's blunt base exits the hull as the base strip between

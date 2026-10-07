@@ -354,5 +354,21 @@ class WakeConstructionTests(unittest.TestCase):
             )
 
 
+class WakeSpreadTests(unittest.TestCase):
+    def test_lines_beside_the_axis_turn_away_from_it(self):
+        direction = np.array([1.0, 0.0])
+        axis = np.array([2.0, 0.5])
+        on_axis = wake.spread_direction(direction, axis, axis, 0.05)
+        self.assertTrue(np.allclose(on_axis, direction))
+        above = wake.spread_direction(direction, axis + [0.0, 0.01], axis, 0.05)
+        below = wake.spread_direction(direction, axis - [0.0, 0.01], axis, 0.05)
+        self.assertGreater(above[1], 0.0)
+        self.assertLess(below[1], 0.0)
+        self.assertAlmostEqual(above[1] / above[0], 0.05)
+        self.assertAlmostEqual(float(np.linalg.norm(above)), 1.0)
+        parallel = wake.spread_direction(direction, axis + [0.0, 0.01], axis, 0.0)
+        self.assertTrue(np.allclose(parallel, direction))
+
+
 if __name__ == "__main__":
     unittest.main()

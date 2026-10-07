@@ -1492,6 +1492,10 @@ LIMITATIONS = [
     "13 or 65 degrees of wall misalignment. Under --wake, tandem_foils "
     "mirrored has 55 blocks instead of 51 and tandem_blunt turned through "
     "180 degrees loses both wakes to validation.",
+    "A wake band's lines spread towards the outlet at --wake-spread (0.05) "
+    "and its streamwise edges are graded from the wall end, so a band that "
+    "is thin at the body meshes at a boundary-layer first cell; the counts "
+    "the strips carry across are still the band's.",
     "Band blocks are judged by their straight corner quadrilateral, so a body "
     "much thinner at its tips than the 12:1 ellipse measured can still fail "
     "its band (a 15:1 does).",
