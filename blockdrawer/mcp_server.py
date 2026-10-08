@@ -54,7 +54,8 @@ can share one file. Mechanics:
    first-second in either order, e.g. v0-v1.
 2. edit_session with a list of commands ("set_edge_cells v0-v1 40",
    "add_block v1-v2", "set_edge_grading v0-v1 start_width 0.002",
-   "set_edge_type v2-v3 arc", "split_edge v1-v2 0.5", "add_boundary inlet",
+   "set_edge_type v2-v3 arc", "split_edge v1-v2 0.5", "repair_block b12",
+   "add_boundary inlet",
    "set_edge_boundary v0-v3 inlet") or with commands_file pointing at a
    generated batch (one command per line, # comments, JSON objects allowed).
    list_commands documents every command. Batches are atomic: nothing is

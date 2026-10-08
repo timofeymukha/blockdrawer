@@ -16,7 +16,7 @@ import math
 from typing import Any
 
 from .commands import edge_text
-from .domain import Block, EdgeKey, edge_key
+from .domain import Block, EdgeKey, TopologyError, edge_key
 from .model import MeshModel
 
 
@@ -200,6 +200,16 @@ def assess_quality(
         for nx, ny, nz in (model.block_cell_counts(block) for block in model.blocks)
     )
     return QualityReport(blocks, interfaces, limits, total_cells, tuple(warnings))
+
+
+def block_quality(
+    model: MeshModel, block_id: str, thresholds: QualityThresholds | None = None
+) -> BlockQuality:
+    """The quality of one block, by ID, without assessing the whole model."""
+    block = next((item for item in model.blocks if item.id == block_id), None)
+    if block is None:
+        raise TopologyError(f"Unknown block {block_id!r}")
+    return _block_quality(model, block, thresholds or QualityThresholds())
 
 
 def format_quality(

@@ -280,8 +280,18 @@ remedies are the ones in section 5 - a sharp or rounded corner that is not
 a block corner wants a split there, a wake or far-field block with a
 170-degree corner wants its ring vertex moved (`move_vertex`) or the strip
 split, a band capped by the inscribed-disk rule in a circular far field
-wants the C-grid producer or a hand-built nose. A hand-built layout is the
-fallback, not the first move. A *circular* far field with `--wake` falls
+wants the C-grid producer or a hand-built nose. `repair_block ID` does the
+local part of this for you: it tries moving the block's interior vertices,
+merging it across an internal edge and splitting its edges, judges each on
+the block and its neighbours by the corner screen *and* the sampled
+transfinite interior at the real cell counts (so a merge across a curved
+edge that folds between the corners is refused), and applies the best;
+repeat on the worst block until it reports that no move gains half a
+degree. On 30P30N main + flap eight repairs took the worst corner from 2 to
+14 degrees and checkMesh from 87 to 76 degrees of non-orthogonality, and
+there they stop: the cove and slot are sliver fans, and a fan does not
+become an array by local moves. A hand-built layout is the fallback, not
+the first move. A *circular* far field with `--wake` falls
 back to the annular construction, since the C-grid producer wants a cap,
 two legs and an outlet; add `--farfield-outlet 25` and the circle is cut
 into those four chains on the circle itself (an `outlet` arc of that

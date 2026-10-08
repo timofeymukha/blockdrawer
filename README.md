@@ -520,6 +520,12 @@ batches, inline or from a `commands_file` in the same format as
 lines, `worst=N` for the worst blocks and interfaces), `render_session`
 (returns the picture inline unless `return_image=false` writes it only),
 `validate_session`, `export_block_mesh_dict`, `check_mesh`, and `new_session`.
+Among the commands, `repair_block ID` tries the local moves an agent would
+make by hand on one block - moving its interior vertices, merging it across
+an internal edge, splitting an edge - and applies the one that most raises
+the worst cell of the block and its neighbours, judged on the corner screen
+and the sampled transfinite interior; it reports when no move helps, which
+means the defect is in the surrounding topology.
 A running server keeps the tool schemas it started with; restart it after
 upgrading BlockDrawer. Every tool takes the session path, so agents and the GUI
 can share one file: save in the editor, let the agent edit and check, then

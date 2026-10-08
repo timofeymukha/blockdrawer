@@ -109,6 +109,19 @@ them in the canvas widgets.
   equiangle skewness, corner cell aspect ratios, cell-to-cell growth, and cell
   size jumps across internal edges. Thresholds are a dataclass so callers can
   tune them; `checkMesh` remains the authority.
+- `blockdrawer/repair.py`: `repair_block`, the local repair an agent would
+  make by hand: for one block it tries moving its interior vertices (eight
+  directions and the corner bisector, three step sizes), combining it across
+  each internal edge and splitting each edge, each on a copy of the model,
+  and applies the candidate that most raises the worst cell of the block
+  and its neighbours - judged by the corner screen and by the preview's
+  transfinite interior sampled at the real cell counts (up to 64 a side),
+  since the corner screen alone passed a merge that folded between the
+  corners and a coarser sampling passed a fold of one real cell. Boundary
+  vertices never move; a gain under half a degree is reported as a
+  structural defect and nothing changes. It is a registry command, so the
+  CLI, batches and the MCP server all have it; `checkMesh` stays the
+  authority.
 - `blockdrawer/render.py`: headless SVG/PNG rendering through one layout routine
   and two painters. Labels (vertex IDs, block IDs, cell counts, patch legend)
   are on by default; bounds, zoom-to-entity, and highlights select a region.

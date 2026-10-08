@@ -605,6 +605,15 @@ def _run_combine_blocks(model: MeshModel, args: dict[str, Any]) -> dict[str, Any
     return to_json_value(result)
 
 
+def _run_repair_block(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
+    from .repair import MOVES, repair_block
+
+    chosen = args.get("moves")
+    moves = tuple(item.strip() for item in chosen.split(",") if item.strip()) if chosen else MOVES
+    result = repair_block(model, args["block"], moves=moves)
+    return to_json_value(result)
+
+
 def _run_add_boundary(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
     boundary = model.add_boundary(args["name"])
     return to_json_value(boundary)
@@ -953,6 +962,24 @@ _register(CommandSpec(
     "Merge the block pairs across an internal edge (inverse of split_edge).",
     (_EDGE,),
     _run_combine_blocks,
+))
+_register(CommandSpec(
+    "repair_block",
+    (
+        "Raise a block's worst corner angle by the best local move - moving one "
+        "of its interior vertices, combining it across an internal edge, or "
+        "splitting one of its edges - judged on the block and its neighbours; "
+        "boundary vertices never move, and nothing changes when no move helps."
+    ),
+    (
+        Parameter("block", "str", "block ID"),
+        Parameter(
+            "moves", "optional_str",
+            "comma-separated subset of move,combine,split (default all)",
+            required=False, default=None,
+        ),
+    ),
+    _run_repair_block,
 ))
 _register(CommandSpec(
     "add_boundary",
