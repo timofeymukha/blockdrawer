@@ -47,21 +47,48 @@ acceptance term or an option changes there, update the decision points here.**
   slab (reciprocal `cyclic` spanwise patches, `z_cells` from the spanwise
   resolution).
 
-## 2. Choose the topology
+## 2. Take the brief as given
 
-Decide these before placing a single vertex. Each rule names the construction
-the topology engine builds or refuses, so the engine's report tells you which
-case you are in.
+The person asking has usually decided the domain already: the far-field
+shape and distance, the patch names and their roles, the free-stream
+direction, the first-cell height or the $y^+$ it comes from, the band
+height. Those are inputs, not choices for you to make, and each maps onto
+the engine directly:
+
+| In the brief | Engine input |
+|---|---|
+| far field: a circle of radius $R$ about a point | `--farfield-shape circle --farfield-radius R --farfield-center X,Y`; `--farfield-outlet DEGREES` cuts it into cap, legs and an outlet arc about the wake direction when a C-grid is wanted |
+| far field: a C-shape, or a rectangle | `--farfield-shape cshape` / `rectangle` with the same radius and centre |
+| far field: these point lists, these patch names | `--outer NAME:ROLE=PATH` per chain, anticlockwise, joined end to end; the names become the patches |
+| free-stream direction, incidence | `--wake-direction dx,dy` (also selects which sharp vertices get a wake); incidence stays in the velocity |
+| boundary layer: first cell, band height | `--first-width W`, `--layer-height H` (absolute, in the geometry's units); `--core-size` for the far cells |
+| patch names | `rename_boundary OLD NEW` on the session afterwards |
+
+What the engine then *builds* follows from the geometry - how many bodies,
+which have sharp edges, how they sit - not from a topology you pick; the
+next section says what each configuration gets and what it refuses, so you
+can read the report. Only where the brief leaves something open do the
+defaults there apply (a smooth single body meshes well inside a circle; a
+sharp trailing edge wants a C-shape or a cut circle so its wake reaches an
+outlet; a cluster far from the far field wants `--hull`), and then say in
+the deliverable which choice you made and why.
+
+## 3. What the engine builds, per configuration
+
+Each entry names the construction the topology engine builds or refuses
+for a configuration, with the measured reach, so the engine's report tells
+you which case you are in and what to expect. None of them asks you to
+choose a far field: that came with the brief.
 
 - **Smooth body (cylinder, ellipse), external flow**: an O-grid - a wall band,
-  a core to a ring, and far-field patches. A rectangular outer boundary with
-  inlet, outlet and two far-field sides is fine: each corner is a gate whose
-  spoke follows the corner bisector, so two blocks share it at 45 degrees. That
-  is the classical O-in-a-box; do not fight it. The engine builds it for a
-  square cylinder in a box with equal margins too (a body corner and a box
-  corner on one diagonal become one spoke), and for ellipses up to 12:1,
-  whose tips are pinned block corners like a sharp corner; a 15:1 ellipse
-  still fails its band at the tips.
+  a core to a ring, and far-field patches - inside whatever far field the
+  brief gives. In a rectangle with inlet, outlet and two far-field sides
+  each corner is a gate whose spoke follows the corner bisector, so two
+  blocks share it at 45 degrees: the classical O-in-a-box, not a defect.
+  The engine builds it for a square cylinder in a box with equal margins
+  too (a body corner and a box corner on one diagonal become one spoke),
+  and for ellipses up to 12:1, whose tips are pinned block corners like a
+  sharp corner; a 15:1 ellipse still fails its band at the tips.
 - **Sharp trailing edge** (fluid sector of at least 250 degrees at one wall
   vertex): a **C-grid**. The band continues past the edge as a two-sided wake
   band to the outlet, its edge lines spreading from the wake line at the
@@ -147,7 +174,18 @@ case you are in.
   collar; an element's wake ends on the next element's band or on the outlet.
   Narrow gaps between elements take one strip of core blocks between the two
   bands rather than two half-cores around a medial line (engine: `--span-gaps`,
-  opt-in, limited reach).
+  opt-in, limited reach). The engine's measured state on the full 30P30N
+  (slat, main, flap, the main + flap recipe above): admissible, `Mesh OK` at
+  79 degrees of non-orthogonality, 179 blocks, with the main's wake over
+  the flap to the outlet and **no wake from the flap's base or the slat's
+  edge**: both are refused with *the core patch between the wake band and
+  the junction gate beside it is not convex*, because the flank meets the
+  edge 40 degrees off the wake direction and a straight wake band's seam
+  corner cannot absorb more than about ten; a curved wake band out of the
+  edge is the missing template. Do not spend calls on those two wakes -
+  slides, extra spokes and seam thinning were all measured not to open
+  that corner - take the banded base and edge, and repair the cove and
+  slot blocks by hand (the repair recipe in section 4).
 - **Internal flow** (channel, periodic hill, diffuser): a sweep between the two
   walls - columns from one wall band to the other, ends on inlet and outlet or
   on the cyclic pair. Corners of the domain are block corners; a guide wall's
@@ -161,7 +199,7 @@ case you are in.
   fixed by the domain's Euler characteristic, so every extra valence-5 vertex
   needs a valence-3 partner somewhere.
 
-## 3. Build outward from the wall
+## 4. Build outward from the wall
 
 Layers, from the inside out: wall - **collar** (the boundary-layer band, a
 mitred normal offset) - near-field marched offsets - an algebraic blend - the
@@ -276,7 +314,7 @@ with `set_edge_boundary` onto one of them and `rename_boundary` it, rather
 than rebuilding the assignments. When the result is admissible but not
 resolved, do not stop at the report: `quality_report worst=5` names the
 blocks that miss, `render_session` zoomed on them shows why, and the
-remedies are the ones in section 5 - a sharp or rounded corner that is not
+remedies are the ones in section 6 - a sharp or rounded corner that is not
 a block corner wants a split there, a wake or far-field block with a
 170-degree corner wants its ring vertex moved (`move_vertex`) or the strip
 split, a band capped by the inscribed-disk rule in a circular far field
@@ -302,7 +340,7 @@ than the outermost wake level, or the wake line leaves through a leg; on a
 circle the block at the smooth chain break beside the wake carries a
 near-180-degree corner that wants a `split_edge` and a centre vertex.
 
-## 4. Size and grade - after the topology is right
+## 5. Size and grade - after the topology is right
 
 - **First cell** from the target $y^+$ with a screening friction coefficient
   $C_f \approx 0.003$:
@@ -345,7 +383,7 @@ $$
 - Aspect ratio matters inside the band only; interface size jumps should stay
   below about 2.5 inside the near field.
 
-## 5. Validate - the ladder
+## 6. Validate - the ladder
 
 1. `validate_session`: loads, topologically valid, exports.
 2. `quality_report` (`summary_only=true` for the headline lines, `worst=N` for
@@ -415,7 +453,7 @@ Failure signatures and their fixes:
 - **A gate that slid off a sharp vertex**: the sharp vertex must be a block
   corner; pin it and re-spread the neighbouring gates.
 
-## 6. Deliver
+## 7. Deliver
 
 A case directory with the session JSON, the exported `blockMeshDict`, the
 command batch that regenerates the session, the retained `checkMesh` case or
