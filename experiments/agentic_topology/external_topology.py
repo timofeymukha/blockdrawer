@@ -286,6 +286,7 @@ def build_graph(
                 ).copy()
                 front_path[0] = graph.vertices[outer_first].point
                 front_path[-1] = graph.vertices[outer_second].point
+                front_path = layer_module.trim_backtrack(front_path)
                 kind, points = _path_curve(front_path)
                 graph.add_edge(
                     outer_first,

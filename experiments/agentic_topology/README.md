@@ -770,7 +770,11 @@ of the domain scale (default 0.256, where the default sizing's wall-normal
 series reaches the core size); it is a geometric input, so the block shapes
 and the shape verdict do not change with the cell sizing.
 `--layer-height-ratio series` uses the series height of the sizing in use. `--max-length-ratio RATIO` sets the
-structural feasibility limit. `--max-wall-turning DEGREES` exposes the largest
+structural feasibility limit. `--normal-window HEIGHTS` averages the wall's
+offset normals over an arc-length window of that many band heights (default
+0, the plain vertex normals; the band's level-set trimming has used the
+windowed normals all along, now the offset does too when it is on).
+`--max-wall-turning DEGREES` exposes the largest
 wall turning one annular patch may span before it is cut (default 100). It is the single largest lever
 on near-wall orthogonality. Measured on this commit, default options otherwise:
 

@@ -536,15 +536,21 @@ def miter_scale(poly: np.ndarray, *, closed: bool, limit: float = 4.0) -> np.nda
 
 
 def offset_polyline(
-    poly: np.ndarray, heights, *, closed: bool, limit: float = 4.0
+    poly: np.ndarray, heights, *, closed: bool, limit: float = 4.0, normals=None
 ) -> np.ndarray:
-    """Offset a polyline to its left by a per-vertex height."""
+    """Offset a polyline to its left by a per-vertex height.
+
+    ``normals`` replaces the plain vertex normals - the windowed normals of
+    a dense point list, whose angular jitter a plain normal multiplies by
+    the height into a jagged offset.
+    """
     values = np.asarray(heights, dtype=np.float64)
     if values.ndim == 0:
         values = np.full(len(poly), float(values))
-    normals = vertex_normals(poly, closed=closed)
+    if normals is None:
+        normals = vertex_normals(poly, closed=closed)
     scale = miter_scale(poly, closed=closed, limit=limit)
-    return poly + (values * scale)[:, None] * normals
+    return poly + (values * scale)[:, None] * np.asarray(normals, dtype=np.float64)
 
 
 def _segment_crossings(first: np.ndarray, second: np.ndarray) -> np.ndarray:

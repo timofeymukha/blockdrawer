@@ -24,3 +24,27 @@ class FinalFrontSearchTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TrimBacktrackTests(unittest.TestCase):
+    """A band front section ending at a seam loses the hook the offset leaves there."""
+
+    def test_the_hook_before_a_seam_point_is_removed(self) -> None:
+        # The flap's lower band front at its base corner: the offset of the
+        # flank runs past the seam point and the last segment doubles back.
+        section = np.array([
+            [0.97707, -0.14172], [0.97735, -0.14196], [0.97924, -0.1435],
+            [0.98188, -0.14523], [0.98188, -0.14523], [0.97864, -0.14288],
+        ])
+        trimmed = layer_module.trim_backtrack(section)
+        np.testing.assert_allclose(trimmed[0], section[0])
+        np.testing.assert_allclose(trimmed[-1], section[-1])
+        self.assertEqual(len(trimmed), 3)
+        for first, second, third in zip(trimmed, trimmed[1:], trimmed[2:]):
+            self.assertGreater(float(np.dot(second - first, third - second)), 0.0)
+
+    def test_a_clean_section_is_unchanged(self) -> None:
+        section = np.array([[0.0, 0.0], [1.0, 0.1], [2.0, 0.0], [3.0, 0.2]])
+        np.testing.assert_allclose(layer_module.trim_backtrack(section), section)
+        two = np.array([[0.0, 0.0], [1.0, 1.0]])
+        np.testing.assert_allclose(layer_module.trim_backtrack(two), two)

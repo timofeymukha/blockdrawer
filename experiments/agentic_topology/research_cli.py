@@ -267,6 +267,16 @@ def add_input_arguments(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
+        "--normal-window",
+        type=float,
+        default=layer_module.LayerOptions.normal_window,
+        metavar="HEIGHTS",
+        help=(
+            "arc-length window, in band heights, over which the wall's offset "
+            "normals are averaged; 0 uses the plain vertex normals"
+        ),
+    )
+    parser.add_argument(
         "--no-layers", action="store_true", help="build the core without wall bands"
     )
     parser.add_argument(
@@ -364,6 +374,7 @@ def build_options(arguments) -> pipeline.PipelineOptions:
         layer=layer_module.LayerOptions(
             enabled=not arguments.no_layers,
             clearance_fraction=arguments.clearance_fraction,
+            normal_window=arguments.normal_window,
         ),
         cavity=fan_cavity.CavityOptions(
             enabled=not arguments.no_cavity_repair,

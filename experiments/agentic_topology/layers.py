@@ -802,11 +802,16 @@ def build_front(
         heights = slope_limited(
             np.maximum(current, 0.0), arclength, options.slope_limit, closed=True
         )
+        # Offset along the same windowed normals the level-set trimming
+        # uses: a plain vertex normal turns the angular jitter of a dense
+        # point list into a jagged front, which a wake front leaving a seam
+        # a few degrees off the wall then crosses.
         offset = g2.offset_polyline(
             augmented,
             -fluid_sign * heights,
             closed=True,
             limit=options.miter_limit,
+            normals=-fluid_sign * normals,
         )
         # The offset is the level set only where each normal reaches it; in
         # the shadow of a reflex corner or a tight concave bend it is not, and
@@ -1091,6 +1096,29 @@ def _seam_points(wall: np.ndarray, sharp, heights: np.ndarray, fluid_sign: float
     return seams
 
 
+def trim_backtrack(path: np.ndarray) -> np.ndarray:
+    """Drop the points of an open path that double back at either end.
+
+    A band front section ends at a seam point that stands in for the
+    offset's own end; the offset of a flank that curves into a sharp
+    corner reaches past the seam, so the last segment then runs backwards
+    to it.  Such a hook is no part of the front: the points inside it go.
+    """
+    points = [np.asarray(point, dtype=np.float64) for point in path]
+    scale = max(float(np.max(np.abs(np.asarray(points)))), 1.0) if points else 1.0
+    index = 1
+    while index < len(points):
+        if float(np.linalg.norm(points[index] - points[index - 1])) <= 1e-12 * scale and len(points) > 2:
+            del points[index if index < len(points) - 1 else index - 1]
+        else:
+            index += 1
+    while len(points) >= 3 and float(np.dot(points[-1] - points[-2], points[-2] - points[-3])) < 0.0:
+        del points[-2]
+    while len(points) >= 3 and float(np.dot(points[1] - points[0], points[2] - points[1])) < 0.0:
+        del points[1]
+    return np.asarray(points)
+
+
 def _band_failures(
     wall: np.ndarray,
     front: np.ndarray,
@@ -1127,6 +1155,7 @@ def _band_failures(
         section = ring_slice(front, first, second).copy()
         section[0] = start
         section[-1] = stop
+        section = trim_backtrack(section)
         # Each spoke ends where the section starts or stops, so the section
         # segment meeting it there cannot properly cross it - but through
         # rounding of the intersection parameters it can register as if it

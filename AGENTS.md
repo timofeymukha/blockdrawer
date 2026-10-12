@@ -341,6 +341,11 @@ them in the canvas widgets.
   several narrow branches at one junction. Its `core_rung` to far-field count
   connection is not itself a wall-band direction coupling; the physical
   criterion and unchanged length-ratio limit resolve the spanned circles.
+  A band front section that ends at a seam point is trimmed of the hook
+  the offset of a flank curving into a sharp corner leaves there
+  (`layers.trim_backtrack`); the band's offset can use the same windowed
+  normals as its level-set trimming (`LayerOptions.normal_window`,
+  `--normal-window HEIGHTS`, off by default).
   Front repair reduces the caps of whole failing blocks; repeated failures
   request a patch split, with bounded global height search permitted on the
   caller's final repair round. That search is not a proof of monotone
