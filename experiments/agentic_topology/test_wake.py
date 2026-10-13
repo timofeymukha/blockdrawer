@@ -354,6 +354,109 @@ class WakeConstructionTests(unittest.TestCase):
             )
 
 
+class WakeTurnTests(unittest.TestCase):
+    """A wake whose edge bisector is off the wake direction turns in stations."""
+
+    @staticmethod
+    def blunt_loop():
+        tear = cases.teardrop((0.0, 0.0), 0.32, tip_ratio=4.0)
+        tip, arc = tear[-1], tear[:-1]
+        half, depth = math.asin(0.25), 0.02
+        return np.vstack([arc, [[tip[0] - depth, -depth * math.tan(half)], [tip[0] - depth, depth * math.tan(half)]]])
+
+    @staticmethod
+    def options(degrees: float, turn: float = wake.WakeOptions.turn):
+        direction = (math.cos(math.radians(degrees)), math.sin(math.radians(degrees)))
+        return replace(WAKE, wake=wake.WakeOptions(enabled=True, direction=direction, turn=turn))
+
+    def test_line_path_mitres_the_offset_lines(self):
+        """A line beside the axis keeps its lateral distance through a turn:
+        the station point of a line offset by d lies d / cos(turn / 2) along
+        the mitre, and a line with its own first leg meets the first rung
+        where it does."""
+        record = {"point": [0.0, 0.0], "direction": [0.0, 1.0], "legs": [[1.0, 0.0], [0.0, 1.0]], "stations": [[1.0, 0.0]], "turned": True}
+        path, leg = wake.line_path(record, [0.0, -0.5])
+        self.assertTrue(np.allclose(path[1], [1.5, -0.5]))
+        self.assertTrue(np.allclose(leg, [0.0, 1.0]))
+        path, leg = wake.line_path(record, [0.0, 0.5], leaving=[1.0, 0.5])
+        self.assertAlmostEqual(path[1][0] - 1.0, -path[1][1], places=12, msg="the point lies on the rung through the station")
+        self.assertTrue(np.allclose(path[1], [1.0 / 3.0, 2.0 / 3.0]))
+        straight = {"point": [0.0, 0.0], "direction": [1.0, 0.0], "legs": [[1.0, 0.0]], "stations": [], "turned": False}
+        path, leg = wake.line_path(straight, [0.0, 0.5])
+        self.assertEqual(len(path), 1)
+        with self.assertRaises(pg.GraphError):
+            wake.line_path(record, [0.0, 0.5], leaving=[-1.0, 0.0])
+
+    def test_a_wake_off_its_bisector_turns_in_a_station(self):
+        """The teardrop's bisector is (1, 0); a wake asked for 30 degrees
+        above it leaves along the bisector, turns at one station and runs
+        on along the requested direction: the band's strips are split at
+        the station and the station is carried round the cell as a level,
+        so every patch stays a convex quad and the result resolves."""
+        result = pipeline.run_external(["tear"], [teardrop_loop()], self.options(30.0))
+        self.assertTrue(result.admissible, result.problems or result.failures)
+        record = result.wakes.records[0]
+        self.assertTrue(record["applied"], record.get("reason"))
+        self.assertTrue(record["turned"])
+        self.assertAlmostEqual(record["turn_degrees"], 30.0, places=6)
+        self.assertEqual(len(record["stations"]), 1)
+        self.assertTrue(np.allclose(record["legs"][0], [1.0, 0.0]))
+        self.assertTrue(np.allclose(record["legs"][-1], record["direction"]))
+        self.assertEqual(record["turn_levels"]["stations"], 1)
+        self.assertTrue(result.resolved, result.described_failures())
+        roles = {}
+        for edge in result.graph.edges.values():
+            roles[edge.role] = roles.get(edge.role, 0) + 1
+        self.assertEqual(roles["wake_rung"], 2, "one rung across each strip at the station")
+        self.assertEqual(roles["core_rung"], record["turn_levels"]["patches"])
+        self.assertEqual(sum(1 for face in result.graph.faces if face.role == "wake"), 6)
+        # Two stations when the turn per station is halved; they are spaced
+        # by the band height, so a band as thick as the clearance allows
+        # fits one station only and the thinner band is asked for.
+        thick = pipeline.run_external(["tear"], [teardrop_loop()], self.options(30.0, turn=16.0))
+        self.assertIn("do not fit", thick.wakes.records[0]["reason"])
+        halved = pipeline.run_external(["tear"], [teardrop_loop()], replace(self.options(30.0, turn=16.0), layer_height=0.05))
+        record = halved.wakes.records[0]
+        self.assertTrue(record["applied"], record.get("reason"))
+        self.assertEqual(len(record["stations"]), 2)
+        self.assertTrue(halved.resolved, halved.described_failures())
+
+    def test_turning_off_keeps_the_wake_straight(self):
+        """With the turn disabled the same request builds the straight wake
+        of before (or refuses it), and a direction within the margin of the
+        bisector never turns."""
+        result = pipeline.run_external(["tear"], [teardrop_loop()], self.options(30.0, turn=0.0))
+        record = result.wakes.records[0]
+        self.assertFalse(record["turned"])
+        self.assertEqual(record["stations"], [])
+        self.assertTrue(np.allclose(record["legs"][0], record["direction"]))
+        near = pipeline.run_external(["tear"], [teardrop_loop()], self.options(5.0))
+        record = near.wakes.records[0]
+        self.assertFalse(record["turned"])
+        self.assertTrue(record["applied"], record.get("reason"))
+
+    def test_a_base_wake_off_its_flank_bisector_turns(self):
+        """A blunt base's wake leaves along the bisector of its flanks and
+        turns towards the requested direction; its three strips and both
+        bands turn together at the station."""
+        result = pipeline.run_external(["blunt"], [self.blunt_loop()], self.options(30.0))
+        self.assertTrue(result.admissible, result.problems or result.failures)
+        record = result.wakes.records[0]
+        self.assertEqual(record["kind"], "base")
+        self.assertTrue(record["applied"], record.get("reason"))
+        self.assertTrue(record["turned"])
+        self.assertEqual(len(record["stations"]), 1)
+        self.assertTrue(np.allclose(record["edge_direction"], [1.0, 0.0], atol=1e-6))
+        self.assertTrue(result.resolved, result.described_failures())
+        strips = sorted(face.provenance for face in result.graph.faces if face.role == "wake")
+        self.assertEqual(strips.count("base strip"), 2)
+        self.assertEqual(strips.count("wake band"), 4)
+        roles = {}
+        for edge in result.graph.edges.values():
+            roles[edge.role] = roles.get(edge.role, 0) + 1
+        self.assertEqual(roles["wake_rung"], 3, "one rung across each of the three strips")
+
+
 class WakeExclusionTests(unittest.TestCase):
     def test_an_excluded_body_gets_no_wake_and_says_why(self):
         result = run_teardrop()

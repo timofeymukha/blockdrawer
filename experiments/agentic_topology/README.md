@@ -429,6 +429,38 @@ result can be read either way; the session is written whenever the result is
    vertex sharp enough gets a wake along its own bisector, a sharp leading
    edge included; give the direction for such bodies.
 
+   **Wake turn stations** (`turned` in the record). A wake direction more
+   than ten degrees off the edge's bisector - a base's flank bisector, so
+   a base oblique to its flanks does not fold one flank's front - used to
+   fold the core patch beside the wake band at the seam: BlockDrawer's
+   blocks are convex by their four corners, so a band side cannot bend
+   inside one block. Such a wake now leaves along the bisector and turns
+   towards the wake direction at stations, at most `--wake-turn` degrees
+   each (default 50; each block beside a station sees half), all before
+   the body's ring so the ring is crossed without a kink. A station is a
+   vertex on the wake line and on both fronts joined by a rung; the strips
+   are split there, and the station is carried round the body's cell as a
+   level - every spoke between the band front and the ring split at the
+   station's fraction, interpolated from one front to the other, every
+   patch cut into a column of quads, each rung a Coons blend of the
+   patch's four sides - exactly as the far field stacks its level sets. A
+   front leaves its seam along the band's own arrival direction (the
+   tangent or the chord of the whole band-front edge, whichever needs the
+   larger turn away from the wake, a five-degree margin added) and meets
+   the first rung where it does. Stations sit at equal fractions of the
+   ring's distance along the bisector, at least one and a half band
+   heights apart, and the wake is refused when they do not fit within four
+   fifths of it (raise `--wake-turn`, or move the ring with a higher hull);
+   a wake over another body keeps its straight chord and says so under
+   `turn_note`; `--wake-turn 0` keeps every wake straight. The C-grid
+   producer builds its own straight wake and ignores the stations. On the
+   30P30N flap base the turn moves the refusal from the seam to the ring:
+   the medial ring there is a fan round the base corner, and the ring piece
+   between the lower flank's last gate and the wake front's crossing bends
+   through the fan, so its chord meets the front in a three-degree sliver
+   (`test_wake.WakeTurnTests` has the teardrop and the blunt base turning
+   thirty degrees and resolving).
+
    **Wake over another body** (the multi-element wake, `through` in the
    record). A wake whose ray crosses the ring into another body's cell and
    reaches that cell's far ring before any wall - a main element's wake
@@ -763,7 +795,9 @@ run is stateless, that is also how `apply` realises a move: it rebuilds the
 very case the arguments describe, explicit `--outer` chains included, with the
 move's option delta. `--wake-blunt-ratio FRACTION` sets how far apart two
 convex corners may be and still form one blunt base (default 0.02 of the
-perimeter); `--farfield-center X,Y` accepts the origin.
+perimeter); `--wake-turn DEGREES` the largest turn one wake station takes
+(default 50, 0 for straight wakes); `--farfield-center X,Y` accepts the
+origin.
 
 `--layer-height-ratio FRACTION` sets the requested band height as a fraction
 of the domain scale (default 0.256, where the default sizing's wall-normal

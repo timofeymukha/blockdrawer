@@ -265,7 +265,13 @@ them in the canvas widgets.
   bodies, to the other body's band, where the stagnation gate is pinned and
   the two wake fronts land a band width to either side as new band spokes -
   with the band continued as a two-sided wake band and the far-field core cut
-  open along it - or, for a blunt base (two convex corners within two percent
+  open along it - turning, when the wake direction is more than ten degrees
+  off the edge's bisector (a base's flank bisector), at stations of at most
+  `WakeOptions.turn` degrees (`--wake-turn`, default 50) before the ring:
+  each station is a rung across the band carried round the body's cell as a
+  level between band front and ring (`wake.plan_turns`, `wake.line_path`,
+  `wake._turn_levels`), so every patch stays a quad; a wake over another
+  body keeps its straight chord - or, for a blunt base (two convex corners within two percent
   of the perimeter), one record with two fixed anchors and three strips: the
   base itself going on as the wake's core strip between the flank bands - or,
   when the ray crosses into another body's cell and reaches that cell's far

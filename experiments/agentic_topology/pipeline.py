@@ -740,7 +740,9 @@ def _try_cgrid(result: PipelineResult, settings: PipelineOptions) -> PipelineRes
     try:
         layout, solve = _cgrid_layout(result, settings)
         # A blunt base is the annular producer's; the C-grid takes a sharp edge.
-        plans = [item for item in wake.plan(layout, settings.wake) if item.get("planned") and item.get("kind") != "base"]
+        # A blunt base is the annular producer's; the C-grid takes a sharp
+        # edge, and builds its own straight wake line.
+        plans = [item for item in wake.plan(layout, replace(settings.wake, turn=0.0)) if item.get("planned") and item.get("kind") != "base"]
     except Exception as error:
         record["reason"] = f"wake planning failed: {_trial_failure(result, 'cgrid', error)}"
         result.cgrid = record
@@ -832,7 +834,7 @@ def _try_wakes(result: PipelineResult, settings: PipelineOptions) -> PipelineRes
     and keeps its reason under ``medial.wakes``.
     """
     try:
-        records = wake.plan(result.layout, settings.wake)
+        records = wake.plan(result.layout, settings.wake, height=result.metric.layer_height if result.metric is not None else 0.0)
     except Exception as error:
         result.errors.append({"stage": "wake_plan", "error": _describe(error)})
         return result

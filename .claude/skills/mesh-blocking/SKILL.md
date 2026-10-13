@@ -135,6 +135,27 @@ choose a far field: that came with the brief.
   along a nearly straight wall (a flat-back section) is refused with the
   remedy rather than cut lopsidedly from one corner: raise
   `--wake-blunt-ratio` to build it as a base.
+- **Edge or base whose bisector is off the free stream** (a deflected
+  flap's base, a slat's trailing edge pointing down onto the main): a block
+  side cannot bend inside one block, so the wake leaves along the edge's
+  bisector (a base's flank bisector) and turns towards `--wake-direction`
+  at **turn stations**, at most `--wake-turn` degrees each (default 50;
+  each block beside a station sees half), all before the body's ring. A
+  station is a rung across the wake band carried round the body's cell as
+  a level between band and ring, like the far field's level sets; the
+  record says `turned` and lists `stations`. Within ten degrees of the
+  bisector the wake stays straight. Stations are spaced by the band
+  height, so a band as thick as the ring clearance allows fits one
+  station: the refusal *do not fit* asks for a larger `--wake-turn` or a
+  farther ring (`--hull-height-ratio`). A wake over another body keeps its
+  straight chord (`turn_note`). The limit found on 30P30N's flap base: the
+  medial ring is a fan round the base corner, and the ring piece between
+  the lower flank's last gate and the front's crossing bends through it,
+  so the patch beside the wake band meets the ring in a sliver by its
+  chord (*non_convex_face* at the crossing); that wake stays refused. A
+  level row also stops at another sharp feature's seam wedge in the same
+  cell (30P30N's slat: its cusp), so a body with two sharp features turns
+  only the wake of the one whose row can get round.
 - **Sharp trailing edge whose wake passes over another body** (a main
   element's wake over its flap): the wake runs through that body's cell as
   a straight chord with a wake strip on each side; the body-side strip is

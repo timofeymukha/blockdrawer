@@ -188,6 +188,16 @@ def add_input_arguments(parser: argparse.ArgumentParser) -> None:
         help="smallest fluid sector a wall vertex needs to carry a wake (default %(default)s)",
     )
     parser.add_argument(
+        "--wake-turn", type=float, default=wake.WakeOptions.turn, metavar="DEGREES",
+        help=(
+            "a wake whose edge bisector (a base's flank bisector) is more than ten degrees "
+            "off the wake direction leaves along the bisector and turns towards the wake "
+            "direction in stations of at most this many degrees before the body's ring "
+            "(each block beside a station sees half), every station a row of blocks round "
+            "the body's cell (default %(default)s); 0 keeps every wake straight"
+        ),
+    )
+    parser.add_argument(
         "--wall-edge-type", choices=("polyLine", "spline"), default="polyLine"
     )
     parser.add_argument("--coverage-samples", type=int, default=400)
@@ -349,6 +359,7 @@ def build_options(arguments) -> pipeline.PipelineOptions:
             direction=arguments.wake_direction,
             fluid_angle=arguments.wake_fluid_angle,
             blunt_ratio=arguments.wake_blunt_ratio,
+            turn=arguments.wake_turn,
         ),
         grid_width=arguments.width,
         farfield_scale=arguments.farfield_scale,
