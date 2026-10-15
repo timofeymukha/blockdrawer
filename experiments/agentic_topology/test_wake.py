@@ -435,6 +435,74 @@ class WakeTurnTests(unittest.TestCase):
         self.assertFalse(record["turned"])
         self.assertTrue(record["applied"], record.get("reason"))
 
+    def test_a_chord_beside_a_fan_is_measured_against_the_leg(self):
+        """On a ring that is a fan round a corner, the chord from the wake's
+        crossing to the neighbouring cut is nearly along a leg crossing the
+        fan obliquely and square to one crossing it radially."""
+        angles = np.linspace(0.0, 2.0 * math.pi, 361)
+        loop = np.column_stack([np.cos(angles), np.sin(angles)])
+        cuts = [(0.0, [1.0, 0.0], "turning", ("anchor", 1)), (0.75 * math.pi, [math.cos(0.75 * math.pi), math.sin(0.75 * math.pi)], "turning", ("anchor", 2)),
+                (1.25 * math.pi, [math.cos(1.25 * math.pi), math.sin(1.25 * math.pi)], "corner", ("anchor", 3))]
+        crossing = [math.cos(-0.25 * math.pi), math.sin(-0.25 * math.pi)]
+        oblique, what = wake._chord_angle(loop, crossing, [1.0, 0.0], cuts, frozenset())
+        self.assertLess(oblique, wake.RING_CHORD_ANGLE)
+        self.assertIn("corner cut before", what)
+        radial, _what = wake._chord_angle(loop, crossing, crossing, cuts, frozenset())
+        self.assertAlmostEqual(math.degrees(radial), 45.0, places=6)
+        # The wake's own cut is skipped.
+        skipped, what = wake._chord_angle(loop, crossing, [1.0, 0.0], cuts, frozenset({("anchor", 3)}))
+        self.assertIn("turning cut", what)
+        self.assertGreater(skipped, oblique)
+
+    def test_the_stations_move_out_of_the_ring_when_the_cell_cannot_carry_a_level(self):
+        """The planner's ladder on the teardrop's layout: the stations sit
+        inside the ring; with a sharp corner's seam wedge in the way (here the
+        trailing edge's own cut treated as foreign) they go beyond the ring,
+        a wake ending on another body runs straight along its edge direction
+        to it, and without an outer layer the wake is refused."""
+        # The layout before any wake: the trailing edge still carries its
+        # corner anchor, which a wake of its own would replace.
+        result = pipeline.run_external(["tear"], [teardrop_loop()], replace(CAVITY_FAST, wake=wake.WakeOptions(enabled=False)))
+        layout = result.layout
+        record = wake.plan(layout, replace(self.options(30.0).wake, enabled=True))[0]
+        cell_index = record["cell"]
+        owned = wake.owned_anchor_keys(layout, cell_index, record["wall_station"], record["wall_station"])
+        self.assertEqual(len(owned), 1)
+        self.assertEqual(next(cut.anchor.kind for cut in layout.cuts[cell_index] if cut.anchor.key in owned), "corner")
+        outer = layout.diagram.sites[-1].curve.loop()
+        settings = wake.WakeOptions(enabled=True, turn=50.0)
+        site = layout.diagram.sites[layout.cells[cell_index].site]
+        angles = __import__("layers").fluid_angles(site.curve.loop(), site.curve.fluid_sign)
+        self.assertEqual(wake.seam_wedge_keys(layout, cell_index, angles, math.radians(250.0), owned), set())
+        wedge = wake.seam_wedge_keys(layout, cell_index, angles, math.radians(250.0), frozenset())
+        self.assertEqual(wedge, owned, "the trailing edge is the teardrop's one sharp vertex")
+        inside, why = wake.plan_turns(layout, cell_index, record["point"], [1.0, 0.0], record["direction"], settings, 0.05, owned_keys=owned, outer_loop=outer)
+        self.assertEqual(inside["turn_placement"], "inside", why)
+        self.assertEqual(len(inside["stations"]), 1)
+        beyond, why = wake.plan_turns(layout, cell_index, record["point"], [1.0, 0.0], record["direction"], settings, 0.05, owned_keys=frozenset(), wedge_keys=wedge, outer_loop=outer)
+        self.assertEqual(beyond["turn_placement"], "beyond", why)
+        self.assertIn("seam wedge", beyond["turn_note"])
+        self.assertEqual(len(beyond["stations"]), 1)
+        ring = wake._ray_crossings(np.asarray(record["point"]), [1.0, 0.0], layout.cells[cell_index].ring)[0][0]
+        self.assertGreater(beyond["stations"][0][0], record["point"][0] + ring, "the station lies beyond the ring")
+        refused, why = wake.plan_turns(layout, cell_index, record["point"], [1.0, 0.0], record["direction"], settings, 0.05, owned_keys=frozenset(), wedge_keys=wedge, outer_loop=None)
+        self.assertIsNone(refused)
+        self.assertIn("seam wedge", why)
+        self.assertIn("cannot go beyond the ring", why)
+        to_body, why = wake.plan_turns(layout, cell_index, record["point"], [1.0, 0.0], record["direction"], settings, 0.05, owned_keys=frozenset(), wedge_keys=wedge, outer_loop=outer, body_target=True)
+        self.assertEqual(to_body["turn_placement"], "straight", why)
+        self.assertTrue(to_body["turned"])
+        self.assertEqual(to_body["stations"], [])
+        self.assertTrue(np.allclose(to_body["legs"], [[1.0, 0.0]]))
+        self.assertIn("to the body it ends on", to_body["turn_note"])
+        straight = {"point": record["point"], "axis_point": record["point"], "direction": record["direction"], **to_body}
+        path, leg = wake.line_path(straight, record["point"])
+        self.assertEqual(len(path), 1)
+        self.assertTrue(np.allclose(leg, [1.0, 0.0]))
+        far, leg = wake.far_path(straight, [2.0, 0.0])
+        self.assertEqual(len(far), 1)
+        self.assertTrue(np.allclose(leg, [1.0, 0.0]))
+
     def test_a_base_wake_off_its_flank_bisector_turns(self):
         """A blunt base's wake leaves along the bisector of its flanks and
         turns towards the requested direction; its three strips and both

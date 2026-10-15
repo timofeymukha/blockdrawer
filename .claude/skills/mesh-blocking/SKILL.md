@@ -143,19 +143,24 @@ choose a far field: that came with the brief.
   each block beside a station sees half), all before the body's ring. A
   station is a rung across the wake band carried round the body's cell as
   a level between band and ring, like the far field's level sets; the
-  record says `turned` and lists `stations`. Within ten degrees of the
-  bisector the wake stays straight. Stations are spaced by the band
-  height, so a band as thick as the ring clearance allows fits one
-  station: the refusal *do not fit* asks for a larger `--wake-turn` or a
-  farther ring (`--hull-height-ratio`). A wake over another body keeps its
-  straight chord (`turn_note`). The limit found on 30P30N's flap base: the
-  medial ring is a fan round the base corner, and the ring piece between
-  the lower flank's last gate and the front's crossing bends through it,
-  so the patch beside the wake band meets the ring in a sliver by its
-  chord (*non_convex_face* at the crossing); that wake stays refused. A
-  level row also stops at another sharp feature's seam wedge in the same
-  cell (30P30N's slat: its cusp), so a body with two sharp features turns
-  only the wake of the one whose row can get round.
+  record says `turned`, lists `stations` and says where they are under
+  `turn_placement`. Within ten degrees of the bisector the wake stays
+  straight. The stations go *inside* the ring when they fit (spaced by the
+  band height, so a band as thick as the ring clearance allows fits one),
+  when the ring does not bend beside the crossing (the medial ring behind a
+  convex corner is a fan round it, and the chord from the front's crossing
+  to the next gate's ring point meets a wake direction crossing the fan
+  obliquely in a sliver - 30P30N's flap base) and when the cell carries no
+  other sharp corner's seam wedge (a level row cannot cross one - 30P30N's
+  slat, whose cusp sits beside its edge); else *beyond* the ring, in the
+  layer between ring and outer boundary, unless that boundary bends beside
+  the exit the same way; else *straight*: the wake keeps its bisector
+  through the near field and the body it ends on takes it as it arrives
+  (the slat's edge onto the main), or the hull's far field turns it (the
+  flap's base: through the ring and the hull along the flank bisector).
+  Each rung's reason is in `turn_note`; a full refusal asks for a larger
+  `--wake-turn` or a farther ring (`--hull-height-ratio`). A wake over
+  another body keeps its straight chord.
 - **Sharp trailing edge whose wake passes over another body** (a main
   element's wake over its flap): the wake runs through that body's cell as
   a straight chord with a wake strip on each side; the body-side strip is
@@ -173,21 +178,21 @@ choose a far field: that came with the brief.
   when the lens has a second corner, or when the wake would enter a third
   body's cell. The staggered teardrops (`make research-staggered`) get it
   in the near field inside the hull with the rear's own wake beside it; the
-  hull far field then continues one exiting wake only, so with two it tries
-  each as the exit - the one over another body first - rebuilding the near
-  field with the other body's wake dropped and saying so under
-  `medial.hull.dropped_wakes` and `exit_attempts`. The dropped body keeps
-  its band without a wake band (the two-exit hull is still the next step).
-  30P30N's main and flap build this way: `--wake --hull --farfield-shape
-  cshape --farfield-radius 15 --farfield-center 0.8,0 --layer-height 0.03
-  --first-width 0.001 --core-size 1.0` gives 161 blocks, admissible, Mesh OK
-  at 79 degrees of non-orthogonality and aspect ratio 114 (band 0.04 builds
-  too; 0.02 fails validation and thinner bands lose the layout in the
-  0.005-chord slot), with the main's wake over the flap carried to the
-  outlet and the flap's base banded without its own wake. It is not
-  resolved: the main's trailing-edge cluster carries 85-degree corners. The
-  option region is narrow and a run takes eight minutes, so start from
-  these values rather than sweeping.
+  hull far field cuts its levels along one exiting wake only, so with two
+  it tries each as the cut - the one over another body first - with the
+  other wake's band *ending at the hull*, its exits carried outward as
+  level spokes (`medial.hull.ending_wakes`, `exit_attempts`), and only when
+  neither builds does it rebuild the near field with the other body's wake
+  dropped (`dropped_wakes`). 30P30N's main and flap build this way:
+  `--wake --hull --farfield-shape cshape --farfield-radius 15
+  --farfield-center 0.8,0 --layer-height 0.03 --first-width 0.001
+  --core-size 1.0` gives 173 blocks, admissible, with the main's wake over
+  the flap carried to the outlet and the flap's base wake along its flank
+  bisector through the ring and the hull, ending there (three thin sectors
+  carry its exits radially to the bottom of the domain; a far field with
+  two cuts is the next step). It is not resolved: the main's trailing-edge
+  cluster carries 85-degree corners. The option region is narrow and a run
+  takes eight minutes, so start from these values rather than sweeping.
 - **Multi-element bodies** (slat, main, flap): the *effective airfoil* is a
   chain of wall pieces and **bridges** - straight cuts across a cove mouth or
   from a cusp to the next element - and the regions the chain skips are
@@ -196,17 +201,17 @@ choose a far field: that came with the brief.
   Narrow gaps between elements take one strip of core blocks between the two
   bands rather than two half-cores around a medial line (engine: `--span-gaps`,
   opt-in, limited reach). The engine's measured state on the full 30P30N
-  (slat, main, flap, the main + flap recipe above): admissible, `Mesh OK` at
-  79 degrees of non-orthogonality, 179 blocks, with the main's wake over
-  the flap to the outlet and **no wake from the flap's base or the slat's
-  edge**: both are refused with *the core patch between the wake band and
-  the junction gate beside it is not convex*, because the flank meets the
-  edge 40 degrees off the wake direction and a straight wake band's seam
-  corner cannot absorb more than about ten; a curved wake band out of the
-  edge is the missing template. Do not spend calls on those two wakes -
-  slides, extra spokes and seam thinning were all measured not to open
-  that corner - take the banded base and edge, and repair the cove and
-  slot blocks by hand (the repair recipe in section 4).
+  (slat, main, flap, the main + flap recipe above): admissible, 189
+  blocks, with the main's wake over the flap to the outlet, the flap's base
+  wake along its flank bisector through the ring and the hull (ending
+  there) and **no wake from the slat's edge**: it lands on the main 41
+  degrees off the edge's bisector, and every turn placement is closed -
+  inside the ring the level row meets the slat's cusp (its seam wedge
+  cannot carry a level), beyond the ring the stations would sit in the
+  main's cell, and straight along the bisector the wake passes over the
+  main. Do not spend calls on that wake - take the banded edge, and repair
+  the cove and slot blocks by hand (the repair recipe in section 4); the
+  engine's next step there is the cusp's wedge split round a centre.
 - **Internal flow** (channel, periodic hill, diffuser): a sweep between the two
   walls - columns from one wall band to the other, ends on inlet and outlet or
   on the cyclic pair. Corners of the domain are block corners; a guide wall's

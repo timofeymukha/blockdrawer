@@ -535,11 +535,11 @@ def _try_hull(result: PipelineResult, names, loops, settings: PipelineOptions):
         def exits_of(near):
             return [item for item in near.wakes.applied if (item.get("target") or {}).get("kind") == "outer"] if near.wakes else []
 
-        def attempt(near):
+        def attempt(near, exit_site=None):
             """Extend the near field to the outer boundary and judge the whole."""
             built = hull_module.extend(
                 near, result.domain, outer_site, loops, hull_points=hull_points, hull_height=height,
-                options=settings.hull, wall_edge_style=settings.wall_edge_style,
+                options=settings.hull, wall_edge_style=settings.wall_edge_style, exit_site=exit_site,
             )
             trial = PipelineResult(
                 settings, "external", domain=result.domain, scale=result.scale, sites=result.sites,
@@ -565,16 +565,18 @@ def _try_hull(result: PipelineResult, names, loops, settings: PipelineOptions):
             return trial
 
         exits = exits_of(near)
-        # The hull far field takes one exiting wake.  With two, try each as
-        # the exit - the one passing over another body first (on a high-lift
-        # wing the main element's over the flap, which carries the slot
-        # flow), else the longer body's - rebuilding the near field with the
-        # other bodies' wakes excluded, saying so, rather than refuse the
-        # whole far field: 30P30N main and flap built at one band height
-        # only, the one at which the flap's own wake happened to be refused,
-        # and the staggered foils never.  An exit whose far field fails
-        # (the slit hull's first level behind the passed body can give a
-        # non-convex sector) yields to the next.
+        # The hull far field cuts its levels open along one exiting wake.
+        # With two, try each as the cut - the one passing over another body
+        # first (on a high-lift wing the main element's over the flap, which
+        # carries the slot flow), else the longer body's - with the other
+        # wake's band ending at the hull, its exits carried outward as level
+        # spokes; and when no such far field builds, rebuild the near field
+        # with the other bodies' wakes excluded, saying so, rather than
+        # refuse the whole far field: 30P30N main and flap built at one band
+        # height only, the one at which the flap's own wake happened to be
+        # refused, and the staggered foils never.  An exit whose far field
+        # fails (the slit hull's first level behind the passed body can give
+        # a non-convex sector) yields to the next.
         if len(exits) <= 1:
             if not exits and len(outer_site.chains) > 1:
                 hull_chains = hull_module.mirrored_chains(hull_points, outer_site, loops)
@@ -585,8 +587,21 @@ def _try_hull(result: PipelineResult, names, loops, settings: PipelineOptions):
             perimeter = {name: g2.total_length(g2.close_loop(np.asarray(loop, dtype=np.float64), 0.0)) for name, loop in zip(names, loops)}
             candidates = sorted(exits, key=lambda item: (bool(item.get("through")), perimeter.get(item["site"], 0.0)), reverse=True)
             record["exit_attempts"] = []
+            record["hull_chains"] = ["hull"]
             trial = None
             for keep in candidates:
+                ending = sorted({item["site"] for item in exits if item["site"] != keep["site"]})
+                try:
+                    trial = attempt(near, exit_site=keep["site"])
+                except hull_module.HullError as error:
+                    record["exit_attempts"].append({"kept": keep["site"], "ending": ending, "reason": str(error)})
+                    continue
+                record["exit_attempts"].append({"kept": keep["site"], "ending": ending, "reason": None})
+                record.setdefault("notes", []).append(
+                    f"the hull far field is cut along the wake of {keep['site']!r}; the wake(s) of {ending} end at the hull"
+                )
+                break
+            for keep in ([] if trial is not None else candidates):
                 dropped = sorted({item["site"] for item in exits if item["site"] != keep["site"]})
                 excluded = replace(near_settings, wake=replace(near_settings.wake, exclude=tuple(near_settings.wake.exclude) + tuple(dropped)))
                 near_k = run_external(names, loops, excluded, outer=[("hull", "farfield", hull_points)])
@@ -594,6 +609,7 @@ def _try_hull(result: PipelineResult, names, loops, settings: PipelineOptions):
                 record.setdefault("near_attempts", []).append(record["near"])
                 record["near"] = {
                     "chains": ["hull"],
+                    "excluded": dropped,
                     "blocks": None if near_k.graph is None else len(near_k.graph.faces),
                     "admissible": near_k.admissible,
                     "wakes": None if near_k.wakes is None else [
@@ -834,7 +850,11 @@ def _try_wakes(result: PipelineResult, settings: PipelineOptions) -> PipelineRes
     and keeps its reason under ``medial.wakes``.
     """
     try:
-        records = wake.plan(result.layout, settings.wake, height=result.metric.layer_height if result.metric is not None else 0.0)
+        records = wake.plan(
+            result.layout, settings.wake,
+            height=result.metric.layer_height if result.metric is not None else 0.0,
+            sharp_angle=settings.layer.sharp_fluid_angle,
+        )
     except Exception as error:
         result.errors.append({"stage": "wake_plan", "error": _describe(error)})
         return result

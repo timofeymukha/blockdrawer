@@ -449,17 +449,35 @@ result can be read either way; the session is written whenever the result is
    larger turn away from the wake, a five-degree margin added) and meets
    the first rung where it does. Stations sit at equal fractions of the
    ring's distance along the bisector, at least one and a half band
-   heights apart, and the wake is refused when they do not fit within four
-   fifths of it (raise `--wake-turn`, or move the ring with a higher hull);
-   a wake over another body keeps its straight chord and says so under
-   `turn_note`; `--wake-turn 0` keeps every wake straight. The C-grid
-   producer builds its own straight wake and ignores the stations. On the
-   30P30N flap base the turn moves the refusal from the seam to the ring:
-   the medial ring there is a fan round the base corner, and the ring piece
-   between the lower flank's last gate and the wake front's crossing bends
-   through the fan, so its chord meets the front in a three-degree sliver
-   (`test_wake.WakeTurnTests` has the teardrop and the blunt base turning
-   thirty degrees and resolving).
+   heights apart, within four fifths of it; a wake over another body keeps
+   its straight chord and says so under `turn_note`; `--wake-turn 0` keeps
+   every wake straight. The C-grid producer builds its own straight wake
+   and ignores the stations. **Where the stations go** (`turn_placement`
+   in the record) is a ladder, each rung judged before the wake is written
+   (`wake.plan_turns`): *inside* the ring as above, unless the stations do
+   not fit, or the ring bends beside the crossing so that the chord from
+   the front's crossing to the neighbouring cut's ring point meets the
+   wake direction under 25 degrees (`wake._chord_angle`,
+   `RING_CHORD_ANGLE`: the medial ring behind a convex corner is a fan
+   round it, and a wake direction crossing the fan obliquely leaves a
+   sliver however the stations sit - the 30P30N flap base's three-degree
+   chord), or the body's cell carries another sharp corner's seam wedge,
+   which no level row can cross; then *beyond* the ring, the wake crossing
+   it straight along the bisector and turning in the layer between the
+   ring and the outer boundary, the stations carried round the whole
+   cluster's outer layer as levels, unless the outer boundary bends beside
+   the exit the same way (the hull round the flap's corner does); then
+   *straight*: the wake keeps its bisector through the whole near field,
+   and either the body it ends on takes it as it arrives (a slat's edge
+   onto the main) or, when the outer boundary is the cluster's hull, the
+   far field turns it - its level sets widen round the band by their own
+   growth, and the mitre of a band edge on the outside of the turn is
+   found behind the exit when the level set lies there. Anything else is
+   refused with every rung's reason and the remedy (raise `--wake-turn`,
+   or move the ring with a higher hull). `test_wake.WakeTurnTests` has the
+   teardrop and the blunt base turning thirty degrees inside the ring and
+   resolving, the chord measure on a fan, and the ladder on the teardrop's
+   layout.
 
    **Wake over another body** (the multi-element wake, `through` in the
    record). A wake whose ray crosses the ring into another body's cell and
@@ -601,7 +619,13 @@ result can be read either way; the session is written whenever the result is
    and side running to the outlet along lines spread at `--wake-spread` as
    in the C-grid, the levels mapped onto the cap and two
    wake-side blocks covering the legs, exactly the C-grid's far field with
-   the wake band's own width in place of the trailing edge. A hull's chain
+   the wake band's own width in place of the trailing edge. The levels are
+   cut along one exiting wake - the one passing over another body first,
+   else the first (`exit_site` of `hull.extend`); any other wake leaving
+   through the hull *ends there*: its band stops at the hull and its exit
+   vertices are hull vertices like the rest, carried outward as level
+   spokes (`ending_wakes` in the record), so 30P30N's flap base keeps its
+   wake band inside the hull while the main's wake carries the cut. A hull's chain
    breaks are anchored by the inward ray (`LayoutOptions.outer_by_ray`),
    since the closest ring point of a station near the hull's pointed end is
    arbitrary. Without one the far field
@@ -1148,12 +1172,14 @@ leaves through the hull:
 | --- | --- | --- | --- | --- |
 | staggered_foils, hull at 0.2 | 93 | **through the rear's cell** | to the hull | **admissible** |
 
-The hull far field itself then refuses: it continues one wake leaving the
-cluster and here two do, the front's above the rear foil and the rear's
-behind it, so the complete result falls back to the annular construction
-(88 blocks, admissible, the rear wake only; the hull record is kept on the
-fallback with that reason). A hull that carries two exits is the next step,
-and the one 30P30N needs too - its main wake and flap base both leave.
+The hull far field then cuts its levels along one of the two exiting wakes:
+the front's first (it passes over the rear), which the slit hull's first
+level refuses with a non-convex sector, then the rear's, which builds with
+the front's wake band ending at the hull, its exits carried outward as
+level spokes (197 blocks, admissible, both wakes in the near field;
+`medial.hull.exit_attempts` lists both tries and `ending_wakes` the
+front). A far field cut along both bands is the next step, and the one
+30P30N needs too - its main wake and flap base both leave.
 
 The multi-element wake needs the hull: with the far field many chords away
 the rear foil's far ring lies beyond its tail, the chord would run the whole
@@ -1758,15 +1784,21 @@ installations whose LAPACK/BLAS build is broken.
   remedy (`--wake-blunt-ratio`) rather than cut from one corner. The base
   strip's wall-normal edges are graded to the first-cell width, but the
   first-cell check does not measure the strip.
-* **The hull far field continues one exiting wake only.** With two - 30P30N's
-  main and flap, the staggered foils - the pipeline tries each as the exit,
-  the one passing over another body first, rebuilding the near field with
-  the other body's wake excluded, and reports the drop under
-  `medial.hull.dropped_wakes` and the attempts under `exit_attempts`; an
-  exit whose far field fails (the slit hull's first level behind the passed
-  body can give a non-convex sector) yields to the next. The dropped body
-  keeps its band and no wake band. A far field carrying both wakes is still
-  to be built. 30P30N's main and flap with `--hull`
+* **The hull far field cuts its levels along one exiting wake only.** With
+  two - 30P30N's main and flap, the staggered foils - the pipeline tries each
+  as the cut, the one passing over another body first, with the other wake's
+  band ending at the hull and its exits carried outward as level spokes
+  (`medial.hull.ending_wakes`, the attempts under `exit_attempts`); only
+  when no such far field builds does it rebuild the near field with the
+  other body's wake excluded (`dropped_wakes`). An exit whose far field
+  fails (the slit hull's first level behind the passed body can give a
+  non-convex sector) yields to the next. An ending wake's exits are carried
+  outward along the level mapping - radially from the flap's corner on
+  30P30N, so three thin sectors run from its base to the bottom of the
+  domain and the base strip's count component reaches the outer boundary
+  (component length ratio 378) - where a far field with two cuts would
+  carry the band to the outlet; that far field is still to be built.
+  30P30N's main and flap with `--hull`
   regressed with the gate-unwrapping clamp: its hull's first level gives a
   non-convex block in one of 18 sectors and the annular fallback has an edge
   crossing, where the committed engine's plain pin release built the hull

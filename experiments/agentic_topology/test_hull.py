@@ -133,29 +133,32 @@ class HullFarFieldTests(unittest.TestCase):
         names, loops = cases.staggered_foils()
         result = run("staggered-hull", names, loops, staggered_options())
         record = result.hull
-        first = record["near_attempts"][0]
-        self.assertTrue(first["admissible"], first.get("problems") or first.get("failures") or first.get("errors"))
-        self.assertEqual({item["site"]: (item["applied"], item["target"]) for item in first["wakes"]},
+        near = record["near"]
+        self.assertTrue(near["admissible"], near.get("problems") or near.get("failures") or near.get("errors"))
+        self.assertEqual({item["site"]: (item["applied"], item["target"]) for item in near["wakes"]},
                          {"front": (True, "outer"), "rear": (True, "outer")})
-        # Both wakes leave the cluster, and the hull far field continues one
-        # exiting wake only: each is tried as the exit with the other's wake
-        # excluded, the front's first since it passes over the rear.  Behind
-        # the rear the slit hull's first level gives a non-convex sector, so
-        # that attempt yields, the rear's exit builds, and both are reported.
+        # Both wakes leave the cluster, and the hull far field cuts its
+        # levels along one of them: each is tried as the cut with the other
+        # wake's band ending at the hull, the front's first since it passes
+        # over the rear.  Behind the rear the slit hull's first level gives a
+        # non-convex sector, so that attempt yields, the cut along the rear's
+        # wake builds with the front's band ending at the hull, both are
+        # reported, and the near field keeps both wakes.
         attempts = record["exit_attempts"]
         self.assertEqual([item["kept"] for item in attempts], ["front", "rear"])
         self.assertIn("non-convex", attempts[0]["reason"])
         self.assertIsNone(attempts[1]["reason"])
-        self.assertEqual(record["dropped_wakes"], ["front"])
-        near = record["near"]
-        wakes = {item["site"]: item for item in near["wakes"]}
-        self.assertTrue(wakes["rear"]["applied"])
-        self.assertFalse(wakes["front"]["applied"])
-        self.assertIn("excluded", wakes["front"]["reason"])
+        self.assertEqual(attempts[1]["ending"], ["front"])
+        self.assertEqual(record["ending_wakes"], ["front"])
+        self.assertNotIn("dropped_wakes", record)
         self.assertTrue(record["applied"], record.get("reason"))
         self.assertEqual(record["exit_wake"], "rear")
         self.assertTrue(result.admissible, result.problems or result.failures)
         self.assertIs(result.hull, record)
+        # The front's exits are hull vertices carried outward as level spokes.
+        exits = [key for key in result.graph.vertices if key[:2] == ("hull", "exit")]
+        self.assertTrue(exits)
+        self.assertEqual(sum(1 for face in result.graph.faces if face.provenance == "wake band beyond the hull"), 2)
 
     def test_the_wake_over_the_rear_foil_is_written_through_its_cell(self):
         """The near field inside the hull, built directly: the front record

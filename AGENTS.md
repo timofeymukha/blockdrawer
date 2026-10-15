@@ -267,10 +267,15 @@ them in the canvas widgets.
   with the band continued as a two-sided wake band and the far-field core cut
   open along it - turning, when the wake direction is more than ten degrees
   off the edge's bisector (a base's flank bisector), at stations of at most
-  `WakeOptions.turn` degrees (`--wake-turn`, default 50) before the ring:
-  each station is a rung across the band carried round the body's cell as a
-  level between band front and ring (`wake.plan_turns`, `wake.line_path`,
-  `wake._turn_levels`), so every patch stays a quad; a wake over another
+  `WakeOptions.turn` degrees (`--wake-turn`, default 50): each station is
+  a rung across the band carried round the cell as a level between band
+  front and ring (`wake.plan_turns`, `wake.line_path`, `wake.far_path`,
+  `wake._turn_levels`), so every patch stays a quad - inside the ring when
+  the stations fit, the ring's chord beside the crossing is not a sliver
+  (`wake._chord_angle`) and no other sharp corner's seam wedge blocks the
+  level row, else beyond the ring in the outer layer, else straight along
+  the bisector to the body it ends on or through the hull for the far
+  field to turn (`turn_placement`); a wake over another
   body keeps its straight chord - or, for a blunt base (two convex corners within two percent
   of the perimeter), one record with two fixed anchors and three strips: the
   base itself going on as the wake's core strip between the flank bands - or,
@@ -322,9 +327,11 @@ them in the canvas widgets.
   boundary by spokes - cut open along one exit wake's band (a sharp edge's
   two halves or a blunt base's three strips) to the outlet, C-grid style,
   or closed and mapped chain onto chain. With two exiting wakes the
-  pipeline tries each as the exit, the one over another body first, with
-  the other body's wake excluded (`WakeOptions.exclude`), and reports the
-  drop under `medial.hull.dropped_wakes`. In both the C-grid and the hull
+  pipeline tries each as the cut, the one over another body first, with
+  the other wake's band ending at the hull and its exits carried outward
+  as level spokes (`hull.extend(exit_site=...)`, `medial.hull.ending_wakes`),
+  and only then with the other body's wake excluded (`WakeOptions.exclude`,
+  `medial.hull.dropped_wakes`). In both the C-grid and the hull
   far field every wake line beside the axis leaves its mitre point at the
   `--wake-spread` slope (`CGridOptions.wake_spread`,
   `HullOptions.wake_spread`, `wake.spread_direction`), so a wake band that

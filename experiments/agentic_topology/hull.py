@@ -439,14 +439,17 @@ def _outer_section(site, first: float, second: float, style: str):
 
 
 def extend(near, domain, outer, loops, *, hull_points: np.ndarray, hull_height: float,
-           options: HullOptions | None = None, wall_edge_style: str = "polyLine") -> HullResult:
+           options: HullOptions | None = None, wall_edge_style: str = "polyLine", exit_site: str | None = None) -> HullResult:
     """Grow the far field from the near-field result's hull to the outer boundary.
 
     ``near`` is the annular result built with the hull as its outer boundary,
     ``domain`` and ``outer`` the real domain and its outer site, ``loops`` the
-    body point lists.  One wake may leave the cluster through the hull; its
-    band runs on to the outlet and cuts every level open, as in the C-grid.
-    Raises ``HullError`` with the reason when the construction does not apply.
+    body point lists.  One wake's band runs on to the outlet and cuts every
+    level open, as in the C-grid: ``exit_site``'s, else the one passing over
+    another body, else the first.  Any other wake leaving through the hull
+    ends there: its exit vertices are hull vertices like the rest, carried
+    outward by the levels (``ending_wakes`` in the record).  Raises
+    ``HullError`` with the reason when the construction does not apply.
     """
     import patch_graph as pg
     import wake as wake_module
@@ -466,11 +469,16 @@ def extend(near, domain, outer, loops, *, hull_points: np.ndarray, hull_height: 
     # closed far field - every level a loop, joined chain by chain to the
     # outer boundary.
     exits_records = [item for item in near.wakes.applied if (item.get("target") or {}).get("kind") == "outer"]
-    if len(exits_records) > 1:
-        raise HullError(f"the hull far field takes at most one wake leaving the cluster, found {len(exits_records)}")
     if not exits_records:
         return _extend_closed(near, domain, outer, walls, hull_loop, hull_height, settings, wall_edge_style)
-    record = exits_records[0]
+    if exit_site is not None:
+        chosen = [item for item in exits_records if item["site"] == exit_site]
+        if not chosen:
+            raise HullError(f"no wake of {exit_site!r} leaves through the hull")
+        record = chosen[0]
+    else:
+        record = next((item for item in exits_records if item.get("through")), exits_records[0])
+    ending = [item["site"] for item in exits_records if item is not record]
     # The real outer boundary: cap, leg, outlet, leg.
     names = [chain.name for chain in outer.chains]
     roles = {chain.name: chain.role for chain in outer.chains}
@@ -579,9 +587,17 @@ def extend(near, domain, outer, loops, *, hull_points: np.ndarray, hull_height: 
         for side, sign, h_side in (("out", 1.0, h_out), ("in", -1.0, h_in)):
             origin = point_w + sign * (h_side + growth) * normal
             hits = wake_module._ray_crossings(origin, direction, loop)
-            if not hits:
-                raise HullError(f"the level {height:.4g} wake edge on the {side} side does not meet the level set")
-            t, _arc, _seg = hits[0]
+            if hits:
+                t = float(hits[0][0])
+            else:
+                # A band leaving the hull obliquely - along its edge's
+                # direction, with the far field turning it - has one edge
+                # on the outside of the turn whose offset line meets the
+                # level set only behind the exit; the band edge starts there.
+                behind = wake_module._ray_crossings(origin, -direction, loop)
+                if not behind:
+                    raise HullError(f"the level {height:.4g} wake edge on the {side} side does not meet the level set")
+                t = -float(behind[0][0])
             mitres[side] = origin + t * direction
         return np.vstack([mitres["out"], np.asarray(kept), mitres["in"]])
 
@@ -811,8 +827,11 @@ def extend(near, domain, outer, loops, *, hull_points: np.ndarray, hull_height: 
         "levels": levels, "heights": [float(h) for h in heights],
         "distance_to_outer": distance_to_outer,
         "exit_wake": record["site"], "exit_kind": record.get("kind") or "wake",
+        "ending_wakes": ending,
         "band_half_widths": {"in": h_in, "out": h_out},
     }
+    if ending:
+        notes.append(f"the wake(s) of {ending} end at the hull; their exits are carried outward as level spokes")
     return HullResult(graph, result_record, notes)
 
 
