@@ -2636,6 +2636,62 @@ class VerdictSoundnessTests(unittest.TestCase):
         self.assertEqual(names(after), ["bottom", "cap", "outlet", "top"])
 
 
+class CoveCutTests(unittest.TestCase):
+    def test_a_cove_facing_a_body_gets_pinned_cuts(self):
+        """A dimpled disk with its cove facing a disk at the mouth: the medial
+        branch runs across the mouth, every split of the cove's band patches
+        crowds a cut on that short piece, and the band blocks round the cove
+        would turn 54 degrees against a 45 degree limit.  The layout pins
+        cove cuts on the cove wall at equal fractions of the turning, spread
+        along the ring piece, and the result builds."""
+        import block_layout
+
+        loops = [
+            cases.dimpled_disk((-0.55, 0.0), 0.75, depth=0.6, width=0.45, count=240),
+            cases.circle((0.6, 0.0), 0.30, 150),
+        ]
+        options = dataclasses.replace(
+            CAVITY_FAST,
+            layout=block_layout.LayoutOptions(band_height=0.05, max_band_turning=math.radians(45.0)),
+        )
+        result = pipeline.run_external(["cove", "disk"], loops, options)
+        self.assertTrue(result.admissible, result.problems or result.failures)
+        layout = result.layout
+        coves = [cut for cut in layout.cuts[0] if cut.anchor.kind == "cove"]
+        self.assertEqual(len(coves), 2, [cut.anchor.kind for cut in layout.cuts[0]])
+        for cut in coves:
+            self.assertTrue(cut.anchor.fixed)
+            self.assertFalse(cut.anchor.movable)
+            # Pinned on the cove wall, inside the cove (x below the rim).
+            self.assertLess(cut.wall_point[0], 0.15, cut.wall_point)
+        self.assertTrue(any("cove cut(s) pinned" in note for note in layout.notes), layout.notes)
+        worst = max(math.degrees(patch.wall_turning()) for patch in layout.patches if patch.cell == 0 and layout.cuts[0][patch.first_cut].anchor.kind != "reflex" and layout.cuts[0][patch.second_cut].anchor.kind != "reflex")
+        self.assertLess(worst, 50.0, worst)
+        # The other side of the branch sees the same cuts on the disk's wall.
+        disk = [cut for cut in layout.cuts[1] if cut.anchor.kind == "cove"]
+        self.assertEqual(len(disk), 2)
+
+    def test_a_cove_cut_whose_spoke_the_wall_hides_is_left_out(self):
+        """A deeper notch with the same disk at its mouth: no station on the
+        ring piece is visible from the notch bottom, so the cut is left out
+        with a note rather than placed across the wall."""
+        import block_layout
+
+        loops = [
+            cases.dimpled_disk((-0.55, 0.0), 0.75, depth=0.7, width=0.4, count=240),
+            cases.circle((0.6, 0.0), 0.30, 150),
+        ]
+        options = dataclasses.replace(
+            CAVITY_FAST,
+            layout=block_layout.LayoutOptions(band_height=0.05, max_band_turning=math.radians(45.0)),
+        )
+        result = pipeline.run_external(["cove", "disk"], loops, options)
+        layout = result.layout
+        self.assertEqual([cut for cut in layout.cuts[0] if cut.anchor.kind == "cove"], [])
+        self.assertTrue(any("left out" in note for note in layout.notes), layout.notes)
+        self.assertFalse([p for p in result.problems if p["kind"] == "crossing_edges"])
+
+
 class LayoutRobustnessTests(unittest.TestCase):
     """Representation details of the input must not decide the layout."""
 

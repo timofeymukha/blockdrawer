@@ -211,19 +211,21 @@ choose a far field: that came with the brief.
   Narrow gaps between elements take one strip of core blocks between the two
   bands rather than two half-cores around a medial line (engine: `--span-gaps`,
   opt-in, limited reach). The engine's measured state on the full 30P30N
-  (slat, main, flap, the main + flap recipe above): admissible, 193
+  (slat, main, flap, the main + flap recipe above): admissible, 203
   blocks, **all three wakes**: the main's wake over the flap and the flap's
   base wake (along its flank bisector through the ring and the hull)
   merged into one band to the outlet, and the slat's edge wake turning 41
   degrees at one station inside the ring, its level row through the cusp's
   seam wedge, its far leg aimed 13 degrees down at the main's band and
-  landing at 40 degrees of incidence on the upper nose. Not resolved: the
-  cove and slot band blocks still carry 85-degree corners (the slat's cove
-  has no gate - its medial axis is a self-branch the diagram does not
-  have, so the whole cove projects onto one ring point) and the slat's
-  level row ties the ring and front counts into one component of length
-  ratio 473. Repair the cove and slot blocks by hand (the repair recipe in
-  section 4); the engine's next step there is a cove pocket template.
+  landing at 40 degrees of incidence on the upper nose. The slat's cove
+  carries two pinned cove cuts - cross-slot lines to the main's lower nose,
+  since the cove's own medial axis is not in the diagram - so its band
+  blocks turn 45 degrees at most instead of 117. Not resolved: 84-degree
+  cells remain at the cusp's seam and the slat edge's seam, the main's
+  cove lip keeps its 85-degree corner, and the slat's level row ties the
+  ring and front counts into one component of length ratio 473. Repair
+  those by hand (the repair recipe in section 4); the engine's next steps
+  are the count coupling of the level rows and the main's cove lip.
 - **Internal flow** (channel, periodic hill, diffuser): a sweep between the two
   walls - columns from one wall band to the other, ends on inlet and outlet or
   on the cyclic pair. Corners of the domain are block corners; a guide wall's

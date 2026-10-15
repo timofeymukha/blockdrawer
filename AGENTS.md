@@ -321,7 +321,15 @@ them in the canvas widgets.
   tight convex bend - a curvature peak where the wall turns a corner's worth
   within a hundredth of the perimeter on each side, an ellipse tip or an
   airfoil nose - is a rounded convex corner, a forced and pinned gate like a
-  sharp corner's (`block_layout.TIP_WINDOW`, anchor kind `tip`).
+  sharp corner's (`block_layout.TIP_WINDOW`, anchor kind `tip`). A *cove* -
+  a wall band patch turning more than the limit the concave way whose every
+  split crowded the short ring piece across its mouth, since the medial axis
+  inside a body's own cove is a self-branch the diagram lacks - is cut by
+  anchors pinned on the cove wall at equal fractions of its turning and
+  spread along that ring piece, fixed like a wake's and outside the ring
+  floor, each spoke kept clear of the wall (`block_layout.cove_anchors`,
+  anchor kind `cove`); they are cross-slot lines to the body facing the
+  cove, as a channel array would have them.
   `hull.py` is the opt-in `--hull` far field for two or more bodies: the
   hull is the cluster's wall-distance level set at six band heights (capped
   by the body frame), carrying the outer boundary's chains at the same

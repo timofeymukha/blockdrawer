@@ -1464,6 +1464,127 @@ def band_block_corner(diagram: Diagram, patch: Patch, height: float) -> float:
     return float(np.min(g2.quad_corner_angles(quad)))
 
 
+def _turning_fraction_station(loop: np.ndarray, start: float, length: float, fraction: float) -> float:
+    """Wall station from ``start`` at which ``fraction`` of the turning over ``length`` is reached."""
+    total = turning_between(loop, start, length)
+    target = fraction * total
+    low, high = 0.0, float(length)
+    for _ in range(48):
+        middle = 0.5 * (low + high)
+        if turning_between(loop, start, middle) < target:
+            low = middle
+        else:
+            high = middle
+    perimeter = float(g2.cumulative_length(loop)[-1])
+    return (start + 0.5 * (low + high)) % perimeter
+
+
+def _spoke_is_clear(gate, ring_point, loop: np.ndarray) -> bool:
+    """True when the straight spoke from a wall point to a ring point crosses the wall loop nowhere but at its foot."""
+    gate = np.asarray(gate, dtype=np.float64)
+    ring_point = np.asarray(ring_point, dtype=np.float64)
+    span = float(np.linalg.norm(ring_point - gate))
+    if span <= 0.0:
+        return False
+    direction = (ring_point - gate) / span
+    poly = np.asarray(loop, dtype=np.float64)
+    a, e = poly[:-1], poly[1:] - poly[:-1]
+    denominator = direction[0] * e[:, 1] - direction[1] * e[:, 0]
+    w = a - gate[None, :]
+    safe = np.where(np.abs(denominator) > 0.0, denominator, 1.0)
+    t = (w[:, 0] * e[:, 1] - w[:, 1] * e[:, 0]) / safe
+    u = (w[:, 0] * direction[1] - w[:, 1] * direction[0]) / safe
+    scale = float(np.max(np.abs(poly))) + 1.0
+    crossing = (np.abs(denominator) > 1e-14 * scale) & (t > 1e-6 * span) & (t < span * (1.0 - 1e-6)) & (u >= 0.0) & (u < 1.0)
+    return not bool(np.any(crossing))
+
+
+def cove_anchors(diagram: Diagram, cells: list[Cell], anchors: "AnchorSet", cuts, patches, *, limit: float) -> list[str]:
+    """Pinned cuts into a cove the ring floor would not let the refinement split.
+
+    A *cove* is a wall band patch turning more than the limit the concave
+    way, the fluid angle under 180 degrees along it: the medial axis inside
+    a body's own cove is a branch between the body and itself, which the
+    diagram does not carry, so the whole cove projects onto a short piece
+    of the ring across its mouth and every split the refinement tried
+    there crowded a cut on that piece (the 30P30N slat's cove, 117 degrees
+    from the cusp to the lip over 0.03 of ring).  Such a patch is cut into
+    ``ceil(turning / limit)`` blocks by anchors pinned on the cove wall at
+    equal fractions of the turning and spread evenly along the patch's ring
+    piece - cross-slot lines from the cove to the body facing it, as a
+    channel array would have them - fixed like a wake's, outside the ring
+    floor.  A cut's spoke, the straight line from its gate to its ring
+    point, must not cross the body's own wall (a deep notch hides most of
+    the ring piece from its bottom): the ring station nearest the even
+    spread whose spoke is clear is taken, in steps of a fortieth of the
+    piece, and a cut with no clear station is left out with a note.  Both
+    cuts of the patch must lie on one branch.
+    """
+    notes: list[str] = []
+    for patch in patches:
+        site = diagram.sites[patch.site]
+        if site.curve.kind != "wall":
+            continue
+        turning = patch.wall_turning()
+        if turning <= limit or len(patch.wall) < 3:
+            continue
+        signed = float(np.sum(g2.turning_angles(patch.wall, closed=False)))
+        if site.curve.fluid_sign * signed >= 0.0:
+            continue
+        cell = cells[patch.cell]
+        cell_cuts = cuts[patch.cell]
+        first, second = cell_cuts[patch.first_cut], cell_cuts[patch.second_cut]
+        branch_a, _ = cell.branch_station(first.ring_station)
+        branch_b, _ = cell.branch_station(second.ring_station)
+        if branch_a != branch_b:
+            notes.append(
+                f"{site.name}: the cove between wall stations {first.wall_station:.4g} and "
+                f"{second.wall_station:.4g} spans a ring junction; no cove cut"
+            )
+            continue
+        loop = site.curve.loop()
+        perimeter = site.curve.length()
+        wall_span = (second.wall_station - first.wall_station) % perimeter
+        ring_span = (second.ring_station - first.ring_station) % cell.ring_length
+        if wall_span <= 0.0 or ring_span <= 0.0:
+            continue
+        count = int(math.ceil(turning / limit))
+        added = 0
+        hidden = 0
+        steps = 40
+        for k in range(1, count):
+            station = _turning_fraction_station(loop, first.wall_station, wall_span, k / count)
+            gate = site.curve.point_at(station)
+            ring_station = None
+            for offset in sorted(range(-steps, steps + 1), key=abs):
+                fraction = k / count + offset / steps
+                if fraction <= 0.0 or fraction >= 1.0:
+                    continue
+                candidate = (first.ring_station + ring_span * fraction) % cell.ring_length
+                ring_point = g2.sample_at_arclength(cell.ring, [candidate])[0]
+                if _spoke_is_clear(gate, ring_point, loop):
+                    ring_station = candidate
+                    break
+            if ring_station is None:
+                hidden += 1
+                continue
+            branch, position = cell.branch_station(ring_station)
+            anchor = Anchor(branch, position, "cove", None, (cell.site, float(station)), fixed=True)
+            if anchors.add(anchor, force=True):
+                added += 1
+        if hidden:
+            notes.append(
+                f"{site.name}: {hidden} cove cut(s) left out, no ring station on the patch's ring piece "
+                f"is visible from the cove wall"
+            )
+        notes.append(
+            f"{site.name}: {added} cove cut(s) pinned between wall stations {first.wall_station:.4g} and "
+            f"{second.wall_station:.4g} ({math.degrees(turning):.0f} degrees of concave turning on "
+            f"{ring_span:.3g} of ring)"
+        )
+    return notes
+
+
 def build_layout(diagram: Diagram, options: LayoutOptions | None = None) -> Layout:
     settings = options or LayoutOptions()
     cells = build_cells(diagram)
@@ -1518,6 +1639,11 @@ def build_layout(diagram: Diagram, options: LayoutOptions | None = None) -> Layo
     cuts = anchors.cuts()
     patches = build_patches(diagram, cells, cuts)
     unsplittable: set[tuple] = set()
+    turning_limit = (
+        min(settings.max_wall_turning, settings.max_band_turning)
+        if settings.band_height is not None and settings.max_band_turning is not None
+        else settings.max_wall_turning
+    )
     for _ in range(settings.max_refinements):
         short = {
             index
@@ -1598,6 +1724,11 @@ def build_layout(diagram: Diagram, options: LayoutOptions | None = None) -> Layo
                 "existing cut"
             )
             break
+        cuts = anchors.cuts()
+        patches = build_patches(diagram, cells, cuts)
+    cove_notes = cove_anchors(diagram, cells, anchors, cuts, patches, limit=turning_limit)
+    if cove_notes:
+        notes.extend(cove_notes)
         cuts = anchors.cuts()
         patches = build_patches(diagram, cells, cuts)
     for cell_index, cell_cuts in enumerate(cuts):

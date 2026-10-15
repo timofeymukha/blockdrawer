@@ -425,8 +425,9 @@ result can be read either way; the session is written whenever the result is
    `CavityOptions.templates`): a turning wake's level row goes through
    every seam wedge on its way round the cell and splits it, after which
    the cavity stage on the finished graph can rewrite nothing there - the
-   30P30N slat's cusp, whose plain seam leaves the band block round the
-   cove non-convex by its chords, refused every wake of the slat that way.
+   30P30N slat's cusp, whose plain seam left the band block round the
+   cove non-convex by its chords before the cove got its cuts, refused
+   every wake of the slat that way.
    The features the wakes replace or land on keep their plain seams for
    the writers.
 
@@ -1604,6 +1605,23 @@ decide the layout, and each is now a function of the geometry:
   radius off it and a band block wrapped the nose. The rule mirrors
   `layers.tight_concave_runs` for the concave case; it costs the 15:1
   ellipse, admissible by that accident, its band;
+* a *cove* - a wall band patch turning more than the limit the concave way
+  whose every split crowded the ring - gets pinned cuts after the refinement
+  (`block_layout.cove_anchors`, anchor kind `cove`). The medial axis inside
+  a body's own cove is a branch between the body and itself, which the
+  diagram does not carry, so the whole cove projects onto the short ring
+  piece across its mouth: the 30P30N slat's cove turned 117 degrees from
+  the cusp to the lip over 0.03 of ring, and its one band block carried
+  85-degree cells that the cavity stage's seam template could only hide.
+  The patch is cut into `ceil(turning / limit)` blocks by anchors pinned
+  on the cove wall at equal fractions of the turning and spread evenly
+  along the ring piece - cross-slot lines from the cove to the body facing
+  it, as a channel array would have them - fixed like a wake's, outside the
+  ring floor; a spoke that would cross the body's own wall (a deep notch)
+  takes the nearest visible ring station or is left out with a note. The
+  fixture is a dimpled disk with its cove facing a disk at the mouth
+  (`CoveCutTests`); the corpus of thirteen fixtures has no such patch and
+  is unchanged;
 * gate unwrapping steps between raw stations, so two gates on one station
   are a zero step and not a full turn, and an unpinned gate is clamped only
   when the gates would otherwise wind more than once round the wall;
