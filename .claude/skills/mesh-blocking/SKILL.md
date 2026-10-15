@@ -178,21 +178,21 @@ choose a far field: that came with the brief.
   when the lens has a second corner, or when the wake would enter a third
   body's cell. The staggered teardrops (`make research-staggered`) get it
   in the near field inside the hull with the rear's own wake beside it; the
-  hull far field cuts its levels along one exiting wake only, so with two
-  it tries each as the cut - the one over another body first - with the
-  other wake's band *ending at the hull*, its exits carried outward as
-  level spokes (`medial.hull.ending_wakes`, `exit_attempts`), and only when
-  neither builds does it rebuild the near field with the other body's wake
-  dropped (`dropped_wakes`). 30P30N's main and flap build this way:
+  hull far field *merges* the wakes leaving the cluster into one band - the
+  levels cut between the upper band's out edge and the lower's in edge, the
+  hull between them continued to the outlet as channel strips
+  (`medial.hull.merged_wakes`) - and, when that does not build, cuts along
+  one wake with the other's band *ending at the hull* (`ending_wakes`,
+  `exit_attempts`), and last rebuilds the near field with the other body's
+  wake dropped (`dropped_wakes`). 30P30N's main and flap build this way:
   `--wake --hull --farfield-shape cshape --farfield-radius 15
   --farfield-center 0.8,0 --layer-height 0.03 --first-width 0.001
-  --core-size 1.0` gives 173 blocks, admissible, with the main's wake over
-  the flap carried to the outlet and the flap's base wake along its flank
-  bisector through the ring and the hull, ending there (three thin sectors
-  carry its exits radially to the bottom of the domain; a far field with
-  two cuts is the next step). It is not resolved: the main's trailing-edge
-  cluster carries 85-degree corners. The option region is narrow and a run
-  takes eight minutes, so start from these values rather than sweeping.
+  --core-size 1.0` gives 153 blocks, admissible, with the main's wake over
+  the flap and the flap's base wake (along its flank bisector through the
+  ring and the hull) merged into one band to the outlet. It is not
+  resolved: the main's trailing-edge cluster carries 85-degree corners. The
+  option region is narrow and a run takes eight minutes, so start from
+  these values rather than sweeping.
 - **Multi-element bodies** (slat, main, flap): the *effective airfoil* is a
   chain of wall pieces and **bridges** - straight cuts across a cove mouth or
   from a cusp to the next element - and the regions the chain skips are
@@ -201,10 +201,10 @@ choose a far field: that came with the brief.
   Narrow gaps between elements take one strip of core blocks between the two
   bands rather than two half-cores around a medial line (engine: `--span-gaps`,
   opt-in, limited reach). The engine's measured state on the full 30P30N
-  (slat, main, flap, the main + flap recipe above): admissible, 189
-  blocks, with the main's wake over the flap to the outlet, the flap's base
-  wake along its flank bisector through the ring and the hull (ending
-  there) and **no wake from the slat's edge**: it lands on the main 41
+  (slat, main, flap, the main + flap recipe above): admissible, 174
+  blocks, with the main's wake over the flap and the flap's base wake
+  (along its flank bisector through the ring and the hull) merged into one
+  band to the outlet, and **no wake from the slat's edge**: it lands on the main 41
   degrees off the edge's bisector, and every turn placement is closed -
   inside the ring the level row meets the slat's cusp (its seam wedge
   cannot carry a level), beyond the ring the stations would sit in the

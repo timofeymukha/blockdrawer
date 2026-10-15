@@ -326,12 +326,15 @@ them in the canvas widgets.
   no vertex crosses the waist between two bodies - and join the outer
   boundary by spokes - cut open along one exit wake's band (a sharp edge's
   two halves or a blunt base's three strips) to the outlet, C-grid style,
-  or closed and mapped chain onto chain. With two exiting wakes the
-  pipeline tries each as the cut, the one over another body first, with
-  the other wake's band ending at the hull and its exits carried outward
-  as level spokes (`hull.extend(exit_site=...)`, `medial.hull.ending_wakes`),
-  and only then with the other body's wake excluded (`WakeOptions.exclude`,
-  `medial.hull.dropped_wakes`). In both the C-grid and the hull
+  or closed and mapped chain onto chain. Two or more exiting wakes merge
+  into one band - the levels cut between the uppermost band's out edge and
+  the lowermost's in edge, the hull between two bands continued to the
+  outlet as channel strips (`medial.hull.merged_wakes`) - and when that
+  does not build the pipeline tries each as the cut, the one over another
+  body first, with the other wake's band ending at the hull and its exits
+  carried outward as level spokes (`hull.extend(exit_site=...)`,
+  `medial.hull.ending_wakes`), and only then with the other body's wake
+  excluded (`WakeOptions.exclude`, `medial.hull.dropped_wakes`). In both the C-grid and the hull
   far field every wake line beside the axis leaves its mitre point at the
   `--wake-spread` slope (`CGridOptions.wake_spread`,
   `HullOptions.wake_spread`, `wake.spread_direction`), so a wake band that

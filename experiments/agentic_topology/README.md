@@ -619,13 +619,21 @@ result can be read either way; the session is written whenever the result is
    and side running to the outlet along lines spread at `--wake-spread` as
    in the C-grid, the levels mapped onto the cap and two
    wake-side blocks covering the legs, exactly the C-grid's far field with
-   the wake band's own width in place of the trailing edge. The levels are
-   cut along one exiting wake - the one passing over another body first,
-   else the first (`exit_site` of `hull.extend`); any other wake leaving
-   through the hull *ends there*: its band stops at the hull and its exit
-   vertices are hull vertices like the rest, carried outward as level
-   spokes (`ending_wakes` in the record), so 30P30N's flap base keeps its
-   wake band inside the hull while the main's wake carries the cut. A hull's chain
+   the wake band's own width in place of the trailing edge. Two or more
+   wakes leaving through the hull **merge into one band**: the levels are
+   cut between the uppermost band's out edge and the lowermost's in edge,
+   each level's mitres offset from those two bands' axes (the bands'
+   offsets exceed the gap between them within the first level, as the
+   wakes merge in the flow), every band's strips run to the outlet, and
+   the hull between two bands continues to the outlet as a *channel* of
+   straight strips - one per hull piece - whose lines keep the wake
+   direction, as do a base's lines on the channel side (`merged_wakes`,
+   `channel_strips` in the record). The pipeline tries the merged band
+   first; when it does not build, each wake in turn carries the cut alone
+   (`exit_site` of `hull.extend`) with the others *ending at the hull* -
+   their bands stop there and their exit vertices are hull vertices like
+   the rest, carried outward as level spokes (`ending_wakes`) - and last
+   the near field is rebuilt with the other body's wake excluded. A hull's chain
    breaks are anchored by the inward ray (`LayoutOptions.outer_by_ray`),
    since the closest ring point of a station near the hull's pointed end is
    arbitrary. Without one the far field
@@ -1784,20 +1792,18 @@ installations whose LAPACK/BLAS build is broken.
   remedy (`--wake-blunt-ratio`) rather than cut from one corner. The base
   strip's wall-normal edges are graded to the first-cell width, but the
   first-cell check does not measure the strip.
-* **The hull far field cuts its levels along one exiting wake only.** With
-  two - 30P30N's main and flap, the staggered foils - the pipeline tries each
-  as the cut, the one passing over another body first, with the other wake's
-  band ending at the hull and its exits carried outward as level spokes
-  (`medial.hull.ending_wakes`, the attempts under `exit_attempts`); only
-  when no such far field builds does it rebuild the near field with the
-  other body's wake excluded (`dropped_wakes`). An exit whose far field
-  fails (the slit hull's first level behind the passed body can give a
-  non-convex sector) yields to the next. An ending wake's exits are carried
-  outward along the level mapping - radially from the flap's corner on
-  30P30N, so three thin sectors run from its base to the bottom of the
-  domain and the base strip's count component reaches the outer boundary
-  (component length ratio 378) - where a far field with two cuts would
-  carry the band to the outlet; that far field is still to be built.
+* **The hull far field merges the exiting wakes into one band.** With two
+  - 30P30N's main and flap, the staggered foils - the levels are cut once,
+  between the upper band's out edge and the lower's in edge, and the hull
+  between the bands continues to the outlet as channel strips; the wakes
+  do merge in the flow, but the channel's hull pieces keep their counts for
+  the length of the far field. When the merged band does not build, each
+  wake in turn carries the cut alone with the other's band ending at the
+  hull, its exits carried outward as level spokes (`medial.hull.ending_wakes`,
+  the attempts under `exit_attempts`), and last the near field is rebuilt
+  with the other body's wake excluded (`dropped_wakes`). An exit whose far
+  field fails (the slit hull's first level behind the passed body can give
+  a non-convex sector) yields to the next.
   30P30N's main and flap with `--hull`
   regressed with the gate-unwrapping clamp: its hull's first level gives a
   non-convex block in one of 18 sectors and the annular fallback has an edge

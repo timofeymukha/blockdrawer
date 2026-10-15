@@ -137,18 +137,22 @@ class HullFarFieldTests(unittest.TestCase):
         self.assertTrue(near["admissible"], near.get("problems") or near.get("failures") or near.get("errors"))
         self.assertEqual({item["site"]: (item["applied"], item["target"]) for item in near["wakes"]},
                          {"front": (True, "outer"), "rear": (True, "outer")})
-        # Both wakes leave the cluster, and the hull far field cuts its
-        # levels along one of them: each is tried as the cut with the other
-        # wake's band ending at the hull, the front's first since it passes
-        # over the rear.  Behind the rear the slit hull's first level gives a
-        # non-convex sector, so that attempt yields, the cut along the rear's
-        # wake builds with the front's band ending at the hull, both are
-        # reported, and the near field keeps both wakes.
+        # Both wakes leave the cluster.  The hull far field merges them into
+        # one band when their directions agree within the turn margin; these
+        # two leave along their own bisectors, too far apart, so each is
+        # tried as the cut with the other wake's band ending at the hull,
+        # the front's first since it passes over the rear.  Behind the rear
+        # the slit hull's first level gives a non-convex sector, so that
+        # attempt yields, the cut along the rear's wake builds with the
+        # front's band ending at the hull, all three are reported, and the
+        # near field keeps both wakes.
         attempts = record["exit_attempts"]
-        self.assertEqual([item["kept"] for item in attempts], ["front", "rear"])
-        self.assertIn("non-convex", attempts[0]["reason"])
-        self.assertIsNone(attempts[1]["reason"])
-        self.assertEqual(attempts[1]["ending"], ["front"])
+        self.assertEqual([item["kept"] for item in attempts], [["front", "rear"], "front", "rear"])
+        self.assertTrue(attempts[0]["merged"])
+        self.assertIn("cannot merge", attempts[0]["reason"])
+        self.assertIn("non-convex", attempts[1]["reason"])
+        self.assertIsNone(attempts[2]["reason"])
+        self.assertEqual(attempts[2]["ending"], ["front"])
         self.assertEqual(record["ending_wakes"], ["front"])
         self.assertNotIn("dropped_wakes", record)
         self.assertTrue(record["applied"], record.get("reason"))

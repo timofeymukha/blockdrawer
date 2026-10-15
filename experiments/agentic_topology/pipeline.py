@@ -589,7 +589,14 @@ def _try_hull(result: PipelineResult, names, loops, settings: PipelineOptions):
             record["exit_attempts"] = []
             record["hull_chains"] = ["hull"]
             trial = None
-            for keep in candidates:
+            # All of them first, merged into one band with the hull between
+            # them continued as a channel.
+            try:
+                trial = attempt(near)
+                record["exit_attempts"].append({"kept": sorted(item["site"] for item in exits), "merged": True, "reason": None})
+            except hull_module.HullError as error:
+                record["exit_attempts"].append({"kept": sorted(item["site"] for item in exits), "merged": True, "reason": str(error)})
+            for keep in ([] if trial is not None else candidates):
                 ending = sorted({item["site"] for item in exits if item["site"] != keep["site"]})
                 try:
                     trial = attempt(near, exit_site=keep["site"])

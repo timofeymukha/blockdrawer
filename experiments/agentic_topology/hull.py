@@ -444,12 +444,18 @@ def extend(near, domain, outer, loops, *, hull_points: np.ndarray, hull_height: 
 
     ``near`` is the annular result built with the hull as its outer boundary,
     ``domain`` and ``outer`` the real domain and its outer site, ``loops`` the
-    body point lists.  One wake's band runs on to the outlet and cuts every
-    level open, as in the C-grid: ``exit_site``'s, else the one passing over
-    another body, else the first.  Any other wake leaving through the hull
-    ends there: its exit vertices are hull vertices like the rest, carried
-    outward by the levels (``ending_wakes`` in the record).  Raises
-    ``HullError`` with the reason when the construction does not apply.
+    body point lists.  The wakes leaving the cluster through the hull run on
+    to the outlet and cut every level open, as in the C-grid: one band, or
+    several merged into one - the levels are cut between the uppermost
+    band's out edge and the lowermost's in edge, each level's mitres offset
+    from those two bands' axes, and the hull between two bands continues to
+    the outlet as a *channel* of straight strips, since the bands' offsets
+    exceed the gap between them within the first level (``merged_wakes`` in
+    the record).  With ``exit_site`` that wake's band alone cuts the levels
+    and every other wake leaving through the hull ends there: its exit
+    vertices are hull vertices like the rest, carried outward by the levels
+    (``ending_wakes``).  Raises ``HullError`` with the reason when the
+    construction does not apply.
     """
     import patch_graph as pg
     import wake as wake_module
@@ -464,10 +470,8 @@ def extend(near, domain, outer, loops, *, hull_points: np.ndarray, hull_height: 
     hull_total = float(g2.total_length(hull_loop))
     walls = [np.asarray(loop, dtype=np.float64) for loop in loops]
 
-
-    # The exit wake: at most one wake leaves through the hull.  None means a
-    # closed far field - every level a loop, joined chain by chain to the
-    # outer boundary.
+    # The exit wakes: none means a closed far field - every level a loop,
+    # joined chain by chain to the outer boundary.
     exits_records = [item for item in near.wakes.applied if (item.get("target") or {}).get("kind") == "outer"]
     if not exits_records:
         return _extend_closed(near, domain, outer, walls, hull_loop, hull_height, settings, wall_edge_style)
@@ -475,10 +479,10 @@ def extend(near, domain, outer, loops, *, hull_points: np.ndarray, hull_height: 
         chosen = [item for item in exits_records if item["site"] == exit_site]
         if not chosen:
             raise HullError(f"no wake of {exit_site!r} leaves through the hull")
-        record = chosen[0]
+        records = chosen
     else:
-        record = next((item for item in exits_records if item.get("through")), exits_records[0])
-    ending = [item["site"] for item in exits_records if item is not record]
+        records = list(exits_records)
+    ending = [item["site"] for item in exits_records if item not in records]
     # The real outer boundary: cap, leg, outlet, leg.
     names = [chain.name for chain in outer.chains]
     roles = {chain.name: chain.role for chain in outer.chains}
@@ -495,36 +499,58 @@ def extend(near, domain, outer, loops, *, hull_points: np.ndarray, hull_height: 
     j_top = (leg_after.start + leg_after.length) % total_outer
     j_bot = (cap.start + cap.length) % total_outer
     cell_c = len(near.layout.cells) - 1
-    # The hull's exit vertices in hull order: a sharp edge's wake band is
-    # in, centre, out; a blunt base's is in front, first line, second line,
-    # out front.  The strips between consecutive exits run on to the outlet.
-    if record.get("kind") == "base":
-        key1, key2 = (tuple(k) for k in record["anchor_keys"])
-        exit_keys = [
-            ("wake", cell_c, *key1, "gate", "in"), ("gate", cell_c, *key1),
-            ("gate", cell_c, *key2), ("wake", cell_c, *key2, "gate", "out"),
-        ]
-    else:
-        # A wake passing over another body leaves through its second anchor.
-        key = tuple(record.get("exit_key") or record["anchor_key"])
-        exit_keys = [("wake", cell_c, *key, "gate", "in"), ("gate", cell_c, *key), ("wake", cell_c, *key, "gate", "out")]
-    for vertex in exit_keys:
-        if vertex not in graph_near.vertices:
-            raise HullError(f"the near field lacks the wake exit vertex {vertex!r}")
-    outer_in, outer_out = exit_keys[0], exit_keys[-1]
-    direction = np.asarray(record["direction"], dtype=np.float64)
+    # The merged band's direction: the wakes' common one, or their mean when
+    # they differ by less than the wake turn margin (each band's strips then
+    # kink by that much at the hull).
+    directions = [np.asarray(item["direction"], dtype=np.float64) / np.linalg.norm(item["direction"]) for item in records]
+    direction = directions[0]
+    for other in directions[1:]:
+        if float(other @ direction) < math.cos(wake_module.TURN_MARGIN):
+            raise HullError(
+                "the wakes leaving the cluster differ in direction by more than the turn margin; "
+                "their bands cannot merge"
+            )
+    direction = np.sum(directions, axis=0)
     direction = direction / np.linalg.norm(direction)
     normal = np.array([-direction[1], direction[0]])       # left of the wake: the out side
-    # The wake axis: the centre line of a sharp edge's band, the base's midline.
-    point_w = 0.5 * (graph_near.vertices[exit_keys[1]].point + graph_near.vertices[exit_keys[-2]].point)
-    _along, h_out = _lateral(direction, normal, point_w, graph_near.vertices[outer_out].point)
-    _along, h_in = _lateral(direction, normal, point_w, graph_near.vertices[outer_in].point)
-    h_in = -h_in
-    if h_out <= 0.0 or h_in <= 0.0:
-        raise HullError("the wake band's exits do not bracket the wake line on the hull")
+
+    # Each band's exit vertices in hull order: a sharp edge's wake band is
+    # in, centre, out; a blunt base's is in front, first line, second line,
+    # out front.  The strips between consecutive exits run on to the outlet.
+    bands = []
+    for item in records:
+        if item.get("kind") == "base":
+            key1, key2 = (tuple(k) for k in item["anchor_keys"])
+            exit_keys = [
+                ("wake", cell_c, *key1, "gate", "in"), ("gate", cell_c, *key1),
+                ("gate", cell_c, *key2), ("wake", cell_c, *key2, "gate", "out"),
+            ]
+        else:
+            # A wake passing over another body leaves through its second anchor.
+            key = tuple(item.get("exit_key") or item["anchor_key"])
+            exit_keys = [("wake", cell_c, *key, "gate", "in"), ("gate", cell_c, *key), ("wake", cell_c, *key, "gate", "out")]
+        for vertex in exit_keys:
+            if vertex not in graph_near.vertices:
+                raise HullError(f"the near field lacks the wake exit vertex {vertex!r}")
+        # The wake axis: the centre line of a sharp edge's band, the base's midline.
+        point_w = 0.5 * (graph_near.vertices[exit_keys[1]].point + graph_near.vertices[exit_keys[-2]].point)
+        _along, h_out = _lateral(direction, normal, point_w, graph_near.vertices[exit_keys[-1]].point)
+        _along, h_in = _lateral(direction, normal, point_w, graph_near.vertices[exit_keys[0]].point)
+        h_in = -h_in
+        if h_out <= 0.0 or h_in <= 0.0:
+            raise HullError("the wake band's exits do not bracket the wake line on the hull")
+        bands.append({"record": item, "exit_keys": exit_keys, "point_w": point_w, "h_in": h_in, "h_out": h_out})
+    # Uppermost band first: its out edge bounds the merged band above, the
+    # lowermost's in edge below.
+    bands.sort(key=lambda band: float(band["point_w"] @ normal), reverse=True)
+    top, bottom = bands[0], bands[-1]
+    outer_out, outer_in = top["exit_keys"][-1], bottom["exit_keys"][0]
+    point_out, point_in = top["point_w"], bottom["point_w"]
+    h_out, h_in = top["h_out"], bottom["h_in"]
 
     # Hull vertices of the near field in hull order; the base runs from the
-    # out exit round the cluster to the in exit.
+    # out exit round the cluster to the in exit, and between two bands the
+    # hull is a channel.
     hull_names = _hull_chain_names(graph_near)
     hull_vertices = set()
     for edge in graph_near.edges.values():
@@ -534,12 +560,31 @@ def extend(near, domain, outer, loops, *, hull_points: np.ndarray, hull_height: 
         raise HullError("the near field has no edges on the hull")
     station = {v: float(g2.closest_on_polyline(hull_loop, graph_near.vertices[v].point[None, :]).arclength[0]) for v in hull_vertices}
     s_out, s_in = station[outer_out], station[outer_in]
-    # Forward along the hull the exits read in, centre(s), out; the base goes
-    # the long way round from out to in, so the centres are not on it.
-    for inner in exit_keys[1:-1]:
-        if (station[inner] - s_out) % hull_total <= (s_in - s_out) % hull_total:
-            raise HullError("the wake exits are not ordered in, centre, out along the hull")
-    ordered = sorted(hull_vertices - set(exit_keys[1:-1]), key=lambda v: (station[v] - s_out) % hull_total)
+    forward_from_in = sorted(hull_vertices, key=lambda v: (station[v] - s_in) % hull_total)
+    # Forward from the lowermost band's in exit: that band's exits in order,
+    # then the channel up to the next band's in exit, and so on to the
+    # uppermost band's out exit; the rest of the hull is the base.
+    upward = list(reversed(bands))
+    channels: list[list] = []
+    expected: list = []
+    position = 0
+    for index, band in enumerate(upward):
+        for key in band["exit_keys"]:
+            if position >= len(forward_from_in) or forward_from_in[position] != key:
+                raise HullError("the wake exits are not ordered in, centre, out along the hull")
+            expected.append(key)
+            position += 1
+        if index < len(upward) - 1:
+            next_in = upward[index + 1]["exit_keys"][0]
+            channel = [band["exit_keys"][-1]]
+            while position < len(forward_from_in) and forward_from_in[position] != next_in:
+                channel.append(forward_from_in[position])
+                expected.append(forward_from_in[position])
+                position += 1
+            channel.append(next_in)
+            channels.append(channel)
+    excluded = set(expected) - {outer_out, outer_in}
+    ordered = sorted(hull_vertices - excluded, key=lambda v: (station[v] - s_out) % hull_total)
     if ordered[0] != outer_out or ordered[-1] != outer_in:
         raise HullError("the hull vertices do not run from the out exit round to the in exit")
     base_keys = ordered                                   # outer_out ... outer_in
@@ -561,15 +606,17 @@ def extend(near, domain, outer, loops, *, hull_points: np.ndarray, hull_height: 
     if not heights:
         raise HullError("no level set fits between the hull and the outer boundary")
 
-    # Open level polylines: the cluster's level set, cut where it lies inside
-    # the wake band's offset, with the mitre points at the ends.
+    # Open level polylines: the cluster's level set, cut where it lies
+    # inside the merged band's offset - downstream of a band's axis, below
+    # the uppermost band's out edge and above the lowermost's in edge -
+    # with the mitre points at the ends.
     def open_level(height: float):
         loop = cluster_level_set(walls, height, resolution=settings.resolution)
         growth = height - hull_height
-        along = (loop - point_w) @ direction
-        across = (loop - point_w) @ normal
-        limit = np.where(across >= 0.0, h_out + growth, h_in + growth)
-        inside = (along >= 0.0) & (np.abs(across) < (1.0 - 1e-6) * limit)
+        along = np.max(np.column_stack([(loop - band["point_w"]) @ direction for band in bands]), axis=1)
+        below_out = (loop - point_out) @ normal < (1.0 - 1e-6) * (h_out + growth)
+        above_in = (loop - point_in) @ normal > -(1.0 - 1e-6) * (h_in + growth)
+        inside = (along >= 0.0) & below_out & above_in
         if not np.any(inside) or np.all(inside):
             raise HullError(f"the level set at height {height:.4g} does not cross the wake band")
         # Rotate so the kept run is contiguous: start after the last inside point.
@@ -584,7 +631,7 @@ def extend(near, domain, outer, loops, *, hull_points: np.ndarray, hull_height: 
         order = [(first_out + i) % n for i in range(n)]
         kept = [body[i] for i in order if not inside[i]]
         mitres = {}
-        for side, sign, h_side in (("out", 1.0, h_out), ("in", -1.0, h_in)):
+        for side, sign, h_side, point_w in (("out", 1.0, h_out, point_out), ("in", -1.0, h_in, point_in)):
             origin = point_w + sign * (h_side + growth) * normal
             hits = wake_module._ray_crossings(origin, direction, loop)
             if hits:
@@ -629,7 +676,25 @@ def extend(near, domain, outer, loops, *, hull_points: np.ndarray, hull_height: 
             raise HullError("the hull's vertices do not map onto a level in order")
         fraction_stations.append(stations_k)
         level_points.append([g2.sample_at_arclength(poly_k, [st])[0] for st in stations_k])
-    # Drop levels whose blocks against the level below are not convex.
+    # Drop levels whose blocks against the level below are not convex, or
+    # whose level piece a spoke crosses (a twist the corner chords miss).
+    def spoke_crosses(n: int, k: int) -> bool:
+        lower = base_points[n] if k == 0 else level_points[k - 1][n]
+        upper = level_points[k][n]
+        span = float(np.linalg.norm(upper - lower))
+        if span <= 0.0:
+            return True
+        leg = (upper - lower) / span
+        pieces = []
+        for poly, stations_k in ((level_polys[k], fraction_stations[k]), (base_path, base_stations) if k == 0 else (level_polys[k - 1], fraction_stations[k - 1])):
+            a, b = stations_k[max(n - 1, 0)], stations_k[min(n + 1, count)]
+            pieces.append(g2.polyline_section(poly, a, b))
+        return any(
+            1e-6 * span < t < (1.0 - 1e-6) * span
+            for piece in pieces
+            for t, _arc, _seg in wake_module._ray_crossings(lower, leg, piece)
+        )
+
     kept = 0
     while kept < len(level_polys):
         lower = base_points if kept == 0 else level_points[kept - 1]
@@ -637,6 +702,10 @@ def extend(near, domain, outer, loops, *, hull_points: np.ndarray, hull_height: 
         bad = [n for n in range(count) if not g2.strictly_convex(np.asarray([lower[n], lower[n + 1], upper[n + 1], upper[n]]))]
         if bad:
             notes.append(f"level {kept + 1} at height {heights[kept]:.4g} gives a non-convex block in sector(s) {bad[:4]} of {count}; stopping at {kept} level(s)")
+            break
+        twisted = [n for n in range(count + 1) if spoke_crosses(n, kept)]
+        if twisted:
+            notes.append(f"level {kept + 1} at height {heights[kept]:.4g} is crossed by its spoke(s) {twisted[:4]} of {count + 1}; stopping at {kept} level(s)")
             break
         kept += 1
     if kept == 0:
@@ -660,10 +729,11 @@ def extend(near, domain, outer, loops, *, hull_points: np.ndarray, hull_height: 
         return ("hull", "level", k, int(n))
 
     def key_exit(k, side):
-        # ``side`` is "in", "out" or ("centre", index); keys stay comparable
-        # by spelling the centre as a string.
+        # ``side`` is "in", "out", ("centre", band, index) or ("channel",
+        # channel, index); keys stay comparable by spelling the tuples as
+        # strings.
         if isinstance(side, tuple):
-            return ("hull", "exit", k, f"centre{side[1]}")
+            return ("hull", "exit", k, f"{side[0]}{side[1]}_{side[2]}")
         return ("hull", "exit", k, side)
 
     def key_outer(label):
@@ -678,57 +748,102 @@ def extend(near, domain, outer, loops, *, hull_points: np.ndarray, hull_height: 
             else:
                 graph.add_vertex(key_level(k, n), point, constraint=pg.Constraint("guide", f"front:hull:{k}", float(n)), provenance="level set")
 
-    # Wake exits on the outlet: the centre line, the band edges (level 0) and
-    # every level's mitre lines.
+    # Wake exits on the outlet: every level's mitre lines on the merged
+    # band's two edges, each band's interior lines, and the channel lines.
     mitre_in = [graph.vertices[outer_in].point] + [level_points[k - 1][count] for k in range(1, levels + 1)]
     mitre_out = [graph.vertices[outer_out].point] + [level_points[k - 1][0] for k in range(1, levels + 1)]
     outer_loop = outer.curve.loop()
-    exits: dict[tuple, tuple[np.ndarray, float]] = {}
-    for k in range(levels + 1):
-        for side, chain_points in (("in", mitre_in), ("out", mitre_out)):
-            origin = chain_points[k]
-            line_direction = wake_module.spread_direction(direction, origin, point_w, settings.wake_spread)
-            hits = wake_module._ray_crossings(origin, line_direction, outer_loop)
-            if not hits:
-                raise HullError(f"the level {k} wake line does not reach the outer boundary")
-            t, _arclength, _segment = hits[0]
-            point = origin + t * line_direction
-            st = _station_of(outer, point)
-            if outer.chain_at(st).name != outlet.name:
-                raise HullError(f"the level {k} wake line leaves through {outer.chain_at(st).name!r}, not the outlet")
-            exits[(k, side)] = (point, st)
-    # The interior exits - the wake line, or a base's two lines - run on to
-    # the outlet as well.
-    centre_keys = exit_keys[1:-1]
-    centre_stations = []
-    for index, vertex in enumerate(centre_keys):
-        # A base's two lines spread like the band fronts; a sharp edge's
-        # single centre line lies on the axis and keeps its direction.
-        origin = graph_near.vertices[vertex].point
-        line_direction = wake_module.spread_direction(direction, origin, point_w, settings.wake_spread)
+
+    def to_outlet(origin, line_direction, what: str) -> tuple[np.ndarray, float]:
         hits = wake_module._ray_crossings(origin, line_direction, outer_loop)
         if not hits:
-            raise HullError("a wake line does not reach the outer boundary")
-        centre_point = origin + hits[0][0] * line_direction
-        centre_station = _station_of(outer, centre_point)
-        if outer.chain_at(centre_station).name != outlet.name:
-            raise HullError("a wake line leaves the domain off the outlet")
-        graph.add_vertex(key_exit(0, ("centre", index)), centre_point, constraint=pg.Constraint("chain", outlet.name, centre_station), provenance="wake exit")
-        outer_station[key_exit(0, ("centre", index))] = centre_station
-        centre_stations.append(centre_station)
-    outlet_order = [exits[(k, "in")][1] for k in range(levels, -1, -1)] + centre_stations + [exits[(k, "out")][1] for k in range(0, levels + 1)]
-    # Measured forward from c_bot: the loop may start anywhere (its first
-    # chain is the one whose name sorts first), so c_top can wrap to 0.
-    along = [(station - c_bot) % total_outer for station in outlet_order]
-    if any(b <= a for a, b in zip(along, along[1:])):
-        raise HullError("the wake lines are not ordered along the outlet; a wake line crosses another")
-    if not (0.0 < along[0] and along[-1] < outlet.length):
-        raise HullError("a wake line leaves the outlet beyond its corners")
+            raise HullError(f"{what} does not reach the outer boundary")
+        point = origin + hits[0][0] * line_direction
+        st = _station_of(outer, point)
+        if outer.chain_at(st).name != outlet.name:
+            raise HullError(f"{what} leaves through {outer.chain_at(st).name!r}, not the outlet")
+        return point, st
+
+    exits: dict[tuple, tuple[np.ndarray, float]] = {}
+    for k in range(levels + 1):
+        for side, chain_points, point_w in (("in", mitre_in, point_in), ("out", mitre_out, point_out)):
+            origin = chain_points[k]
+            line_direction = wake_module.spread_direction(direction, origin, point_w, settings.wake_spread)
+            exits[(k, side)] = to_outlet(origin, line_direction, f"the level {k} wake line")
+    # The interior exits - the wake line, or a base's two lines - run on to
+    # the outlet as well: a base's two lines spread like the band fronts, a
+    # sharp edge's single centre line lies on the axis and keeps its
+    # direction.  Between two bands the channel's lines keep the direction.
+    band_chain_keys: list[list] = []
+    outlet_sequence: list[tuple] = []                     # (key, station) from the bottom up
+    for band_index, band in enumerate(reversed(bands)):
+        chain = []
+        first_band, last_band = band is bottom, band is top
+        for index, vertex in enumerate(band["exit_keys"]):
+            if index == 0 and first_band:
+                chain.append(key_exit(0, "in"))
+                continue
+            if index == len(band["exit_keys"]) - 1 and last_band:
+                chain.append(key_exit(0, "out"))
+                continue
+            origin = graph_near.vertices[vertex].point
+            if index in (0, len(band["exit_keys"]) - 1):
+                key = key_exit(0, ("channel", band_index - 1 if index == 0 else band_index, "in" if index == 0 else "out"))
+                line_direction = direction
+            else:
+                key = key_exit(0, ("centre", band_index, index - 1)) if len(bands) > 1 else ("hull", "exit", 0, f"centre{index - 1}")
+                # A base's line spreads only towards the merged band's own
+                # edge on its side; towards a channel it keeps the direction,
+                # as the channel's lines do.
+                lateral = float((origin - band["point_w"]) @ normal)
+                spreads = (lateral > 0.0 and last_band) or (lateral < 0.0 and first_band)
+                line_direction = wake_module.spread_direction(direction, origin, band["point_w"], settings.wake_spread) if spreads else direction
+            point, st = to_outlet(origin, line_direction, "a wake line")
+            graph.add_vertex(key, point, constraint=pg.Constraint("chain", outlet.name, st), provenance="wake exit")
+            outer_station[key] = st
+            chain.append(key)
+        band_chain_keys.append(chain)
+    band_chain_keys.reverse()                             # top band first, like ``bands``
+    channel_chain_keys: list[list] = []
+    for channel_index, channel in enumerate(channels):
+        chain = []
+        for index, vertex in enumerate(channel):
+            if index == 0:
+                chain.append(band_chain_keys[len(bands) - 1 - channel_index][-1])
+                continue
+            if index == len(channel) - 1:
+                chain.append(band_chain_keys[len(bands) - 2 - channel_index][0])
+                continue
+            key = key_exit(0, ("channel", channel_index, index))
+            point, st = to_outlet(graph_near.vertices[vertex].point, direction, "a channel line between two wake bands")
+            graph.add_vertex(key, point, constraint=pg.Constraint("chain", outlet.name, st), provenance="channel exit")
+            outer_station[key] = st
+            chain.append(key)
+        channel_chain_keys.append(chain)
     for k in range(levels + 1):
         for side in ("in", "out"):
             point, st = exits[(k, side)]
             graph.add_vertex(key_exit(k, side), point, constraint=pg.Constraint("chain", outlet.name, st), provenance="wake exit")
             outer_station[key_exit(k, side)] = st
+    # From the bottom of the outlet up: the in-side mitre lines, then band
+    # by band its chain (its channel-side ends shared with the channels'
+    # chains), the channel lines between, and the out-side mitre lines.
+    outlet_keys = [key_exit(k, "in") for k in range(levels, 0, -1)]
+    for band_index in range(len(bands) - 1, -1, -1):
+        for key in band_chain_keys[band_index]:
+            if not outlet_keys or outlet_keys[-1] != key:
+                outlet_keys.append(key)
+        if band_index > 0:
+            outlet_keys.extend(channel_chain_keys[len(bands) - 1 - band_index][1:-1])
+    outlet_keys.extend(key_exit(k, "out") for k in range(1, levels + 1))
+    outlet_order = [outer_station[key] for key in outlet_keys]
+    # Measured forward from c_bot: the loop may start anywhere (its first
+    # chain is the one whose name sorts first), so c_top can wrap to 0.
+    along = [(st - c_bot) % total_outer for st in outlet_order]
+    if any(b <= a for a, b in zip(along, along[1:])):
+        raise HullError("the wake lines are not ordered along the outlet; a wake line crosses another")
+    if not (0.0 < along[0] and along[-1] < outlet.length):
+        raise HullError("a wake line leaves the outlet beyond its corners")
     for label, st in (("c_top", c_top), ("c_bot", c_bot), ("j_top", j_top), ("j_bot", j_bot)):
         graph.add_vertex(key_outer(label), outer.curve.point_at(st),
                          constraint=pg.Constraint("chain", outer.chain_at(st + 1e-9 * total_outer).name, st), provenance="outer corner")
@@ -772,17 +887,25 @@ def extend(near, domain, outer, loops, *, hull_points: np.ndarray, hull_height: 
             line(lower_a, a, "core_spoke", "level spoke")
             line(lower_b, b, "core_spoke", "level spoke")
             graph.add_face((lower_a, lower_b, b, a), role="core", provenance=f"hull level {k} block")
-    # Wake strips: one between each pair of consecutive exits, then one
-    # strip per level and side.
-    exit_chain_keys = [key_exit(0, "in")] + [key_exit(0, ("centre", i)) for i in range(len(centre_keys))] + [key_exit(0, "out")]
-    line(outer_in, key_exit(0, "in"), "wake_front", "wake band front")
-    line(outer_out, key_exit(0, "out"), "wake_front", "wake band front")
-    for index, vertex in enumerate(centre_keys):
-        line(vertex, key_exit(0, ("centre", index)), "wake", "wake separatrix")
-    for a, b, ea, eb in zip(exit_keys, exit_keys[1:], exit_chain_keys, exit_chain_keys[1:]):
-        path, curve = _outer_section(outer, outer_station[ea], outer_station[eb], wall_edge_style)
-        poly(ea, eb, path, "wall", "supplied point list", boundary=outlet.name, kind=curve.kind, points=curve.points)
-        graph.add_face((a, b, eb, ea), role="wake", provenance="wake band beyond the hull")
+    # Wake strips: one between each pair of consecutive exits of every band,
+    # the channel strips between two bands, then one strip per level and
+    # side on the merged band's edges.
+    def strips(hull_keys, chain_keys, role, provenance, line_role, line_provenance):
+        for vertex, key in zip(hull_keys, chain_keys):
+            if graph.edge_key(vertex, key) not in graph.edges:
+                line(vertex, key, line_role, line_provenance)
+        for a, b, ea, eb in zip(hull_keys, hull_keys[1:], chain_keys, chain_keys[1:]):
+            path, curve = _outer_section(outer, outer_station[ea], outer_station[eb], wall_edge_style)
+            poly(ea, eb, path, "wall", "supplied point list", boundary=outlet.name, kind=curve.kind, points=curve.points)
+            graph.add_face((a, b, eb, ea), role=role, provenance=provenance)
+
+    for band, chain in zip(bands, band_chain_keys):
+        for vertex, key in zip(band["exit_keys"], chain):
+            role = "wake_front" if key[3] in ("in", "out") or str(key[3]).startswith("channel") else "wake"
+            line(vertex, key, role, "wake band front" if role == "wake_front" else "wake separatrix")
+        strips(band["exit_keys"], chain, "wake", "wake band beyond the hull", "wake", "wake separatrix")
+    for channel, chain in zip(channels, channel_chain_keys):
+        strips(channel, chain, "core", "channel between two wake bands", "core_spoke", "channel line")
     chain_in = [outer_in] + [key_level(k, count) for k in range(1, levels + 1)]
     chain_out = [outer_out] + [key_level(k, 0) for k in range(1, levels + 1)]
     for k in range(1, levels + 1):
@@ -826,10 +949,17 @@ def extend(near, domain, outer, loops, *, hull_points: np.ndarray, hull_height: 
         "hull_height": float(hull_height), "hull_vertices": len(base_keys),
         "levels": levels, "heights": [float(h) for h in heights],
         "distance_to_outer": distance_to_outer,
-        "exit_wake": record["site"], "exit_kind": record.get("kind") or "wake",
+        "exit_wake": top["record"]["site"], "exit_kind": top["record"].get("kind") or "wake",
+        "merged_wakes": [band["record"]["site"] for band in bands],
+        "channel_strips": [len(channel) - 1 for channel in channels],
         "ending_wakes": ending,
         "band_half_widths": {"in": h_in, "out": h_out},
     }
+    if len(bands) > 1:
+        notes.append(
+            f"the wakes of {[band['record']['site'] for band in bands]} leave the cluster as one merged band; "
+            f"the hull between them continues to the outlet as {sum(len(c) - 1 for c in channels)} channel strip(s)"
+        )
     if ending:
         notes.append(f"the wake(s) of {ending} end at the hull; their exits are carried outward as level spokes")
     return HullResult(graph, result_record, notes)
