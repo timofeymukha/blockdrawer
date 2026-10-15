@@ -271,9 +271,10 @@ them in the canvas widgets.
   a rung across the band carried round the cell as a level between band
   front and ring (`wake.plan_turns`, `wake.line_path`, `wake.far_path`,
   `wake._turn_levels`), so every patch stays a quad - inside the ring when
-  the stations fit, the ring's chord beside the crossing is not a sliver
-  (`wake._chord_angle`) and no other sharp corner's seam wedge blocks the
-  level row, else beyond the ring in the outer layer, else straight along
+  the stations fit and the ring's chord beside the crossing is not a
+  sliver (`wake._chord_angle`), a level row crossing another sharp
+  corner's seam wedge along its bisector (`wake._write_wedge_rows`), else
+  beyond the ring in the outer layer, else straight along
   the bisector to the body it ends on or through the hull for the far
   field to turn (`turn_placement`); a wake over another
   body keeps its straight chord - or, for a blunt base (two convex corners within two percent

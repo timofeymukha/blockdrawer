@@ -857,11 +857,7 @@ def _try_wakes(result: PipelineResult, settings: PipelineOptions) -> PipelineRes
     and keeps its reason under ``medial.wakes``.
     """
     try:
-        records = wake.plan(
-            result.layout, settings.wake,
-            height=result.metric.layer_height if result.metric is not None else 0.0,
-            sharp_angle=settings.layer.sharp_fluid_angle,
-        )
+        records = wake.plan(result.layout, settings.wake, height=result.metric.layer_height if result.metric is not None else 0.0)
     except Exception as error:
         result.errors.append({"stage": "wake_plan", "error": _describe(error)})
         return result

@@ -107,7 +107,11 @@ choose a far field: that came with the brief.
   stagnation gate, and its two fronts continue as two band spokes beside that
   gate, so the wake wraps the nose exactly as an embedded C-grid does; the
   count across the wake is then the count along those two nose pieces, which
-  the engine reports as a wake-landing coupling, not a defect. Engine: the
+  the engine reports as a wake-landing coupling, not a defect. The landing
+  needs the band across the wake: a wake line meeting the front under 35
+  degrees (a slat's edge onto the main's nose, where the slot is a band
+  width wide) is refused - *a grazing arrival wants a bridge into the band*,
+  the template still to be built. Engine: the
   same `--wake`; the plan record's `target` says `body` or `outer`. With a
   circle far field two teardrop foils in tandem get both wakes; with a C-shaped
   far field the annular construction still fails at the downstream foil's
@@ -150,10 +154,11 @@ choose a far field: that came with the brief.
   when the ring does not bend beside the crossing (the medial ring behind a
   convex corner is a fan round it, and the chord from the front's crossing
   to the next gate's ring point meets a wake direction crossing the fan
-  obliquely in a sliver - 30P30N's flap base) and when the cell carries no
-  other sharp corner's seam wedge (a level row cannot cross one - 30P30N's
-  slat, whose cusp sits beside its edge); else *beyond* the ring, in the
-  layer between ring and outer boundary, unless that boundary bends beside
+  obliquely in a sliver - 30P30N's flap base); a level row meeting another
+  sharp corner's seam wedge on its way round the cell crosses it along the
+  wedge's bisector (30P30N's slat, whose cusp sits beside its edge); else
+  *beyond* the ring, in the layer between ring and outer boundary, unless
+  that boundary bends beside
   the exit the same way; else *straight*: the wake keeps its bisector
   through the near field and the body it ends on takes it as it arrives
   (the slat's edge onto the main), or the hull's far field turns it (the
@@ -204,14 +209,15 @@ choose a far field: that came with the brief.
   (slat, main, flap, the main + flap recipe above): admissible, 174
   blocks, with the main's wake over the flap and the flap's base wake
   (along its flank bisector through the ring and the hull) merged into one
-  band to the outlet, and **no wake from the slat's edge**: it lands on the main 41
-  degrees off the edge's bisector, and every turn placement is closed -
-  inside the ring the level row meets the slat's cusp (its seam wedge
-  cannot carry a level), beyond the ring the stations would sit in the
-  main's cell, and straight along the bisector the wake passes over the
-  main. Do not spend calls on that wake - take the banded edge, and repair
-  the cove and slot blocks by hand (the repair recipe in section 4); the
-  engine's next step there is the cusp's wedge split round a centre.
+  band to the outlet, and **no wake from the slat's edge**: it lands on the
+  main 41 degrees off the edge's bisector; the turn now gets its level row
+  through the cusp's seam wedge, and the wake is refused at the landing
+  instead - the wake line meets the main's band front at 18 degrees, a
+  grazing arrival whose strips beyond the ring are slivers however they
+  land (the slot there is a band width wide). Do not spend calls on that
+  wake - take the banded edge, and repair the cove and slot blocks by hand
+  (the repair recipe in section 4); the engine's next step there is the
+  bridge template: the edge's band continued straight into the main's band.
 - **Internal flow** (channel, periodic hill, diffuser): a sweep between the two
   walls - columns from one wall band to the other, ends on inlet and outlet or
   on the cyclic pair. Corners of the domain are block corners; a guide wall's

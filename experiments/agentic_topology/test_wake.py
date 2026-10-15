@@ -454,12 +454,12 @@ class WakeTurnTests(unittest.TestCase):
         self.assertIn("turning cut", what)
         self.assertGreater(skipped, oblique)
 
-    def test_the_stations_move_out_of_the_ring_when_the_cell_cannot_carry_a_level(self):
+    def test_the_placement_ladder_on_the_teardrop_layout(self):
         """The planner's ladder on the teardrop's layout: the stations sit
-        inside the ring; with a sharp corner's seam wedge in the way (here the
-        trailing edge's own cut treated as foreign) they go beyond the ring,
-        a wake ending on another body runs straight along its edge direction
-        to it, and without an outer layer the wake is refused."""
+        inside the ring when they fit; when they do not (two of them spaced
+        by a band as thick as the clearance allows) and nothing lies beyond
+        the ring the wake is refused with both reasons, and a wake ending on
+        another body runs straight along its edge direction to it."""
         # The layout before any wake: the trailing edge still carries its
         # corner anchor, which a wake of its own would replace.
         result = pipeline.run_external(["tear"], [teardrop_loop()], replace(CAVITY_FAST, wake=wake.WakeOptions(enabled=False)))
@@ -471,25 +471,15 @@ class WakeTurnTests(unittest.TestCase):
         self.assertEqual(next(cut.anchor.kind for cut in layout.cuts[cell_index] if cut.anchor.key in owned), "corner")
         outer = layout.diagram.sites[-1].curve.loop()
         settings = wake.WakeOptions(enabled=True, turn=50.0)
-        site = layout.diagram.sites[layout.cells[cell_index].site]
-        angles = __import__("layers").fluid_angles(site.curve.loop(), site.curve.fluid_sign)
-        self.assertEqual(wake.seam_wedge_keys(layout, cell_index, angles, math.radians(250.0), owned), set())
-        wedge = wake.seam_wedge_keys(layout, cell_index, angles, math.radians(250.0), frozenset())
-        self.assertEqual(wedge, owned, "the trailing edge is the teardrop's one sharp vertex")
         inside, why = wake.plan_turns(layout, cell_index, record["point"], [1.0, 0.0], record["direction"], settings, 0.05, owned_keys=owned, outer_loop=outer)
         self.assertEqual(inside["turn_placement"], "inside", why)
         self.assertEqual(len(inside["stations"]), 1)
-        beyond, why = wake.plan_turns(layout, cell_index, record["point"], [1.0, 0.0], record["direction"], settings, 0.05, owned_keys=frozenset(), wedge_keys=wedge, outer_loop=outer)
-        self.assertEqual(beyond["turn_placement"], "beyond", why)
-        self.assertIn("seam wedge", beyond["turn_note"])
-        self.assertEqual(len(beyond["stations"]), 1)
-        ring = wake._ray_crossings(np.asarray(record["point"]), [1.0, 0.0], layout.cells[cell_index].ring)[0][0]
-        self.assertGreater(beyond["stations"][0][0], record["point"][0] + ring, "the station lies beyond the ring")
-        refused, why = wake.plan_turns(layout, cell_index, record["point"], [1.0, 0.0], record["direction"], settings, 0.05, owned_keys=frozenset(), wedge_keys=wedge, outer_loop=None)
+        small = wake.WakeOptions(enabled=True, turn=16.0)
+        refused, why = wake.plan_turns(layout, cell_index, record["point"], [1.0, 0.0], record["direction"], small, 10.0, owned_keys=owned, outer_loop=None)
         self.assertIsNone(refused)
-        self.assertIn("seam wedge", why)
+        self.assertIn("do not fit", why)
         self.assertIn("cannot go beyond the ring", why)
-        to_body, why = wake.plan_turns(layout, cell_index, record["point"], [1.0, 0.0], record["direction"], settings, 0.05, owned_keys=frozenset(), wedge_keys=wedge, outer_loop=outer, body_target=True)
+        to_body, why = wake.plan_turns(layout, cell_index, record["point"], [1.0, 0.0], record["direction"], small, 10.0, owned_keys=owned, outer_loop=outer, body_target=True)
         self.assertEqual(to_body["turn_placement"], "straight", why)
         self.assertTrue(to_body["turned"])
         self.assertEqual(to_body["stations"], [])
@@ -502,6 +492,77 @@ class WakeTurnTests(unittest.TestCase):
         far, leg = wake.far_path(straight, [2.0, 0.0])
         self.assertEqual(len(far), 1)
         self.assertTrue(np.allclose(leg, [1.0, 0.0]))
+
+    def test_a_wake_turns_beyond_the_ring_when_the_ring_bends_at_its_crossing(self):
+        """With the ring judged to bend beside the crossing along the wake
+        direction (the chord measure patched to say so for the body's ring),
+        the teardrop's wake crosses its ring straight along the bisector and
+        turns beyond it: the strips beyond the ring are split at the station,
+        the station is carried round the outer layer as a level, and the
+        result resolves."""
+        real = wake._chord_angle
+        calls = []
+
+        def bent(loop, crossing, far_leg, cuts, owned_keys):
+            # The planner measures the ring beside the inside placement's
+            # crossing first; only that measure is patched.
+            calls.append(far_leg)
+            if len(calls) == 1:
+                return 0.0, "fan (patched)"
+            return real(loop, crossing, far_leg, cuts, owned_keys)
+
+        with mock.patch.object(wake, "_chord_angle", bent):
+            result = pipeline.run_external(["tear"], [teardrop_loop()], self.options(30.0))
+        record = result.wakes.records[0]
+        self.assertTrue(record["applied"], record.get("reason"))
+        self.assertEqual(record["turn_placement"], "beyond")
+        self.assertIn("fan (patched)", record["turn_note"])
+        self.assertEqual(len(record["stations"]), 1)
+        self.assertTrue(np.allclose(record["legs"][0], [1.0, 0.0]))
+        ring = np.asarray(record["ring_point"])
+        self.assertGreater(record["stations"][0][0], ring[0], "the station lies beyond the ring")
+        self.assertTrue(result.admissible, result.problems or result.failures)
+        self.assertTrue(result.resolved, result.described_failures())
+        beyond = [face for face in result.graph.faces if face.provenance == "wake band beyond the ring"]
+        self.assertEqual(len(beyond), 4, "each of the two strips beyond the ring is split at the station")
+        inside = [face for face in result.graph.faces if face.provenance == "wake band"]
+        self.assertEqual(len(inside), 2)
+        self.assertEqual(record["turn_levels"]["stations"], 1)
+        levels = [key for key in result.graph.vertices if key[0] == "wake" and "level" in key]
+        self.assertEqual(len(levels), record["turn_levels"]["patches"] - 1)
+
+    @staticmethod
+    def lens_loop(height: float = 0.2, count: int = 80) -> np.ndarray:
+        """A lens: two parabolic arcs meeting at a sharp tip at each end, starting at the trailing tip."""
+        x = np.cos(np.linspace(0.0, math.pi, count))[::-1]
+        upper = np.column_stack([x, height * (1.0 - x ** 2)])
+        lower = np.column_stack([x[::-1], -height * (1.0 - x[::-1] ** 2)])
+        loop = np.vstack([upper, lower[1:-1]])
+        return np.roll(loop, -int(np.argmax(loop[:, 0])), axis=0)
+
+    def test_a_level_row_crosses_another_sharp_corners_seam_wedge(self):
+        """The lens's trailing tip turns its wake thirty degrees; the station's
+        level row goes round the body and through the leading tip's seam
+        wedge, which no wake replaces: the wedge becomes a column of quads on
+        each side of its bisector spoke under one quad at the ring vertex."""
+        result = pipeline.run_external(["lens"], [self.lens_loop()], self.options(30.0))
+        self.assertTrue(result.admissible, result.problems or result.failures)
+        records = {item["vertex"]: item for item in result.wakes.records}
+        tail = records[0]
+        self.assertTrue(tail["applied"], tail.get("reason"))
+        self.assertEqual(tail["turn_placement"], "inside")
+        self.assertEqual(len(tail["stations"]), 1)
+        nose = next(item for vertex, item in records.items() if vertex != 0)
+        self.assertFalse(nose["applied"])
+        wedge = [key for key in result.graph.vertices if key[0] == "wake" and "wedge" in key]
+        self.assertEqual(len(wedge), 1, "one row, one point on the bisector")
+        bisector = [edge for edge in result.graph.edges.values() if edge.provenance == "seam wedge bisector"]
+        self.assertEqual(len(bisector), 1)
+        gate = next(key for key in bisector[0].key if key[0] == "gate")
+        faces_at_gate = [face for face in result.graph.faces if gate in face.corners]
+        self.assertEqual(len(faces_at_gate), 4, "two band blocks and the wedge's two lower quads")
+        self.assertEqual(sum(1 for face in result.graph.faces if wedge[0] in face.corners), 3)
+        self.assertFalse(result.problems)
 
     def test_a_base_wake_off_its_flank_bisector_turns(self):
         """A blunt base's wake leaves along the bisector of its flanks and

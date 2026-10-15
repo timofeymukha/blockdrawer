@@ -395,8 +395,11 @@ result can be read either way; the session is written whenever the result is
    passes: one refused because the downstream body's own trailing edge still
    carried its seam wedge is tried again once that body's wake is accepted.
    A wake that would cross another medial branch, leave the feature's
-   sector, meet the outer boundary across a chain break, or land where the
-   downstream body has no room beside the stagnation gate is refused with
+   sector, meet the outer boundary across a chain break, land where the
+   downstream body has no room beside the stagnation gate, or graze that
+   body's band - the wake line meeting its front under 35 degrees
+   (`wake.LANDING_INCIDENCE`), where the strips beyond the ring end in
+   slivers at the landing gate whatever the landing points - is refused with
    its reason, and a trial is committed only when the complete result passes
    coverage, session emission and both sampled grids; otherwise the annular
    construction stays exactly as it was.
@@ -461,8 +464,7 @@ result can be read either way; the session is written whenever the result is
    `RING_CHORD_ANGLE`: the medial ring behind a convex corner is a fan
    round it, and a wake direction crossing the fan obliquely leaves a
    sliver however the stations sit - the 30P30N flap base's three-degree
-   chord), or the body's cell carries another sharp corner's seam wedge,
-   which no level row can cross; then *beyond* the ring, the wake crossing
+   chord); then *beyond* the ring, the wake crossing
    it straight along the bisector and turning in the layer between the
    ring and the outer boundary, the stations carried round the whole
    cluster's outer layer as levels, unless the outer boundary bends beside
@@ -474,10 +476,18 @@ result can be read either way; the session is written whenever the result is
    growth, and the mitre of a band edge on the outside of the turn is
    found behind the exit when the level set lies there. Anything else is
    refused with every rung's reason and the remedy (raise `--wake-turn`,
-   or move the ring with a higher hull). `test_wake.WakeTurnTests` has the
-   teardrop and the blunt base turning thirty degrees inside the ring and
-   resolving, the chord measure on a fan, and the ladder on the teardrop's
-   layout.
+   or move the ring with a higher hull). A level row meeting another sharp
+   corner's **seam wedge** on its way round the cell crosses it
+   (`wake._write_wedge_rows`): the wedge's bisector - the gate's line to
+   its ring vertex - becomes a spoke through one point per row, dipped
+   towards the gate by `WEDGE_DIP` of the chord's distance from it, and
+   the wedge a column of quads on each side of that spoke under a single
+   quad at the ring vertex (30P30N's slat: the cusp beside its edge).
+   `test_wake.WakeTurnTests` has the teardrop and the blunt base turning
+   thirty degrees inside the ring and resolving, the teardrop turning beyond
+   the ring with the chord measure patched to a fan, a lens whose tail's
+   row crosses its nose's wedge, the chord measure on a fan, and the ladder
+   on the teardrop's layout.
 
    **Wake over another body** (the multi-element wake, `through` in the
    record). A wake whose ray crosses the ring into another body's cell and

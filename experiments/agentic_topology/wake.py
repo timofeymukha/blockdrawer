@@ -255,29 +255,6 @@ def _outer_cuts(layout) -> list:
     return [(cut.wall_station, cut.wall_point, cut.anchor.kind, cut.anchor.key) for cut in layout.cuts[outer_cell]]
 
 
-def seam_wedge_keys(layout, cell_index: int, angles, threshold: float, owned_keys) -> set:
-    """The anchor keys of the cuts gating a sharp convex vertex - one whose band carries a seam wedge - other than the wake's own.
-
-    ``angles`` are the loop's fluid angles and ``threshold`` the band's
-    sharp-feature angle: such a gate is pinned on its vertex, so a cut whose
-    wall station is a sharp vertex's station gates it.
-    """
-    site = layout.diagram.sites[layout.cells[cell_index].site]
-    loop = site.curve.loop()
-    stations = g2.cumulative_length(loop)
-    total = float(stations[-1])
-    sharp = [float(stations[index]) for index in range(len(loop) - 1) if float(angles[index]) >= threshold]
-    keys = set()
-    for cut in layout.cuts[cell_index]:
-        if cut.anchor.key in owned_keys:
-            continue
-        hinted = cut.anchor.hint_for(layout.cells[cell_index].site)
-        for station in ([cut.wall_station] + ([] if hinted is None else [hinted])):
-            if any(min((station - vertex) % total, (vertex - station) % total) <= 1e-9 * total for vertex in sharp):
-                keys.add(cut.anchor.key)
-    return keys
-
-
 def owned_anchor_keys(layout, cell_index: int, first: float, second: float) -> set:
     """The anchor keys of the cuts at the wake's own wall stations: the feature's, or every cut along a base from ``first`` to ``second``."""
     site = layout.diagram.sites[layout.cells[cell_index].site]
@@ -292,7 +269,7 @@ def owned_anchor_keys(layout, cell_index: int, first: float, second: float) -> s
     return keys
 
 
-def plan_turns(layout, cell_index: int, axis_point, edge_direction, direction, settings: WakeOptions, height: float = 0.0, *, owned_keys=frozenset(), wedge_keys=frozenset(), outer_loop=None, hull_follows: bool = False, body_target: bool = False) -> tuple[dict | None, str]:
+def plan_turns(layout, cell_index: int, axis_point, edge_direction, direction, settings: WakeOptions, height: float = 0.0, *, owned_keys=frozenset(), outer_loop=None, hull_follows: bool = False, body_target: bool = False) -> tuple[dict | None, str]:
     """Where a wake turns from its edge direction to the wake direction.
 
     The turn is split evenly over ``ceil(turn / settings.turn)`` stations.
@@ -308,11 +285,8 @@ def plan_turns(layout, cell_index: int, axis_point, edge_direction, direction, s
     and turns beyond it, in the layer between the ring and the outer
     boundary (``outer_loop``), spaced the same way over the distance to
     that boundary - unless the outer boundary bends beside the exit the
-    same way.  A station's level row runs round the cell between the band
-    front and the ring, and a seam wedge - a sharp corner's, other than
-    the wake's own (``wedge_keys``) - blocks it, so a cell carrying one
-    skips the stations inside the ring; a wake ending on another body (``body_target``) has
-    no layer of its own beyond the ring.  Then the wake runs straight along
+    same way; a wake ending on another body (``body_target``) has no layer
+    of its own beyond the ring.  Then the wake runs straight along
     its edge direction: through the whole near field when a far field
     follows the outer boundary (``hull_follows``: the boundary is the
     cluster's hull) and turns it - its level sets widen round the band -
@@ -366,13 +340,7 @@ def plan_turns(layout, cell_index: int, axis_point, edge_direction, direction, s
     # Inside the ring first.
     length = max(reach / (count + 2), 1.5 * band)
     reasons = []
-    wedges = [item for item in ring_cuts if item[3] in wedge_keys and item[3] not in owned_keys]
-    if wedges:
-        reasons.append(
-            f"inside the ring the stations' level row round the cell would meet the seam wedge of "
-            f"{len(wedges)} sharp corner(s) not the wake's own"
-        )
-    elif count * length <= 0.8 * reach:
+    if count * length <= 0.8 * reach:
         stations, why = place(axis_point, length)
         if stations is None:
             reasons.append(why)
@@ -696,17 +664,14 @@ def _trace_wake(layout, cell, origin, leg, direction, outer_index, outer, outer_
     return fields, ""
 
 
-def plan(layout, options: WakeOptions | None = None, *, height: float = 0.0, sharp_angle: float | None = None) -> list[dict]:
+def plan(layout, options: WakeOptions | None = None, *, height: float = 0.0) -> list[dict]:
     """One record per sharp feature: the wake line, or the reason it has none.
 
     ``height`` is the band height the layer stage will ask for (the band at
     the edge is at most ``BAND_CLEARANCE_FRACTION`` of the ring distance
     whatever is asked); a turning wake spaces its stations by it.
-    ``sharp_angle`` is the band's sharp-feature angle in degrees, above
-    which a gate carries a seam wedge (the wake feature angle by default).
     """
     settings = options or WakeOptions()
-    seam_threshold = math.radians(settings.fluid_angle if sharp_angle is None else sharp_angle)
     diagram = layout.diagram
     outer_index = len(diagram.sites) - 1
     outer = diagram.sites[outer_index]
@@ -770,7 +735,7 @@ def plan(layout, options: WakeOptions | None = None, *, height: float = 0.0, sha
                     if (stations[other] - stations[index]) % total <= settings.blunt_ratio * total
                     else (other, index)
                 )
-                _plan_base(record, layout, settings, cell_index, cell, site, loop, stations, angles, first, second, outer_index, outer, outer_loop, height, seam_threshold)
+                _plan_base(record, layout, settings, cell_index, cell, site, loop, stations, angles, first, second, outer_index, outer, outer_loop, height)
                 continue
             # Just beyond the base rule: a second convex corner a little more
             # than ``blunt_ratio`` away along a nearly straight wall is still
@@ -802,10 +767,9 @@ def plan(layout, options: WakeOptions | None = None, *, height: float = 0.0, sha
             if fields is None:
                 record["reason"] = why
                 continue
-            owned = owned_anchor_keys(layout, cell_index, record["wall_station"], record["wall_station"])
             turns, why = plan_turns(
                 layout, cell_index, point, bisector, direction, settings, height,
-                owned_keys=owned, wedge_keys=seam_wedge_keys(layout, cell_index, angles, seam_threshold, owned),
+                owned_keys=owned_anchor_keys(layout, cell_index, record["wall_station"], record["wall_station"]),
                 outer_loop=outer_loop, hull_follows=hull_follows, body_target=fields["target"]["kind"] == "body",
             )
             if turns is None:
@@ -950,7 +914,7 @@ def _plan_through(layout, point, direction, t_ring, cell_b, site_b, outer_index,
     return through, target, ""
 
 
-def _plan_base(record, layout, settings, cell_index, cell, site, loop, stations, angles, first, second, outer_index, outer, outer_loop, height=0.0, seam_threshold=None):
+def _plan_base(record, layout, settings, cell_index, cell, site, loop, stations, angles, first, second, outer_index, outer, outer_loop, height=0.0):
     """Plan the wake of a blunt base: two parallel wake lines from its corners.
 
     The base is the short wall segment from ``first`` to ``second`` (loop
@@ -1003,11 +967,9 @@ def _plan_base(record, layout, settings, cell_index, cell, site, loop, stations,
     axis_point = 0.5 * (points[0] + points[1])
     record["axis_point"] = [float(v) for v in axis_point]
     hull_follows = bool(outer.chains) and all(chain.name == "hull" for chain in outer.chains)
-    owned = owned_anchor_keys(layout, cell_index, float(stations[first]), float(stations[second]))
-    threshold = math.radians(settings.fluid_angle) if seam_threshold is None else seam_threshold
     turns, why = plan_turns(
         layout, cell_index, axis_point, bisector, direction, settings, height,
-        owned_keys=owned, wedge_keys=seam_wedge_keys(layout, cell_index, angles, threshold, owned),
+        owned_keys=owned_anchor_keys(layout, cell_index, float(stations[first]), float(stations[second])),
         outer_loop=outer_loop, hull_follows=hull_follows,
     )
     if turns is None:
@@ -1712,8 +1674,16 @@ def _turn_levels(graph: pg.PatchGraph, clone: pg.PatchGraph, record: dict, *, ce
         before, after = corners[(index - 1) % 4], corners[(index + 1) % 4]
         front_exit = after if before == top_end else before
         top_exit = corners[(index + 2) % 4]
+        wedge = None
+        if front_exit[0] == "gate":
+            # A sharp corner's seam wedge: its gate is the corner opposite
+            # the ring vertex, its two front points lie on either side.  The
+            # row crosses it from the spoke it came in on to the other one,
+            # round the ring vertex, split by the wedge's bisector spoke.
+            wedge = front_exit
+            front_exit, top_exit = corners[(index + 2) % 4], top_end
         exit_edge = graph.edge_key(front_exit, top_exit)
-        chain.append((face, (front_end, top_end), (front_exit, top_exit)))
+        chain.append((face, (front_end, top_end), (front_exit, top_exit), wedge))
         if exit_edge == stop_edge:
             break
         role = graph.edges[exit_edge].role if exit_edge in graph.edges else "missing"
@@ -1730,7 +1700,8 @@ def _turn_levels(graph: pg.PatchGraph, clone: pg.PatchGraph, record: dict, *, ce
     total = len(chain)
     previous = list(lower[1:-1])
     previous_fractions = list(entry_fractions)
-    for order, (face, (front_in, top_in), (front_out, top_out)) in enumerate(chain):
+    sign = _graph_sign(clone)
+    for order, (face, (front_in, top_in), (front_out, top_out), wedge) in enumerate(chain):
         if any(item.key == face.key for item in clone.faces):
             clone.remove_faces([face.key])
         if order == total - 1:
@@ -1770,6 +1741,11 @@ def _turn_levels(graph: pg.PatchGraph, clone: pg.PatchGraph, record: dict, *, ce
         # fronts' own crossings, not the wake anchor the annular patch had.
         column_in = list(lower) if order == 0 else [front_in] + previous + [top_in]
         column_out = list(upper) if order == total - 1 else [front_out] + exits + [top_out]
+        if wedge is not None:
+            _write_wedge_rows(clone, record, cell, key, order, wedge, column_in, column_out, face, sign)
+            previous = exits
+            previous_fractions = targets
+            continue
         # The rungs: each runs through the Coons patch of the patch's four
         # sides - band front, ring, and the two columns - at the station's
         # fraction, which moves from one column to the next.  The columns
@@ -1802,6 +1778,67 @@ def _turn_levels(graph: pg.PatchGraph, clone: pg.PatchGraph, record: dict, *, ce
         previous = exits
         previous_fractions = targets
     record["turn_levels"] = {"stations": count, "patches": total}
+
+
+# A row crossing a seam wedge dips towards its gate by this fraction of the
+# distance from the gate to the row's chord, so the quad under the ring
+# vertex keeps a corner there.
+WEDGE_DIP = 0.15
+
+
+def _write_wedge_rows(clone: pg.PatchGraph, record: dict, cell: int, key, order: int, gate, column_in, column_out, face, sign: float) -> None:
+    """Carry the level rows through a sharp corner's seam wedge.
+
+    The wedge ``(gate, front, ring, front)`` has its two front points on the
+    wedge's two spokes and the ring vertex opposite the gate.  Each row
+    enters on one spoke (``column_in``, gate side first) and leaves on the
+    other (``column_out``); between them it runs through a point on the
+    wedge's bisector - the gate's line to the ring vertex - dipped towards
+    the gate by ``WEDGE_DIP`` of the chord's distance from it, so the quad
+    left under the ring vertex has a corner there.  The bisector becomes a
+    spoke from the gate through every row's point, and the wedge a column
+    of quads on each side of it under a single quad at the ring vertex.
+    """
+    ring_key = column_in[-1]
+    if column_out[-1] != ring_key:
+        raise pg.GraphError("a seam wedge's two spokes do not meet at one ring vertex")
+    point_g = clone.vertices[gate].point
+    point_r = clone.vertices[ring_key].point
+    axis = point_r - point_g
+    length = float(np.linalg.norm(axis))
+    if length <= 0.0:
+        raise pg.GraphError("a seam wedge has no height")
+    axis = axis / length
+    inner = column_in[1:-1]
+    outer = column_out[1:-1]
+    bisector = [gate]
+    for station, (left, right) in enumerate(zip(inner, outer), start=1):
+        a, b = clone.vertices[left].point, clone.vertices[right].point
+        # Where the chord crosses the bisector, by the lateral coordinates
+        # of its ends; then the dip towards the gate.
+        side_a = float(axis[0] * (a - point_g)[1] - axis[1] * (a - point_g)[0])
+        side_b = float(axis[0] * (b - point_g)[1] - axis[1] * (b - point_g)[0])
+        if side_a * side_b >= 0.0:
+            raise pg.GraphError("a turn station row crosses a seam wedge without crossing its bisector")
+        chord = a + (b - a) * (side_a / (side_a - side_b))
+        along = float(np.dot(chord - point_g, axis)) * (1.0 - WEDGE_DIP)
+        if along <= 0.0 or along >= length:
+            raise pg.GraphError("a turn station row leaves a seam wedge through its gate or its ring vertex")
+        vertex = ("wake", cell, *key, "wedge", station, order)
+        clone.add_vertex(vertex, point_g + along * axis, provenance="wake turn station level through a seam wedge")
+        bisector.append(vertex)
+        for first, second in ((left, vertex), (vertex, right)):
+            _add_line(clone, first, second, "core_rung", "wake turn station level")
+    for first, second in zip(bisector, bisector[1:]):
+        _add_line(clone, first, second, "core_spoke", "seam wedge bisector")
+    quads = []
+    for first_in, second_in, first_bis, second_bis in zip(column_in, column_in[1:], bisector, bisector[1:]):
+        quads.append((first_in, first_bis, second_bis, second_in))
+    for first_out, second_out, first_bis, second_bis in zip(column_out, column_out[1:], bisector, bisector[1:]):
+        quads.append((first_bis, first_out, second_out, second_bis))
+    quads.append((bisector[-1], outer[-1], ring_key, inner[-1]))
+    for corners in quads:
+        clone.add_face(_oriented(clone, corners, sign), role=face.role, provenance=face.provenance)
 
 
 def _column_path(clone: pg.PatchGraph, keys) -> np.ndarray:
@@ -2411,6 +2448,12 @@ def _split_at_arclength(section: np.ndarray, arclength: float):
     return point, first, second
 
 
+# A wake landing on another body's band needs the band across it: below
+# this angle between the wake line and the band front the strips beyond
+# the ring end in slivers at the landing gate.
+LANDING_INCIDENCE = math.radians(35.0)
+
+
 def _write_wake_to_body(layout, graph: pg.PatchGraph, record: dict, fronts, wall_edge_style: str) -> pg.PatchGraph:
     """Write a wake that ends on a downstream body's band.
 
@@ -2538,6 +2581,19 @@ def _write_wake_to_body(layout, graph: pg.PatchGraph, record: dict, fronts, wall
     width = height
     length_before = float(g2.total_length(before_b))
     length_after = float(g2.total_length(after_b))
+    # The strips beyond the ring end on B's front at the wake line's
+    # incidence: a wake grazing the band leaves a sliver at the landing
+    # gate whatever the landing points, so it needs the band across it.
+    wake_line = clone.vertices[f_b].point - clone.vertices[ring_r].point
+    tangent = after_b[min(1, len(after_b) - 1)] - before_b[max(len(before_b) - 2, 0)]
+    if float(np.linalg.norm(wake_line)) > 0.0 and float(np.linalg.norm(tangent)) > 0.0:
+        incidence = abs(math.sin(_turn_angle(wake_line, tangent)))
+        if incidence < math.sin(LANDING_INCIDENCE):
+            raise pg.GraphError(
+                f"the wake of {record['site']!r} meets the band of {site_b.name!r} at "
+                f"{math.degrees(math.asin(incidence)):.1f} degrees; a wake landing needs the band across it "
+                f"(at least {math.degrees(LANDING_INCIDENCE):.0f} degrees) - a grazing arrival wants a bridge into the band"
+            )
     if length_before < width + clearance or length_after < width + clearance:
         raise pg.GraphError(
             f"{site_b.name!r} has no room beside the wake's landing gate for a band "
