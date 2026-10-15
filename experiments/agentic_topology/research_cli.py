@@ -234,6 +234,10 @@ def add_input_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--growth", type=float, default=sizing.SizingOptions.growth)
     parser.add_argument(
+        "--wall-aspect", type=float, default=None, metavar="RATIO",
+        help="wall-parallel spacing at the wall as a multiple of the first cell width (floors the size along tangential edges; default: the isotropic law)",
+    )
+    parser.add_argument(
         "--cell-budget", type=int, default=None, help="cap on the total cell count"
     )
     parser.add_argument(
@@ -398,6 +402,7 @@ def build_options(arguments) -> pipeline.PipelineOptions:
             first_width=arguments.first_width,
             core_size=arguments.core_size,
             growth=arguments.growth,
+            wall_aspect=arguments.wall_aspect,
             budget=arguments.cell_budget,
         ),
     )

@@ -764,16 +764,47 @@ def extend(near, domain, outer, loops, *, hull_points: np.ndarray, hull_height: 
             raise HullError(f"{what} leaves through {outer.chain_at(st).name!r}, not the outlet")
         return point, st
 
+    # Every line of the merged band fans out: the lines leaving the hull -
+    # the bottom band's in edge, each band's interior lines, the channel
+    # lines, the top band's out edge - take slopes away from the wake
+    # direction spaced evenly by rank from minus to plus the wake spread,
+    # so every strip, however thin at the hull, widens towards the outlet
+    # by the same amount (a strip's share of the fan by its width left the
+    # main element's wake strips on 30P30N four thousandths wide for
+    # fifteen chords: aspect 7500); the levels' mitre lines beyond the
+    # band's edges take the full spread.
+    edge_in = graph.vertices[outer_in].point
+    edge_out = graph.vertices[outer_out].point
+    band_centre = 0.5 * (np.asarray(edge_in, dtype=np.float64) + np.asarray(edge_out, dtype=np.float64))
+    half_width = 0.5 * abs(float((np.asarray(edge_out, dtype=np.float64) - np.asarray(edge_in, dtype=np.float64)) @ normal))
+    hull_lines: list[float] = []
+    for band in bands:
+        hull_lines.extend(float((graph_near.vertices[vertex].point - band_centre) @ normal) for vertex in band["exit_keys"])
+    for channel in channels:
+        hull_lines.extend(float((graph_near.vertices[vertex].point - band_centre) @ normal) for vertex in channel[1:-1])
+    hull_lines = sorted(set(round(value, 12) for value in hull_lines))
+    rank_slope = {
+        value: settings.wake_spread * (2.0 * index / (len(hull_lines) - 1) - 1.0) if len(hull_lines) > 1 else 0.0
+        for index, value in enumerate(hull_lines)
+    }
+
+    def fanned(origin) -> np.ndarray:
+        if settings.wake_spread <= 0.0 or half_width <= 0.0:
+            return direction
+        lateral = float((np.asarray(origin, dtype=np.float64) - band_centre) @ normal)
+        slope = rank_slope.get(round(lateral, 12))
+        if slope is None:
+            slope = settings.wake_spread * max(-1.0, min(1.0, lateral / half_width))
+        turned = direction + slope * normal
+        return turned / np.linalg.norm(turned)
+
     exits: dict[tuple, tuple[np.ndarray, float]] = {}
     for k in range(levels + 1):
-        for side, chain_points, point_w in (("in", mitre_in, point_in), ("out", mitre_out, point_out)):
+        for side, chain_points in (("in", mitre_in), ("out", mitre_out)):
             origin = chain_points[k]
-            line_direction = wake_module.spread_direction(direction, origin, point_w, settings.wake_spread)
-            exits[(k, side)] = to_outlet(origin, line_direction, f"the level {k} wake line")
-    # The interior exits - the wake line, or a base's two lines - run on to
-    # the outlet as well: a base's two lines spread like the band fronts, a
-    # sharp edge's single centre line lies on the axis and keeps its
-    # direction.  Between two bands the channel's lines keep the direction.
+            exits[(k, side)] = to_outlet(origin, fanned(origin), f"the level {k} wake line")
+    # The interior exits - the wake line, or a base's two lines - and the
+    # channel lines run on to the outlet as well, fanned the same way.
     band_chain_keys: list[list] = []
     outlet_sequence: list[tuple] = []                     # (key, station) from the bottom up
     for band_index, band in enumerate(reversed(bands)):
@@ -789,16 +820,9 @@ def extend(near, domain, outer, loops, *, hull_points: np.ndarray, hull_height: 
             origin = graph_near.vertices[vertex].point
             if index in (0, len(band["exit_keys"]) - 1):
                 key = key_exit(0, ("channel", band_index - 1 if index == 0 else band_index, "in" if index == 0 else "out"))
-                line_direction = direction
             else:
                 key = key_exit(0, ("centre", band_index, index - 1)) if len(bands) > 1 else ("hull", "exit", 0, f"centre{index - 1}")
-                # A base's line spreads only towards the merged band's own
-                # edge on its side; towards a channel it keeps the direction,
-                # as the channel's lines do.
-                lateral = float((origin - band["point_w"]) @ normal)
-                spreads = (lateral > 0.0 and last_band) or (lateral < 0.0 and first_band)
-                line_direction = wake_module.spread_direction(direction, origin, band["point_w"], settings.wake_spread) if spreads else direction
-            point, st = to_outlet(origin, line_direction, "a wake line")
+            point, st = to_outlet(origin, fanned(origin), "a wake line")
             graph.add_vertex(key, point, constraint=pg.Constraint("chain", outlet.name, st), provenance="wake exit")
             outer_station[key] = st
             chain.append(key)
@@ -815,7 +839,8 @@ def extend(near, domain, outer, loops, *, hull_points: np.ndarray, hull_height: 
                 chain.append(band_chain_keys[len(bands) - 2 - channel_index][0])
                 continue
             key = key_exit(0, ("channel", channel_index, index))
-            point, st = to_outlet(graph_near.vertices[vertex].point, direction, "a channel line between two wake bands")
+            origin = graph_near.vertices[vertex].point
+            point, st = to_outlet(origin, fanned(origin), "a channel line between two wake bands")
             graph.add_vertex(key, point, constraint=pg.Constraint("chain", outlet.name, st), provenance="channel exit")
             outer_station[key] = st
             chain.append(key)

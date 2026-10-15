@@ -174,6 +174,28 @@ def quality_summary(model: MeshModel) -> dict[str, object]:
 # ---------------------------------------------------------------------------
 
 
+# The largest cell-to-cell ratio a first-cell grading request may imply; a
+# steeper series is refused and the edge left uniform.
+MAX_CELL_RATIO = 3.0
+
+
+def _cell_ratio_for(first: float, length: float, cells: int) -> float:
+    """Cell-to-cell ratio of the geometric series of ``cells`` cells starting at ``first`` over ``length``."""
+    if cells < 2 or first <= 0.0 or first * cells >= length:
+        return 1.0
+    low, high = 1.0, 2.0
+    while first * (high ** cells - 1.0) / (high - 1.0) < length and high < 1.0e6:
+        high *= 2.0
+    for _ in range(80):
+        middle = 0.5 * (low + high)
+        total = first * (middle ** cells - 1.0) / (middle - 1.0) if middle > 1.0 else first * cells
+        if total < length:
+            low = middle
+        else:
+            high = middle
+    return 0.5 * (low + high)
+
+
 def build_model_from_graph(
     graph,
     domain,
@@ -328,6 +350,26 @@ def build_model_from_graph(
                         "the requested first cell is not smaller than the uniform "
                         "width length/cells; grading towards it would run backwards, "
                         "so the edge is left uniform"
+                    ),
+                }
+            )
+            continue
+        ratio = _cell_ratio_for(float(request.first_width), float(length), int(cells))
+        if ratio > MAX_CELL_RATIO:
+            # Two cells of a floored wake line with a first-cell request
+            # grade at a ratio of twelve: one sliver and one slab, which
+            # shears the block against its uniform opposite side (the
+            # flap's band under the main's wake on 30P30N folded).  Such an
+            # edge is left uniform; the count, not the grading, is short.
+            refused.append(
+                {
+                    "edge": list(current),
+                    "requested_first_width": float(request.first_width),
+                    "edge_length": float(length),
+                    "cells": int(cells),
+                    "reason": (
+                        f"the requested first cell needs a cell-to-cell ratio of {ratio:.3g} over "
+                        f"{int(cells)} cells, above {MAX_CELL_RATIO:g}; the edge is left uniform"
                     ),
                 }
             )

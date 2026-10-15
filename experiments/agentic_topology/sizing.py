@@ -35,6 +35,14 @@ class SizingOptions:
     core_size_ratio: float = 4.0e-2
     first_width: float | None = None
     core_size: float | None = None
+    # Wall-parallel spacing at the wall as a multiple of the first cell
+    # width: the usual boundary-layer stretching (25 is a typical RANS
+    # mesh).  It floors the size metric along every tangential edge - wall,
+    # front, ring, level rows, wake lines - and leaves the wall-normal
+    # edges, whose first cells the grading sets, and the rungs across a
+    # wake.  None keeps the isotropic law, first-cell-sized cells along the
+    # wall.
+    wall_aspect: float | None = None
     minimum_cells: int = 1
     maximum_cells: int = 400
     budget: int | None = None
@@ -131,7 +139,20 @@ class SizeMetric:
     def size(self, points) -> np.ndarray:
         return self.size_at_distance(self.wall_distance(points))
 
-    def metric_length(self, path: np.ndarray) -> float:
+    # A tangential cell may turn at most this much along a curved edge: the
+    # floor is capped at the edge's mean radius of curvature times this
+    # angle, so a cell's chord stays close to the wall it follows (one cell
+    # across a 45-degree cove wall folded against a band thinner than its
+    # sagitta on 30P30N).
+    MAX_CELL_TURNING = math.radians(15.0)
+
+    @property
+    def tangential_floor(self) -> float:
+        """The smallest size along a tangential edge: ``wall_aspect`` first widths, or none."""
+        aspect = self.options.wall_aspect
+        return 0.0 if aspect is None else min(self.core, float(aspect) * self.first)
+
+    def metric_length(self, path: np.ndarray, *, tangential: bool = False) -> float:
         """The path's length in cells of the size metric, the integral of ds/size.
 
         Long segments are subdivided at a quarter of the core size first, so
@@ -140,16 +161,27 @@ class SizeMetric:
         linear size (``g2.metric_length``).  Band spokes, core spokes and
         sweep ribs are two-point lines, which the old per-vertex trapezoid
         overcounted 1.3 to 1.7 times at the default sizing and by a factor of
-        about 67 at a first-cell width of 1e-5 of the scale.
+        about 67 at a first-cell width of 1e-5 of the scale.  A tangential
+        edge's size is floored at ``tangential_floor``.
         """
         points = g2.subdivide(path, 0.25 * self.core)
-        return g2.metric_length(points, self.size(points))
+        size = self.size(points)
+        if tangential and self.tangential_floor > 0.0:
+            floor = self.tangential_floor
+            turning = float(g2.total_turning(np.asarray(path, dtype=np.float64)))
+            length = float(g2.total_length(path))
+            if turning > 0.0 and length > 0.0:
+                floor = min(floor, (length / turning) * self.MAX_CELL_TURNING)
+            size = np.maximum(size, floor)
+        return g2.metric_length(points, size)
 
     def described(self) -> dict:
         return {
             "first_cell_width": self.first,
             "growth_ratio": self.growth,
             "core_cell_size": self.core,
+            "wall_aspect": self.options.wall_aspect,
+            "tangential_floor": self.tangential_floor,
             "first_width_over_scale": self.first / self.scale,
             "core_size_over_scale": self.core / self.scale,
             "layer_cells": self.layer_cells,
@@ -175,6 +207,20 @@ class CountAssignment:
     budget_met: bool = True
 
 
+# Edges whose first cells the grading sets - the spokes across the boundary
+# layer and the core, the rungs across a wake band, and the wake lines and
+# channel lines graded from the wall end - follow the isotropic law; every
+# other edge runs along the wall, a front, a ring or a level and takes the
+# tangential floor.  (A floored wake line of two cells carried a first-cell
+# grading of ratio twelve against a uniform front piece and folded the
+# flap's band under the main's wake on 30P30N.)
+NORMAL_ROLES = frozenset({"layer_spoke", "core_spoke", "wake_rung", "wake", "wake_front"})
+
+
+def _takes_floor(edge) -> bool:
+    return edge.role not in NORMAL_ROLES and edge.provenance != "channel line"
+
+
 def assign_counts(
     graph: pg.PatchGraph, metric: SizeMetric, options: SizingOptions
 ) -> CountAssignment:
@@ -188,7 +234,7 @@ def assign_counts(
             path = graph.edges[key].path
             geometric = g2.total_length(path)
             lengths.append(geometric)
-            targets.append(metric.metric_length(path))
+            targets.append(metric.metric_length(path, tangential=_takes_floor(graph.edges[key])))
         weights = np.asarray(lengths)
         wanted = np.asarray(targets)
         total = float(np.sum(weights))
@@ -328,7 +374,11 @@ def layer_grading_requests(graph: pg.PatchGraph, metric: SizeMetric) -> list:
     # they sheared the cells between them to 87 degrees in checkMesh.
     first = float(np.asarray(metric.size_at_distance(np.asarray([metric.layer_height]))).reshape(-1)[0])
     for key, edge in graph.edges.items():
-        if edge.role not in ("wake", "wake_front") or key in base_edges:
+        # A channel line between two merged wake bands runs beside the
+        # bands' lines from the hull to the outlet and must carry their
+        # grading, or the strip between them shears (89 degrees on 30P30N).
+        channel = edge.provenance == "channel line"
+        if (edge.role not in ("wake", "wake_front") and not channel) or key in base_edges:
             continue
         points = np.asarray([graph.vertices[vertex].point for vertex in key], dtype=np.float64)
         distances = metric.wall_distance(points)

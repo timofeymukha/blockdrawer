@@ -609,6 +609,29 @@ class DiscreteMoveTests(unittest.TestCase):
 
 
 class SizingTests(unittest.TestCase):
+    def test_the_wall_aspect_floors_the_size_along_tangential_edges(self):
+        """``wall_aspect`` sets the wall-parallel spacing at the wall as a
+        multiple of the first cell width: the size metric along every
+        tangential edge is floored at that spacing, so the wall edges get
+        fewer cells, while the band spokes - wall-normal, graded to the
+        first width - keep their counts."""
+        names, loops = cases.two_circles()
+        plain = run_case("two_circles", FAST)
+        floored = pipeline.run_external(
+            names, loops, dataclasses.replace(FAST, sizing=dataclasses.replace(FAST.sizing, wall_aspect=10.0))
+        )
+        self.assertTrue(floored.admissible, floored.problems or floored.failures)
+        self.assertEqual(plain.metric.tangential_floor, 0.0)
+        self.assertAlmostEqual(floored.metric.tangential_floor, 10.0 * floored.metric.first)
+        self.assertEqual(floored.metric.described()["wall_aspect"], 10.0)
+        wall_plain = sum(plain.counts.counts[key] for key, edge in plain.graph.edges.items() if edge.role == "wall")
+        wall_floored = sum(floored.counts.counts[key] for key, edge in floored.graph.edges.items() if edge.role == "wall")
+        self.assertLess(wall_floored, wall_plain)
+        spokes_plain = sorted(plain.counts.counts[key] for key, edge in plain.graph.edges.items() if edge.role == "layer_spoke")
+        spokes_floored = sorted(floored.counts.counts[key] for key, edge in floored.graph.edges.items() if edge.role == "layer_spoke")
+        self.assertEqual(spokes_plain, spokes_floored)
+        self.assertLess(floored.counts.total_cells, plain.counts.total_cells)
+
     def test_layer_series_reaches_the_core_size(self):
         options = sizing.SizingOptions(
             first_width=0.01, core_size=0.2, growth=1.2
@@ -755,6 +778,16 @@ class GridQualityTests(unittest.TestCase):
 
 
 class SessionTests(unittest.TestCase):
+    def test_a_first_cell_request_too_steep_for_its_count_is_refused(self):
+        """A first-cell width on an edge of two cells would grade at a ratio
+        of twelve, a sliver and a slab that shear the block against its
+        uniform opposite side; the emitter refuses above three and leaves
+        the edge uniform."""
+        self.assertAlmostEqual(session_emit._cell_ratio_for(0.007, 0.097, 2), 12.857, places=2)
+        self.assertLess(session_emit._cell_ratio_for(0.001, 0.03, 10), 1.3)
+        self.assertEqual(session_emit._cell_ratio_for(0.001, 0.0039, 6), 1.0)
+        self.assertGreater(session_emit._cell_ratio_for(0.007, 0.097, 2), session_emit.MAX_CELL_RATIO)
+
     def _round_trip(self, result):
         from blockdrawer.foam import block_mesh_dict
         from blockdrawer.render import RenderOptions, render_svg

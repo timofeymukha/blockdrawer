@@ -62,6 +62,7 @@ the engine directly:
 | far field: these point lists, these patch names | `--outer NAME:ROLE=PATH` per chain, anticlockwise, joined end to end; the names become the patches |
 | free-stream direction, incidence | `--wake-direction dx,dy` (also selects which sharp vertices get a wake); incidence stays in the velocity |
 | boundary layer: first cell, band height | `--first-width W`, `--layer-height H` (absolute, in the geometry's units); `--core-size` for the far cells |
+| wall-parallel stretching | `--wall-aspect 25`: cells along the wall 25 first widths long, the usual RANS boundary-layer stretching; without it the wall is resolved as finely along as across |
 | patch names | `rename_boundary OLD NEW` on the session afterwards |
 
 What the engine then *builds* follows from the geometry - how many bodies,
@@ -91,11 +92,13 @@ choose a far field: that came with the brief.
   sharp corner; a 15:1 ellipse still fails its band at the tips.
 - **Sharp trailing edge** (fluid sector of at least 250 degrees at one wall
   vertex): a **C-grid**. The band continues past the edge as a two-sided wake
-  band to the outlet, its edge lines spreading from the wake line at the
-  `--wake-spread` slope (default 0.05) so the band widens downstream - a band
-  kept at its body width for fifteen chords puts first-cell-thin cells beside
-  chord-long ones (aspect 1e4 on 30P30N); the far-field core is cut open
-  along it. The edge then carries four blocks at right angles. Never leave a
+  band to the outlet, its lines fanning from the wake line at the
+  `--wake-spread` slope (default 0.05; the edges get the full slope, the
+  lines between slopes spaced evenly by rank) so every strip widens
+  downstream by the same amount -
+  a band kept at its body width for fifteen chords puts first-cell-thin
+  cells beside chord-long ones (aspect 1e4 on 30P30N); the far-field core
+  is cut open along it. The edge then carries four blocks at right angles. Never leave a
   seam wedge or a fan at a production trailing edge: it collapses the
   body-normal lines into a downstream fan. Engine: `--wake`; refusals list the
   reason under `medial.wakes`. Give `--wake-direction` whenever the body has
@@ -223,9 +226,16 @@ choose a far field: that came with the brief.
   blocks turn 45 degrees at most instead of 117. Not resolved: 84-degree
   cells remain at the cusp's seam and the slat edge's seam, the main's
   cove lip keeps its 85-degree corner, and the slat's level row ties the
-  ring and front counts into one component of length ratio 473. Repair
-  those by hand (the repair recipe in section 4); the engine's next steps
-  are the count coupling of the level rows and the main's cove lip.
+  ring and front counts into one component of length ratio 473. Sized
+  with `--wall-aspect 25` (cells along the wall 25 first widths long) the
+  run gives 5534 cells and a `checkMesh` that passes: no negative volumes,
+  max non-orthogonality 78 degrees on 107 faces (the seam corners at the
+  slat edge and cusp and the main's trailing-edge lens, where a thin lens
+  puts three corners almost in a line), max skewness 2.4, max aspect
+  ratio 171 in the far wake. Repair the seam corners by hand (the repair
+  recipe in section 4); the engine's next steps are the degenerate lens
+  (collapse it onto the junction when its depth is under the band
+  height), the count coupling of the level rows and the main's cove lip.
 - **Internal flow** (channel, periodic hill, diffuser): a sweep between the two
   walls - columns from one wall band to the other, ends on inlet and outlet or
   on the cyclic pair. Corners of the domain are block corners; a guide wall's

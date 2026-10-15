@@ -653,8 +653,16 @@ result can be read either way; the session is written whenever the result is
    lie inside the wake band's offset, ending on mitre points at the band's
    edge lines, the wake band's strips - two halves for a sharp edge, the
    base strip and its two bands for a blunt base - and one strip per level
-   and side running to the outlet along lines spread at `--wake-spread` as
-   in the C-grid, the levels mapped onto the cap and two
+   and side running to the outlet along lines fanned from the band: the
+   lines leaving the hull - the bottom band's in edge, each band's interior
+   lines, the channel lines, the top band's out edge - take slopes away
+   from the wake direction spaced evenly by rank from minus to plus the
+   `--wake-spread` slope, so every strip, however thin at the hull, widens
+   towards the outlet by the same amount (lines kept parallel, or fanned in
+   proportion to their offset, left the main element's wake strips on
+   30P30N four thousandths wide for fifteen chords, aspect 7500), and the
+   levels' mitre lines beyond the edges take the full spread - the
+   levels mapped onto the cap and two
    wake-side blocks covering the legs, exactly the C-grid's far field with
    the wake band's own width in place of the trailing edge. Two or more
    wakes leaving through the hull **merge into one band**: the levels are
@@ -858,7 +866,13 @@ The outer boundary is chosen the same way: `--farfield-shape circle|rectangle`,
 `--outer NAME:ROLE=PATH` per chain; `--wake` (with `--wake-direction DX,DY`
 and `--wake-fluid-angle`) asks for the C-grid wake cut at every sharp
 trailing edge. Re-quantisation is the same `run` with different metric flags -
-`--first-width-ratio`, `--core-size-ratio`, `--growth`, `--cell-budget` - and
+`--first-width-ratio`, `--core-size-ratio`, `--growth`, `--cell-budget`,
+`--wall-aspect RATIO` (the wall-parallel spacing at the wall as a multiple
+of the first cell width, flooring the size metric along every tangential
+edge, `SizingOptions.wall_aspect`; the wall-normal spokes and the rungs
+across a wake keep the isotropic law, and along a curved edge the floor is
+capped so that a cell turns at most fifteen degrees,
+`SizeMetric.MAX_CELL_TURNING`) - and
 `--split CELL:CUT` forces an anchor where an agent asks for one. Because the
 run is stateless, that is also how `apply` realises a move: it rebuilds the
 very case the arguments describe, explicit `--outer` chains included, with the

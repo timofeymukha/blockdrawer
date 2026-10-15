@@ -351,10 +351,14 @@ them in the canvas widgets.
   excluded (`WakeOptions.exclude`, `medial.hull.dropped_wakes`). In both the C-grid and the hull
   far field every wake line beside the axis leaves its mitre point at the
   `--wake-spread` slope (`CGridOptions.wake_spread`,
-  `HullOptions.wake_spread`, `wake.spread_direction`), so a wake band that
+  `HullOptions.wake_spread`, `wake.spread_direction`; in the hull far field
+  the lines of the merged band leaving the hull take slopes spaced evenly
+  by rank from minus to plus the spread, channel lines included), so a wake band that
   is thin at the body widens towards the outlet instead of carrying its
   first-cell count for the length of the far field; the sizing stage grades
-  the wake strips' streamwise edges from the end nearer the wall. The near field is built with the hull as
+  the wake strips' streamwise edges and the channel lines from the end
+  nearer the wall, and `--wall-aspect RATIO` (`SizingOptions.wall_aspect`)
+  floors the size metric along tangential edges at that many first widths. The near field is built with the hull as
   one chain first and with the outer boundary's chains mirrored onto it only
   when no wake leaves; a hull's chain breaks are anchored by the inward ray
   (`LayoutOptions.outer_by_ray`). The whole
