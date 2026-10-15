@@ -263,7 +263,9 @@ them in the canvas widgets.
   wake separatrix from each sharp trailing edge through the body's ring to the
   outer boundary - or, when the ring crossing lies on the branch between two
   bodies, to the other body's band, where the stagnation gate is pinned and
-  the two wake fronts land a band width to either side as new band spokes -
+  the two wake fronts land a band width to either side as new band spokes,
+  the far leg aimed at that band when the wake direction would graze it
+  (`wake._aim_landing`, `wake.LANDING_INCIDENCE`) -
   with the band continued as a two-sided wake band and the far-field core cut
   open along it - turning, when the wake direction is more than ten degrees
   off the edge's bisector (a base's flank bisector), at stations of at most
@@ -291,9 +293,12 @@ them in the canvas widgets.
   can end in quads; the passed body carries exactly three gates under the
   wake, so a wall that turns too much there, a fixed gate on the lens arc or
   a second lens corner refuses the wake; wakes are tried in passes so an
-  upstream wake can follow a downstream one; trials are committed only as
-  complete admissible results and refusals keep their reasons under
-  `medial.wakes`. Feature anchors take
+  upstream wake can follow a downstream one; a trial first repairs the other
+  sharp features' seams with the cavity stage's seam template alone
+  (`pipeline._repair_seams_before_wakes`), since a level row through a seam
+  wedge leaves the cavity stage nothing to rewrite there afterwards; trials
+  are committed only as complete admissible results and refusals keep their
+  reasons under `medial.wakes`. Feature anchors take
   the closest ring point unless the outward ray's spoke is squarer by fifteen
   degrees (corners always take the ray), and gates are cut until
   neighbouring spoke lengths are within a factor of four; both rules moved
@@ -360,7 +365,11 @@ them in the canvas widgets.
   criterion and unchanged length-ratio limit resolve the spanned circles.
   A band front section that ends at a seam point is trimmed of the hook
   the offset of a flank curving into a sharp corner leaves there
-  (`layers.trim_backtrack`); the band's offset can use the same windowed
+  (`layers.trim_backtrack`); a seam point is offset along the normal of
+  the wall chord past any tiny base at the feature and by the arriving
+  front's height when that is less than the feature's own
+  (`layers._seam_points`, `SEAM_CHORD_FRACTION`), so the front does not jog
+  at the seam; the band's offset can use the same windowed
   normals as its level-set trimming (`LayerOptions.normal_window`,
   `--normal-window HEIGHTS`, off by default).
   Front repair reduces the caps of whole failing blocks; repeated failures

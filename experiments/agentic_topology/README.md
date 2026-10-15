@@ -364,7 +364,13 @@ result can be read either way; the session is written whenever the result is
    The ring crossing is an ordinary anchor pinned on both sides - the edge on
    the body, the exit on the outer boundary - so the annular producer already
    writes the wake beyond the ring as a far-field spoke and gives the edge its
-   seam. Once the band exists, the seam points are carried downstream
+   seam. A seam point is offset along the normal of the wall chord past any
+   base narrower than a tenth of the band height (`layers.SEAM_CHORD_FRACTION`)
+   and by the arriving front's height when that is less than the feature's
+   own, so the front reaches the seam without a jog (the 30P30N slat's
+   pressure-side band thins under the branch to the main element, and the
+   core patch beside the wake front folded at the seam point standing out
+   of it). Once the band exists, the seam points are carried downstream
    parallel to the wake as the *wake fronts*, which cross the ring and the
    outer boundary; the wedge and the four patches around the anchor are then
    rewritten into eight: two wake blocks at the edge, two beyond the ring, and
@@ -380,7 +386,17 @@ result can be read either way; the session is written whenever the result is
    the outer boundary (`target.kind` is `body`): the wake anchor pins the
    trailing edge on one body and the stagnation station - where the wake ray
    meets the wall - on the other, so the annular producer gives the second
-   body a gate there whose spoke is the wake line beyond the ring; the two
+   body a gate there whose spoke is the wake line beyond the ring. That ray
+   is the wake direction when it meets the body's band steeply enough, and
+   otherwise *aimed* at the band (`wake._aim_landing`, the record's
+   `landing`): from the ring crossing the far leg turns towards the body, a
+   degree at a time to either side up to sixty degrees, to the first
+   direction whose incidence on the band - estimated with the band at the
+   requested height capped by the clearance rule, its front point on the
+   wall's normal at the gate (`wake._landing_estimate`) - reaches
+   `wake.LANDING_INCIDENCE` plus a five-degree margin; the ring's chords
+   beside the crossing must meet the aimed leg as steeply as a turned
+   wake's leg (`wake.RING_CHORD_ANGLE`). The two
    wake fronts cross the ring and land on that body's front a band width to
    either side of its front vertex, placed along the front rather than by
    continuing the straight fronts, since the wake meets the body along its
@@ -396,13 +412,23 @@ result can be read either way; the session is written whenever the result is
    carried its seam wedge is tried again once that body's wake is accepted.
    A wake that would cross another medial branch, leave the feature's
    sector, meet the outer boundary across a chain break, land where the
-   downstream body has no room beside the stagnation gate, or graze that
-   body's band - the wake line meeting its front under 35 degrees
-   (`wake.LANDING_INCIDENCE`), where the strips beyond the ring end in
+   downstream body has no room beside the stagnation gate, or still graze
+   that body's band - the wake line meeting its front under 35 degrees
+   (`wake.LANDING_INCIDENCE`, measured on the real band and kept as
+   `landing_incidence_degrees`), where the strips beyond the ring end in
    slivers at the landing gate whatever the landing points - is refused with
    its reason, and a trial is committed only when the complete result passes
    coverage, session emission and both sampled grids; otherwise the annular
-   construction stays exactly as it was.
+   construction stays exactly as it was. Before the wakes are written a
+   trial repairs the seams of the other sharp features with the cavity
+   stage's seam template alone (`pipeline._repair_seams_before_wakes`,
+   `CavityOptions.templates`): a turning wake's level row goes through
+   every seam wedge on its way round the cell and splits it, after which
+   the cavity stage on the finished graph can rewrite nothing there - the
+   30P30N slat's cusp, whose plain seam leaves the band block round the
+   cove non-convex by its chords, refused every wake of the slat that way.
+   The features the wakes replace or land on keep their plain seams for
+   the writers.
 
    **Blunt base.** Two convex corners within two percent of the perimeter of
    each other are one base, and the base gets its own template rather than
@@ -470,8 +496,8 @@ result can be read either way; the session is written whenever the result is
    cluster's outer layer as levels, unless the outer boundary bends beside
    the exit the same way (the hull round the flap's corner does); then
    *straight*: the wake keeps its bisector through the whole near field,
-   and either the body it ends on takes it as it arrives (a slat's edge
-   onto the main) or, when the outer boundary is the cluster's hull, the
+   and either the body it ends on takes it as it arrives, its far leg
+   aimed at that body's band, or, when the outer boundary is the cluster's hull, the
    far field turns it - its level sets widen round the band by their own
    growth, and the mitre of a band edge on the outside of the turn is
    found behind the exit when the level set lies there. Anything else is
@@ -1165,7 +1191,12 @@ hold them. That is the annular far field's limit, the one the single-body
 C-grid escapes by building its outer core as level sets; a hull-level-set far
 field for several bodies is the next step, not a wake defect. `sharp_bodies`
 under `--wake` now lands the tip's wake on the disk obliquely (42 blocks,
-admissible, 85 degrees of non-orthogonality at the landing); `narrow_gap_tip`
+admissible, 85 degrees of non-orthogonality at the landing, 39 degrees of
+incidence); `tandem_foils(drop=0.2)`, the rear foil a fifth of a chord
+under the front wake, would be met at eight degrees on the rear's upper
+shoulder and is aimed fourteen degrees down to land at 43 degrees (40
+blocks, admissible, `test_a_grazing_wake_is_aimed_at_the_downstream_band`);
+`narrow_gap_tip`
 refuses it with the reason that the blocker has no room beside the landing
 gate for a band 0.034 wide, its front section on one side being 0.020 long.
 

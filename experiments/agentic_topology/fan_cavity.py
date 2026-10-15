@@ -105,6 +105,11 @@ class CavityOptions:
     # validated alternatives the diagnostics already reported instead of
     # placing vertices; an unnamed feature is decided by the ranking.
     choices: tuple = ()
+    # When set, only the templates named here are enumerated for every
+    # feature, and still only applied when they beat the existing
+    # construction: the wake stage repairs the seams its level rows will
+    # cross with the seam template alone, never removing a seam.
+    templates: tuple | None = None
     # How many locally best placements are validated in full, and how many
     # validated candidates are reported.
     validation_budget: int = 96
@@ -648,7 +653,8 @@ def templates(options: CavityOptions, size: int) -> list[Template]:
     ]
     for sectors in range(2, max(2, options.maximum_sectors) + 1):
         found.append(fan_template(sectors, size))
-    return [item for item in found if item is not None]
+    allowed = None if options.templates is None else {str(name) for name in options.templates}
+    return [item for item in found if item is not None and (allowed is None or item.name in allowed)]
 
 
 # ---------------------------------------------------------------------------
@@ -1678,18 +1684,24 @@ def enumerate_candidates(
     return [item for item in found if item is not None]
 
 
-def repair(graph: pg.PatchGraph, domain, *, options: CavityOptions | None = None):
+def repair(graph: pg.PatchGraph, domain, *, options: CavityOptions | None = None, keep=None):
     """Replace every sharp-feature cavity that a better valid topology fits.
 
     Nothing is committed until the replacement has been built on a copy and
     passed every structural and geometric check, so a rejected candidate leaves
-    the graph with exactly the topology signature it had.
+    the graph with exactly the topology signature it had.  ``keep`` is a
+    predicate on the feature records ``feature_corners`` returns; features
+    it rejects are left alone and not reported (the wake stage repairs the
+    seams its level rows will cross before writing the wakes, and leaves
+    the wakes' own features to the wake writers).
     """
     settings = options or CavityOptions()
     result = RepairResult(graph)
     if not settings.enabled or graph is None:
         return result
     features = feature_corners(graph, settings)
+    if keep is not None:
+        features = [feature for feature in features if keep(feature)]
     rewritten: set[tuple] = set()
     current = graph
     # The coupling the graph already has, recomputed after every applied

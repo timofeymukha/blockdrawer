@@ -379,7 +379,8 @@ def plan_turns(layout, cell_index: int, axis_point, edge_direction, direction, s
         "turn_placement": "straight",
     }
     if body_target:
-        # The body the wake ends on takes it as it arrives.
+        # The body the wake ends on takes it as it arrives, its far leg
+        # aimed at that body's band.
         fields.update(straight)
         fields["turn_note"] = "; ".join(reasons) + "; the wake runs along its edge direction to the body it ends on"
         return fields, ""
@@ -488,12 +489,17 @@ def far_path(record: dict, ring_point) -> tuple[np.ndarray, np.ndarray]:
     """A wake line or front from its ring crossing to its last turn station beyond the ring, and its last leg.
 
     A wake that turns inside the ring, or not at all, continues straight
-    along the wake direction: the crossing alone and that direction.
+    along the wake direction - or along the leg aimed at the band of the
+    body it ends on (``landing``): the crossing alone and that direction.
     """
     ring_point = np.asarray(ring_point, dtype=np.float64)
     legs = [_unit(leg) for leg in (record.get("legs") or [record["direction"]])]
     stations = _far_stations(record)
     if not stations:
+        landing = record.get("landing")
+        if landing is not None:
+            # Aimed at the band of the body it ends on.
+            return np.asarray([ring_point]), _unit(landing["leg"])
         return np.asarray([ring_point]), legs[-1]
     return _mitred_path(record, ring_point, stations, legs, None), legs[-1]
 
@@ -583,7 +589,92 @@ def _segments_blocked(diagram, segments, *, own_site: int, allowed_sites, allowe
     return None
 
 
-def _trace_wake(layout, cell, origin, leg, direction, outer_index, outer, outer_loop, far_start=None) -> tuple[dict | None, str]:
+# A wake landing on another body's band needs the band across it: the two
+# strips beyond the ring end at the landing gate at the angle the wake line
+# makes with the front, and under this incidence they are slivers whatever
+# the landing points.
+LANDING_INCIDENCE = math.radians(35.0)
+# The plan aims the far leg for this much more than the writer demands,
+# since it estimates the band at the landing (``_landing_estimate``), and
+# turns it at most this far from the wake direction towards the body.
+LANDING_AIM_MARGIN = math.radians(5.0)
+LANDING_AIM_LIMIT = math.radians(60.0)
+LANDING_AIM_STEP = math.radians(1.0)
+
+
+def _landing_estimate(ring_point, leg, site, band_height: float):
+    """Where a far leg from the ring crossing lands on ``site`` and how steeply it meets its band.
+
+    The band at the landing gate is estimated at the requested height capped
+    by ``BAND_CLEARANCE_FRACTION`` of the distance from the ring crossing
+    (the layer stage's own clearance rule), its front point put on the
+    wall's fluid-side normal at the gate, and the incidence is that of the
+    line from the ring crossing to that point against the wall's tangent
+    there, which the front follows.  Returns ``(incidence, wall station,
+    end point, distance)`` or ``None`` when the leg misses the body.
+    """
+    ring_point = np.asarray(ring_point, dtype=np.float64)
+    leg = _unit(leg)
+    loop = site.curve.loop()
+    hits = _ray_crossings(ring_point, leg, loop)
+    if not hits:
+        return None
+    t, station, segment = hits[0]
+    end = ring_point + t * leg
+    tangent = loop[segment + 1] - loop[segment]
+    if float(np.linalg.norm(tangent)) <= 0.0:
+        return None
+    tangent = _unit(tangent)
+    normal = _left_normal(tangent)
+    if float(np.dot(normal, ring_point - end)) < 0.0:
+        normal = -normal
+    height = BAND_CLEARANCE_FRACTION * t
+    if band_height > 0.0:
+        height = min(float(band_height), height)
+    line = end + height * normal - ring_point
+    if float(np.linalg.norm(line)) <= 0.0:
+        return None
+    incidence = math.asin(min(1.0, abs(math.sin(_turn_angle(line, tangent)))))
+    return incidence, float(station), end, float(t)
+
+
+def _aim_landing(ring_point, direction, site, band_height: float):
+    """The far leg of a wake ending on ``site``: the wake direction, or the nearest direction that meets the band steeply enough.
+
+    A wake arriving along the wake direction at under ``LANDING_INCIDENCE``
+    plus the aiming margin - a slat's edge onto the main element's upper
+    surface, which runs almost along the free stream there - turns at the
+    ring towards the body, in steps of a degree to either side up to
+    ``LANDING_AIM_LIMIT``, and takes the first direction whose estimated
+    incidence suffices; the writer measures the real one.  Returns
+    ``(leg, estimate, turn)`` - the turn in radians, zero when the wake
+    direction serves - or ``(None, None, reason)``.
+    """
+    direction = _unit(direction)
+    wanted = LANDING_INCIDENCE + LANDING_AIM_MARGIN
+    best = None
+    steps = int(math.ceil(LANDING_AIM_LIMIT / LANDING_AIM_STEP - 1e-9))
+    for step in range(steps + 1):
+        for sign in ((1.0,) if step == 0 else (1.0, -1.0)):
+            turn = sign * step * LANDING_AIM_STEP
+            leg = _rotated(direction, turn)
+            estimate = _landing_estimate(ring_point, leg, site, band_height)
+            if estimate is None:
+                continue
+            if estimate[0] >= wanted:
+                return leg, estimate, turn
+            if best is None or estimate[0] > best[0]:
+                best = (estimate[0], turn)
+    if best is None:
+        return None, None, f"no far leg within {math.degrees(LANDING_AIM_LIMIT):.0f} degrees of the wake direction meets {site.name!r}"
+    return None, None, (
+        f"no far leg within {math.degrees(LANDING_AIM_LIMIT):.0f} degrees of the wake direction meets the band of "
+        f"{site.name!r} at {math.degrees(wanted):.0f} degrees (the best, {math.degrees(best[0]):.1f} degrees, "
+        f"{math.degrees(best[1]):+.0f} degrees off it); a wake landing needs the band across it"
+    )
+
+
+def _trace_wake(layout, cell, origin, leg, direction, outer_index, outer, outer_loop, far_start=None, band_height: float = 0.0) -> tuple[dict | None, str]:
     """Follow a wake's leg to the body's ring and the wake direction beyond it.
 
     Returns the ring crossing, the target (the outer boundary, a downstream
@@ -591,7 +682,11 @@ def _trace_wake(layout, cell, origin, leg, direction, outer_index, outer, outer_
     recorded under ``through``) and the far leg's length, or the reason.
     With ``far_start`` - the last turn station of a wake turning beyond the
     ring - the far leg starts there instead of at the ring crossing and
-    must end on the outer boundary.
+    must end on the outer boundary.  A wake ending on another body's band
+    lands along the wake direction when that meets the band steeply enough
+    and is otherwise aimed at the band (``_aim_landing``; the far leg and
+    its turn go under ``landing``), the band's height estimated from
+    ``band_height``, the height the layer stage will ask for.
     """
     diagram = layout.diagram
     origin = np.asarray(origin, dtype=np.float64)
@@ -641,8 +736,10 @@ def _trace_wake(layout, cell, origin, leg, direction, outer_index, outer, outer_
             return None, f"the wake crosses the ring into the cell of {other.name!r}, which has no layout cell"
         ends = _ray_crossings(ring_point, direction, other.curve.loop())
         if ends:
-            t_end, _arclength, _segment = ends[0]
-            end_point = ring_point + t_end * direction
+            far_leg, estimate, turn = _aim_landing(ring_point, direction, other, band_height)
+            if far_leg is None:
+                return None, turn
+            incidence, station, end_point, t_end = estimate
             target = {
                 "kind": "body",
                 "cell": other_cell,
@@ -651,6 +748,12 @@ def _trace_wake(layout, cell, origin, leg, direction, outer_index, outer, outer_
                 "wall_station": float(other.curve.closest(end_point[None, :]).arclength[0]),
                 "point": [float(v) for v in end_point],
             }
+            if abs(turn) > 0.0:
+                fields["landing"] = {
+                    "leg": [float(v) for v in far_leg],
+                    "turn_degrees": float(math.degrees(turn)),
+                    "estimated_incidence_degrees": float(math.degrees(incidence)),
+                }
         else:
             through, target, why = _plan_through(
                 layout, ring_point, direction, 0.0, other_cell, other, outer_index, outer, outer_loop
@@ -763,7 +866,7 @@ def plan(layout, options: WakeOptions | None = None, *, height: float = 0.0) -> 
             # Straight first: a wake that passes over another body keeps the
             # straight line (the through template is a chord), and a wake
             # within the turn margin of its bisector is straight anyway.
-            fields, why = _trace_wake(layout, cell, point, direction, direction, outer_index, outer, outer_loop)
+            fields, why = _trace_wake(layout, cell, point, direction, direction, outer_index, outer, outer_loop, band_height=height)
             if fields is None:
                 record["reason"] = why
                 continue
@@ -784,14 +887,14 @@ def plan(layout, options: WakeOptions | None = None, *, height: float = 0.0) -> 
                 turns.update({"legs": [list(record["direction"])], "stations": [], "far_origin": list(record["point"]), "turned": False, "turn_placement": "inside"})
             elif turns["turned"] and turns["turn_placement"] == "beyond":
                 fields, why = _trace_wake(
-                    layout, cell, point, turns["legs"][0], direction, outer_index, outer, outer_loop, far_start=turns["far_origin"]
+                    layout, cell, point, turns["legs"][0], direction, outer_index, outer, outer_loop, far_start=turns["far_origin"], band_height=height
                 )
                 if fields is None:
                     record["reason"] = why
                     continue
             elif turns["turned"] and turns["turn_placement"] == "straight":
                 straight_to = fields["target"]["kind"]
-                fields, why = _trace_wake(layout, cell, point, turns["legs"][0], turns["legs"][0], outer_index, outer, outer_loop)
+                fields, why = _trace_wake(layout, cell, point, turns["legs"][0], turns["legs"][0], outer_index, outer, outer_loop, band_height=height)
                 if fields is None:
                     record["reason"] = why
                     continue
@@ -803,7 +906,7 @@ def plan(layout, options: WakeOptions | None = None, *, height: float = 0.0) -> 
                     continue
             elif turns["turned"]:
                 fields, why = _trace_wake(
-                    layout, cell, turns["far_origin"], turns["legs"][-1], direction, outer_index, outer, outer_loop
+                    layout, cell, turns["far_origin"], turns["legs"][-1], direction, outer_index, outer, outer_loop, band_height=height
                 )
                 if fields is None:
                     record["reason"] = why
@@ -815,6 +918,9 @@ def plan(layout, options: WakeOptions | None = None, *, height: float = 0.0) -> 
                     )
                     continue
             record.update(turns)
+            record.pop("landing", None)
+            if fields.get("landing"):
+                record["landing"] = fields["landing"]
             target = fields["target"]
             ring_point = np.asarray(fields["ring_point"], dtype=np.float64)
             far_points, far_leg = far_path(record, ring_point)
@@ -830,6 +936,20 @@ def plan(layout, options: WakeOptions | None = None, *, height: float = 0.0) -> 
             )
             if blocked is None and len(far_points) > 1:
                 blocked = _ring_recrossed(cell, far_segments)
+            if blocked is None and fields.get("landing"):
+                # The strips beyond the ring have the ring pieces beside
+                # the crossing as sides; an aimed leg must leave the ring
+                # as steeply as a turned wake's leg crosses it.
+                angle, what = _chord_angle(
+                    cell.ring, ring_point, far_leg, _ring_cuts(layout, cell_index),
+                    owned_anchor_keys(layout, cell_index, record["wall_station"], record["wall_station"]),
+                )
+                if angle < RING_CHORD_ANGLE:
+                    blocked = (
+                        f"the wake's far leg aimed at the band of {target['site']!r} "
+                        f"({fields['landing']['turn_degrees']:+.0f} degrees off the wake direction) leaves the ring "
+                        f"beside a bend (the chord to the {what})"
+                    )
             if blocked is not None:
                 record["reason"] = blocked
                 continue
@@ -1928,7 +2048,9 @@ def _front_arrivals(front, position: int, point_te, direction, margin: float = S
     first leg is convex at the seam already.  The tangent is read over at
     least a quarter of the band height back along the front, skipping the
     hook the offset of a flank curving into the corner leaves beyond the
-    seam, and falls back to the wall's own tangent at the corner.
+    seam, and falls back to the wall's own tangent at the corner; the
+    front then leaves at least the margin clear of its own last segment
+    into the seam, turned by at most another margin for that.
     """
     direction = _unit(direction)
     normal = _left_normal(direction)
@@ -1967,6 +2089,16 @@ def _front_arrivals(front, position: int, point_te, direction, margin: float = S
             away = sigma * _turn_angle(direction, option)
             if away > best_away:
                 best, best_away = option, away
+        # The front's last segment into the seam is the corner the first
+        # cell sees; where it lies within the margin of the leaving
+        # direction (a band thinning towards the edge bends the front's
+        # end below its tangent) the front leaves the margin clear of it,
+        # by at most another margin, since a hook's remnant is noise.
+        last = seam - front.front[(index + step) % count]
+        if float(np.linalg.norm(last)) > 0.0:
+            short = margin - sigma * _turn_angle(last, best)
+            if short > 0.0:
+                best = _rotated(best, sigma * min(short, margin))
         result[label] = best
     return result
 
@@ -2451,9 +2583,6 @@ def _split_at_arclength(section: np.ndarray, arclength: float):
 # A wake landing on another body's band needs the band across it: below
 # this angle between the wake line and the band front the strips beyond
 # the ring end in slivers at the landing gate.
-LANDING_INCIDENCE = math.radians(35.0)
-
-
 def _write_wake_to_body(layout, graph: pg.PatchGraph, record: dict, fronts, wall_edge_style: str) -> pg.PatchGraph:
     """Write a wake that ends on a downstream body's band.
 
@@ -2588,12 +2717,19 @@ def _write_wake_to_body(layout, graph: pg.PatchGraph, record: dict, fronts, wall
     tangent = after_b[min(1, len(after_b) - 1)] - before_b[max(len(before_b) - 2, 0)]
     if float(np.linalg.norm(wake_line)) > 0.0 and float(np.linalg.norm(tangent)) > 0.0:
         incidence = abs(math.sin(_turn_angle(wake_line, tangent)))
+        aimed = record.get("landing")
         if incidence < math.sin(LANDING_INCIDENCE):
             raise pg.GraphError(
                 f"the wake of {record['site']!r} meets the band of {site_b.name!r} at "
-                f"{math.degrees(math.asin(incidence)):.1f} degrees; a wake landing needs the band across it "
-                f"(at least {math.degrees(LANDING_INCIDENCE):.0f} degrees) - a grazing arrival wants a bridge into the band"
+                f"{math.degrees(math.asin(incidence)):.1f} degrees"
+                + (
+                    f" with its far leg aimed {aimed['turn_degrees']:+.0f} degrees off the wake direction "
+                    f"(estimated {aimed['estimated_incidence_degrees']:.1f} degrees)"
+                    if aimed else ""
+                )
+                + f"; a wake landing needs the band across it (at least {math.degrees(LANDING_INCIDENCE):.0f} degrees)"
             )
+        record["landing_incidence_degrees"] = float(math.degrees(math.asin(incidence)))
     if length_before < width + clearance or length_after < width + clearance:
         raise pg.GraphError(
             f"{site_b.name!r} has no room beside the wake's landing gate for a band "

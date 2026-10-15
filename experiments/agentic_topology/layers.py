@@ -1071,11 +1071,49 @@ def _window_directions(wall: np.ndarray, offset: np.ndarray) -> np.ndarray:
     return delta / np.where(lengths > 0.0, lengths, 1.0)[:, None]
 
 
-def _seam_points(wall: np.ndarray, sharp, heights: np.ndarray, fluid_sign: float, overrides=None):
-    """One-sided offset points on each side of a sharp wall vertex."""
-    directions = g2.segment_directions(wall)
-    seams: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+# A seam's offset direction is the wall's chord over at least this fraction
+# of the band height from the vertex: the adjacent segment on an ordinary
+# point list, but across the base of a near-sharp trailing edge a few
+# hundredths of the band height wide, whose own normal would offset the seam
+# point sideways from the band front arriving there.
+SEAM_CHORD_FRACTION = 0.1
+
+
+def _wall_chord(wall: np.ndarray, index: int, step: int, span: float) -> tuple[np.ndarray, int]:
+    """Unit chord from the wall vertex ``index`` to the first vertex at least ``span`` away along the closed wall in direction ``step``, and that vertex."""
     count = len(wall) - 1
+    origin = wall[index % count]
+    cursor = index % count
+    for _ in range(count):
+        cursor = (cursor + step) % count
+        chord = wall[cursor] - origin
+        if float(np.linalg.norm(chord)) >= span or cursor == index % count:
+            break
+    norm = float(np.linalg.norm(chord))
+    if norm <= 0.0:
+        directions = g2.segment_directions(wall)
+        return (directions[index % count] if step > 0 else -directions[(index - 1) % count]), cursor
+    return chord / norm, cursor
+
+
+def _seam_points(wall: np.ndarray, sharp, heights: np.ndarray, fluid_sign: float, overrides=None):
+    """One-sided offset points on each side of a sharp wall vertex.
+
+    Each side's offset direction is the normal of the wall's chord to the
+    first vertex at least ``SEAM_CHORD_FRACTION`` of the band height back
+    (forward) from the vertex - the adjacent segment on an ordinary point
+    list, but not the base of a near-sharp trailing edge - and its offset
+    length is the feature's band height or the height at that vertex,
+    whichever is less: a band thinning along a flank towards the edge (a
+    slat's pressure side under the medial branch to the main element)
+    would otherwise end in a seam point standing out sideways from the
+    front arriving there, and the core patch beside a wake front leaving
+    that seam folds at the corner; a band capped at the feature alone (a
+    tail's tip under its own clearance) keeps the feature's height.  (The
+    offset's own windowed normal at that vertex is not used: next to a
+    feature its window straddles the corner.)
+    """
+    seams: dict[int, tuple[np.ndarray, np.ndarray]] = {}
     for order, index in sharp.items():
         height = float(heights[index])
         if overrides and order in overrides:
@@ -1085,13 +1123,14 @@ def _seam_points(wall: np.ndarray, sharp, heights: np.ndarray, fluid_sign: float
                 wall[index] + height * np.asarray(second, dtype=np.float64),
             )
             continue
-        incoming = directions[(index - 1) % count]
-        outgoing = directions[index % count]
+        incoming, before = _wall_chord(wall, index, -1, SEAM_CHORD_FRACTION * height)
+        incoming = -incoming
+        outgoing, after = _wall_chord(wall, index, 1, SEAM_CHORD_FRACTION * height)
         inward = -fluid_sign * np.array([-incoming[1], incoming[0]])
         outward = -fluid_sign * np.array([-outgoing[1], outgoing[0]])
         seams[order] = (
-            wall[index] + height * inward,
-            wall[index] + height * outward,
+            wall[index] + min(height, float(heights[before])) * inward,
+            wall[index] + min(height, float(heights[after])) * outward,
         )
     return seams
 

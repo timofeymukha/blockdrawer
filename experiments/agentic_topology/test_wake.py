@@ -143,6 +143,36 @@ class WakeConstructionTests(unittest.TestCase):
         baseline = run_case("sharp_bodies", CAVITY_FAST)
         self.assertNotEqual(result.graph.summary(), baseline.graph.summary())
 
+    def test_a_grazing_wake_is_aimed_at_the_downstream_band(self):
+        """The rear foil dropped a fifth of a chord under the front foil's
+        wake: along the wake direction the wake would meet the rear's band
+        at eight degrees on its upper shoulder, a grazing arrival whose
+        strips beyond the ring are slivers at the landing, so the plan aims
+        the far leg at the band - the first direction, a degree at a time,
+        whose estimated incidence passes - and the writer measures the real
+        one."""
+        names, loops = cases.tandem_foils(drop=0.2)
+        result = pipeline.run_external(names, loops, WAKE)
+        self.assertTrue(result.admissible, result.problems or result.failures)
+        by_site = {item["site"]: item for item in result.wakes.records}
+        front = by_site["front"]
+        self.assertTrue(front["applied"], front.get("reason"))
+        self.assertEqual(front["target"]["kind"], "body")
+        rear = result.diagram.sites[front["target"]["site_index"]]
+        straight = wake._landing_estimate(front["ring_point"], front["direction"], rear, result.metric.layer_height)
+        self.assertLess(straight[0], wake.LANDING_INCIDENCE, "along the wake direction the landing grazes")
+        aim = front["landing"]
+        self.assertLess(aim["turn_degrees"], 0.0, "the far leg turns towards the rear foil")
+        self.assertGreaterEqual(aim["estimated_incidence_degrees"], math.degrees(wake.LANDING_INCIDENCE + wake.LANDING_AIM_MARGIN))
+        self.assertGreaterEqual(front["landing_incidence_degrees"], math.degrees(wake.LANDING_INCIDENCE))
+        self.assertLess(front["target"]["point"][1], 0.0, "the gate sits below the axis, on the shoulder")
+        points, leg = wake.far_path(front, front["ring_point"])
+        self.assertEqual(len(points), 1)
+        self.assertTrue(np.allclose(leg, aim["leg"]))
+        # The rear foil's own wake and the tandem's eight wake faces are as before.
+        self.assertTrue(by_site["rear"]["applied"], by_site["rear"].get("reason"))
+        self.assertEqual(sum(1 for face in result.graph.faces if face.role == "wake"), 8)
+
     def test_a_wake_over_another_body_is_planned_through_its_cell(self):
         """With the far field many chords away the rear foil's far ring lies
         beyond its tail, so the plan sees the passage but the trial refuses
@@ -563,6 +593,23 @@ class WakeTurnTests(unittest.TestCase):
         self.assertEqual(len(faces_at_gate), 4, "two band blocks and the wedge's two lower quads")
         self.assertEqual(sum(1 for face in result.graph.faces if wedge[0] in face.corners), 3)
         self.assertFalse(result.problems)
+        # The nose's seam is repaired before the wake is written - with the
+        # seam template alone, so the wedge the row crosses is still there -
+        # since the rows through it leave the cavity stage nothing to
+        # rewrite afterwards.
+        repaired = [note for note in result.wake_notes if "repaired before the wakes" in note]
+        self.assertEqual(len(repaired), 1, result.wake_notes)
+        self.assertIn(":seam)", repaired[0])
+        self.assertNotIn(str(tail["anchor_key"]), repaired[0], "the wake's own seam is left to the writer")
+
+    def test_the_cavity_stage_can_be_held_to_one_template(self):
+        """The wake stage's pre-repair enumerates the seam template only."""
+        import fan_cavity
+        names = [item.name for item in fan_cavity.templates(fan_cavity.CavityOptions(), 8)]
+        self.assertIn("band", names)
+        self.assertIn("seam", names)
+        only = [item.name for item in fan_cavity.templates(fan_cavity.CavityOptions(templates=("seam",)), 8)]
+        self.assertEqual(only, ["seam"])
 
     def test_a_base_wake_off_its_flank_bisector_turns(self):
         """A blunt base's wake leaves along the bisector of its flanks and

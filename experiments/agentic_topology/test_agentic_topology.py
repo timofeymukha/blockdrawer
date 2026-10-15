@@ -459,6 +459,32 @@ class LayerTests(unittest.TestCase):
         self.assertTrue(np.allclose(radii, 1.1, atol=2e-3), radii.min())
         self.assertTrue(g2.is_simple(front.front, closed=True))
 
+    def test_a_seam_point_follows_the_front_arriving_at_the_feature(self):
+        """A sharp vertex closed by a tiny base, its band thinning along one
+        flank: the seam point on that side is offset along the normal of the
+        chord past the base, not the base's own, and by the thinner height
+        the front arrives with - never by more than the feature's own."""
+        # A wedge pointing along +x with a 0.002 base at the tip, closed.
+        tip = np.array([1.0, 0.0])
+        upper = np.array([[1.0 - 0.1 * k, 0.05 * k] for k in range(1, 9)])
+        lower = np.array([[1.0 - 0.1 * k, -0.05 * k] for k in range(8, 0, -1)])
+        wall = np.vstack([[tip + [0.0, 0.001]], upper, [[0.0, 0.0]], lower, [tip - [0.0, 0.001]], [tip + [0.0, 0.001]]])
+        count = len(wall) - 1
+        heights = np.full(count + 1, 0.2)
+        heights[count - 2] = 0.12   # the lower flank's last vertex: thinner
+        seams = layer_module._seam_points(wall, {0: 0}, heights, 1.0)
+        incoming, outgoing = seams[0]
+        base_normal = np.array([1.0, 0.0])
+        lower_normal = np.array([0.05, -0.1]) / math.hypot(0.05, 0.1)
+        # The incoming side (the base, then the lower flank): its offset is
+        # along the lower flank's normal, 0.12 long, not along the base's.
+        offset = incoming - wall[0]
+        self.assertAlmostEqual(float(np.linalg.norm(offset)), 0.12, places=9)
+        self.assertGreater(float(np.dot(offset / 0.12, lower_normal)), 0.95, offset)
+        self.assertLess(float(np.dot(offset / 0.12, base_normal)), 0.6, offset)
+        # The outgoing side (the upper flank) keeps the feature's height.
+        self.assertAlmostEqual(float(np.linalg.norm(outgoing - wall[0])), 0.2, places=9)
+
     def test_two_close_walls_clearance_limit_their_fronts(self):
         first = g2.orient_anticlockwise(
             g2.close_loop(cases.circle((-0.6, 0.0), 0.5, 200), 0.0)

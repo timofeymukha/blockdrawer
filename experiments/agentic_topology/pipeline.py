@@ -826,6 +826,41 @@ def _try_cgrid(result: PipelineResult, settings: PipelineOptions) -> PipelineRes
     return trial
 
 
+def _repair_seams_before_wakes(graph, domain, records, settings: PipelineOptions):
+    """The band graph with every sharp feature's seam repaired, except the wakes' own.
+
+    A turning wake carries its station's level row round the cell and
+    through every seam wedge on the way; the row splits the wedge and the
+    core patches beside it, so the cavity stage that runs on the finished
+    graph can no longer rewrite that feature's cavity.  A feature whose
+    plain seam leaves a band block the graph refuses - a cusp at the bottom
+    of a cove, whose band block runs round the cove - is therefore repaired
+    before the wakes are written, with the seam template alone - the seam
+    points re-placed, never a seam removed, so the rows still find a wedge
+    to cross; the features the wakes replace or land on keep their plain
+    seams for the writers.  Returns the repaired graph and the notes.
+    """
+    anchor_keys = set()
+    for record in records:
+        for key in [record.get("anchor_key")] + list(record.get("anchor_keys") or []):
+            if key is not None:
+                anchor_keys.add(tuple(key))
+
+    def keep(feature) -> bool:
+        vertex = feature["vertex"]
+        if vertex[0] == "gate" and tuple(vertex[2:]) in anchor_keys:
+            return False
+        return feature["incident_faces"] == 3
+
+    repaired = fan_cavity.repair(graph, domain, options=replace(settings.cavity, templates=("seam",)), keep=keep)
+    notes = [
+        f"seam of {record['feature']} repaired before the wakes ({record['applied']})"
+        for record in repaired.applied
+        if record.get("applied")
+    ]
+    return repaired.graph, notes
+
+
 def _rewrite(trial: PipelineResult, graph, settings: PipelineOptions):
     """Re-apply the wakes an earlier trial committed to a freshly built graph.
 
@@ -837,6 +872,7 @@ def _rewrite(trial: PipelineResult, graph, settings: PipelineOptions):
         return graph
     for item in accepted:
         item["applied"] = False
+    graph, _notes = _repair_seams_before_wakes(graph, trial.domain, accepted, settings)
     written = wake.apply(
         trial.layout, graph, accepted, trial.assembly.fronts,
         wall_edge_style=settings.wall_edge_style,
@@ -937,8 +973,10 @@ def _try_one_wake(result, settings, record, accepted, original_layout):
             if trial.assembly.failures:
                 record["failures"] = trial.assembly.failures
                 raise pg.GraphError("the wake layout could not build every wall band after making room")
+        band_graph, seam_notes = _repair_seams_before_wakes(trial.assembly.graph, trial.domain, trial_records, settings)
+        trial.wake_notes.extend(seam_notes)
         written = wake.apply(
-            trial.layout, trial.assembly.graph, trial_records, trial.assembly.fronts,
+            trial.layout, band_graph, trial_records, trial.assembly.fronts,
             wall_edge_style=settings.wall_edge_style,
         )
         refused = [item for item in written.records if not item["applied"]]
