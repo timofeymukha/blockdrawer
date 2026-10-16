@@ -1178,6 +1178,41 @@ def _plan_base(record, layout, settings, cell_index, cell, site, loop, stations,
 _OPTIONAL_KINDS = frozenset({"turning", "curvature", "seed"})
 
 
+def _remember_gates(layout) -> None:
+    """Keep the relaxed gate stations of the layout's cuts for ``_rebuild_cuts``.
+
+    Rebuilding the cuts from the anchors puts every gate back at its hint
+    or its closest-point projection and throws the relaxation away: the
+    30P30N main's medial junction gate, relaxed four hundredths before the
+    trailing edge, came back three thousandths behind it, and the band
+    block and core patch there were slivers.  The stations are kept per
+    cell and anchor key on the layout and restored after every rebuild in
+    the wake stage.
+    """
+    layout._wake_relaxed_gates = {
+        (cell_index, cut.anchor.key): float(cut.wall_station)
+        for cell_index, cuts in enumerate(layout.cuts)
+        for cut in cuts
+    }
+
+
+def _rebuild_cuts(layout) -> None:
+    """``layout.cuts = layout.anchors.cuts()`` with the remembered relaxed gates restored."""
+    import block_layout
+
+    layout.cuts = layout.anchors.cuts()
+    relaxed = getattr(layout, "_wake_relaxed_gates", None) or {}
+    for cell_index, cuts in enumerate(layout.cuts):
+        for cut in cuts:
+            if cut.anchor.fixed or cut.anchor.kind == "wake":
+                continue
+            station = relaxed.get((cell_index, cut.anchor.key))
+            if station is not None:
+                cut.wall_station = station
+    layout.patches = block_layout.build_patches(layout.diagram, layout.cells, layout.cuts)
+    layout.refresh()
+
+
 def prepare(layout, records: list[dict]) -> list[str]:
     """Pin the wake anchors on a trial layout before the bands are built.
 
@@ -1189,11 +1224,11 @@ def prepare(layout, records: list[dict]) -> list[str]:
     relaxation neither moves them nor their gates.  Callers own the trial
     layout.
     """
-    import block_layout
-
     diagram = layout.diagram
     outer_index = len(diagram.sites) - 1
     notes: list[str] = []
+    if getattr(layout, "_wake_relaxed_gates", None) is None:
+        _remember_gates(layout)
     for record in records:
         if not record.get("planned"):
             continue
@@ -1245,9 +1280,7 @@ def prepare(layout, records: list[dict]) -> list[str]:
             f"{record['wall_station']:.6g} along ({record['direction'][0]:.3f}, {record['direction'][1]:.3f}) "
             f"to {record['exit_chain']!r}, ring branch {record['ring_branch']}"
         )
-    layout.cuts = layout.anchors.cuts()
-    layout.patches = block_layout.build_patches(diagram, layout.cells, layout.cuts)
-    layout.refresh()
+    _rebuild_cuts(layout)
     return notes
 
 
@@ -1325,7 +1358,7 @@ def _prepare_lens(layout, anchors, diagram, record, removed, notes):
     body there refuses the wake.  The arc's corners and direction are kept
     under ``record["lens"]``.
     """
-    layout.cuts = anchors.cuts()
+    _rebuild_cuts(layout)
     passage = record["through"][0]
     cell_b = int(passage["cell"])
     cell = layout.cells[cell_b]
@@ -1386,7 +1419,7 @@ def _prepare_lens(layout, anchors, diagram, record, removed, notes):
 
 def _drop_landing_neighbours(layout, anchors, diagram, record, target, removed, notes):
     """On the downstream body drop optional gates inside the wake's landing span."""
-    layout.cuts = anchors.cuts()
+    _rebuild_cuts(layout)
     cell_b = int(target["cell"])
     site_b = diagram.sites[layout.cells[cell_b].site]
     total_b = site_b.curve.length()
@@ -1454,9 +1487,7 @@ def make_room(layout, records: list[dict], fronts, options: WakeOptions | None =
                 continue
             moved |= _make_room_at(layout, cell, cuts, position, front, record, labels, settings, notes)
     if moved:
-        layout.cuts = layout.anchors.cuts()
-        layout.patches = block_layout.build_patches(diagram, layout.cells, layout.cuts)
-        layout.refresh()
+        _rebuild_cuts(layout)
     return notes
 
 

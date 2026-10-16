@@ -228,14 +228,17 @@ choose a far field: that came with the brief.
   cove lip keeps its 85-degree corner, and the slat's level row ties the
   ring and front counts into one component of length ratio 473. Sized
   with `--wall-aspect 25` (cells along the wall 25 first widths long) the
-  run gives 5534 cells and a `checkMesh` that passes: no negative volumes,
-  max non-orthogonality 78 degrees on 107 faces (the seam corners at the
-  slat edge and cusp and the main's trailing-edge lens, where a thin lens
-  puts three corners almost in a line), max skewness 2.4, max aspect
-  ratio 171 in the far wake. Repair the seam corners by hand (the repair
-  recipe in section 4); the engine's next steps are the degenerate lens
-  (collapse it onto the junction when its depth is under the band
-  height), the count coupling of the level rows and the main's cove lip.
+  run gives 5532 cells and a `checkMesh` that passes: no negative volumes,
+  max non-orthogonality 78 degrees on 64 faces, max skewness 3.1, max
+  aspect ratio 180 in the far wake. The non-orthogonal faces are where a
+  band front arrives at a wake seam almost along the wake front - the
+  main's and the slat's trailing edges, the flap's base - which is the
+  C-grid's trailing-edge corner (the lower front and the wake front are
+  one line when the wall there runs along the wake), plus the main's cove
+  lip wedge and the flap's band under the main's wake. Repair those by
+  hand (the repair recipe in section 4); the engine's next steps are a
+  smooth join of band front and wake front at the seam, the count
+  coupling of the level rows and the main's cove lip.
 - **Internal flow** (channel, periodic hill, diffuser): a sweep between the two
   walls - columns from one wall band to the other, ends on inlet and outlet or
   on the cyclic pair. Corners of the domain are block corners; a guide wall's

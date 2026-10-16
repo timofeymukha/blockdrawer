@@ -296,7 +296,9 @@ them in the canvas widgets.
   upstream wake can follow a downstream one; a trial first repairs the other
   sharp features' seams with the cavity stage's seam template alone
   (`pipeline._repair_seams_before_wakes`), since a level row through a seam
-  wedge leaves the cavity stage nothing to rewrite there afterwards; trials
+  wedge leaves the cavity stage nothing to rewrite there afterwards, and
+  keeps the layout's relaxed gate stations through every rebuild of the
+  cuts (`wake._rebuild_cuts`); trials
   are committed only as complete admissible results and refusals keep their
   reasons under `medial.wakes`. Feature anchors take
   the closest ring point unless the outward ray's spoke is squarer by fifteen

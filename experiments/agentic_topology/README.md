@@ -429,7 +429,15 @@ result can be read either way; the session is written whenever the result is
    cove non-convex by its chords before the cove got its cuts, refused
    every wake of the slat that way.
    The features the wakes replace or land on keep their plain seams for
-   the writers.
+   the writers. Pinning the wake anchors rebuilds the cuts from the
+   anchors, which would put every gate back at its hint or its
+   closest-point projection; the wake stage remembers the relaxed gate
+   stations before the first pin and restores them after every rebuild
+   (`wake._remember_gates`, `wake._rebuild_cuts`), so a trial keeps the
+   layout's relaxation - the 30P30N main's medial junction gate stayed
+   four hundredths before the trailing edge instead of falling back to
+   three thousandths behind it, and `checkMesh` counted 64 severely
+   non-orthogonal faces instead of 107.
 
    **Blunt base.** Two convex corners within two percent of the perimeter of
    each other are one base, and the base gets its own template rather than

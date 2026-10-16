@@ -173,6 +173,31 @@ class WakeConstructionTests(unittest.TestCase):
         self.assertTrue(by_site["rear"]["applied"], by_site["rear"].get("reason"))
         self.assertEqual(sum(1 for face in result.graph.faces if face.role == "wake"), 8)
 
+    def test_pinning_a_wake_keeps_the_relaxed_gates(self):
+        """Rebuilding the cuts from the anchors puts every gate back at its
+        hint or projection; the wake stage remembers the relaxed stations and
+        restores them, so the gates the wake does not touch stay where the
+        layout's relaxation put them."""
+        import copy
+        import block_layout
+        import patch_solver
+
+        result = run_teardrop()
+        layout = block_layout.build_layout(result.diagram, result.options.layout)
+        patch_solver.solve(layout, result.options.solver)
+        projected = {(cell, cut.anchor.key): cut.projected_station for cell, cuts in enumerate(layout.cuts) for cut in cuts}
+        relaxed = {(cell, cut.anchor.key): cut.wall_station for cell, cuts in enumerate(layout.cuts) for cut in cuts}
+        moved = [key for key in relaxed if abs(relaxed[key] - projected[key]) > 1e-9]
+        self.assertTrue(moved, "the relaxation moves at least one gate on the teardrop")
+        trial = copy.deepcopy(layout)
+        records = wake.plan(trial, WAKE.wake, height=result.metric.layer_height)
+        wake.prepare(trial, records)
+        after = {(cell, cut.anchor.key): cut.wall_station for cell, cuts in enumerate(trial.cuts) for cut in cuts}
+        kept = [key for key in moved if key in after]
+        self.assertTrue(kept)
+        for key in kept:
+            self.assertAlmostEqual(after[key], relaxed[key], places=12, msg=str(key))
+
     def test_a_wake_over_another_body_is_planned_through_its_cell(self):
         """With the far field many chords away the rear foil's far ring lies
         beyond its tail, so the plan sees the passage but the trial refuses
@@ -593,14 +618,38 @@ class WakeTurnTests(unittest.TestCase):
         self.assertEqual(len(faces_at_gate), 4, "two band blocks and the wedge's two lower quads")
         self.assertEqual(sum(1 for face in result.graph.faces if wedge[0] in face.corners), 3)
         self.assertFalse(result.problems)
-        # The nose's seam is repaired before the wake is written - with the
-        # seam template alone, so the wedge the row crosses is still there -
-        # since the rows through it leave the cavity stage nothing to
-        # rewrite afterwards.
-        repaired = [note for note in result.wake_notes if "repaired before the wakes" in note]
-        self.assertEqual(len(repaired), 1, result.wake_notes)
-        self.assertIn(":seam)", repaired[0])
-        self.assertNotIn(str(tail["anchor_key"]), repaired[0], "the wake's own seam is left to the writer")
+
+    def test_seams_are_repaired_before_the_wakes_with_the_seam_template_alone(self):
+        """On the lens laid out without the gate relaxation both tips carry a
+        poor plain seam; the wake stage's pre-repair re-places their seam
+        points with the seam template alone, so the wedges the level rows
+        cross are still there, and leaves the wakes' own features alone."""
+        import block_layout
+        import external_topology
+        import planar_domain as pdm
+        import sites as site_module
+        import voronoi_graph
+
+        options = self.options(30.0)
+        loop = self.lens_loop()
+        outer, circle = pdm.fabricate_outer([loop], pipeline.farfield_spec(options))
+        domain = pdm.from_bodies(["lens"], [loop], outer=outer)
+        sites, scale = site_module.sites_from_domain(domain, circle=circle, frame=site_module.domain_frame([loop]))
+        diagram = voronoi_graph.build_diagram(sites, scale=scale, grid_width=options.grid_width)
+        metric = pipeline._metric(domain, options)
+        layout = block_layout.build_layout(diagram, options.layout)
+        assembly = external_topology.build_graph(layout, domain, metric, options=options.layer, wall_edge_style=options.wall_edge_style, allow_scale=True)
+        self.assertFalse(assembly.failures)
+        graph, notes = pipeline._repair_seams_before_wakes(assembly.graph, domain, [], options)
+        self.assertEqual(len(notes), 2, notes)
+        self.assertTrue(all(":seam)" in note for note in notes), notes)
+        tail_key = next(cut.anchor.key for cut in layout.cuts[0] if abs(cut.wall_station) < 1e-9)
+        # With the trailing tip named as a wake's own feature it is skipped.
+        graph, notes = pipeline._repair_seams_before_wakes(assembly.graph, domain, [{"anchor_key": list(tail_key)}], options)
+        self.assertEqual(len(notes), 1, notes)
+        self.assertNotIn(str(list(tail_key)), notes[0])
+        wedges = [face for face in graph.faces if face.provenance == "sharp-feature band seam"]
+        self.assertTrue(wedges, "the seam wedges are re-placed, not removed")
 
     def test_the_cavity_stage_can_be_held_to_one_template(self):
         """The wake stage's pre-repair enumerates the seam template only."""
