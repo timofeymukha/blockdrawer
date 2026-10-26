@@ -111,17 +111,24 @@ them in the canvas widgets.
   tune them; `checkMesh` remains the authority.
 - `blockdrawer/repair.py`: `repair_block`, the local repair an agent would
   make by hand: for one block it tries moving its interior vertices (eight
-  directions and the corner bisector, three step sizes), combining it across
-  each internal edge and splitting each edge, each on a copy of the model,
-  and applies the candidate that most raises the worst cell of the block
-  and its neighbours - judged by the corner screen and by the preview's
-  transfinite interior sampled at the real cell counts (up to 64 a side),
-  since the corner screen alone passed a merge that folded between the
-  corners and a coarser sampling passed a fold of one real cell. Boundary
-  vertices never move; a gain under half a degree is reported as a
-  structural defect and nothing changes. It is a registry command, so the
-  CLI, batches and the MCP server all have it; `checkMesh` stays the
-  authority.
+  directions and the corner bisector, three step sizes, incident curved
+  edges carried along), combining it across each internal edge, splitting
+  each edge, and regrading each edge to the series of its opposite edge in
+  the block's physical direction (crossed opposite gradings shear every
+  cell between them whatever the corners say), each on a copy of the model,
+  and applies the candidate that most improves the block and its
+  neighbours - judged by the corner screen and by the preview's transfinite
+  interior sampled at the real cell counts (up to 64 a side), since the
+  corner screen alone passed a merge that folded between the corners and a
+  coarser sampling passed a fold of one real cell. A move must raise the
+  worst cell by half a degree, or keep it and remove a tenth of the
+  *severe* sampled cells (a corner within 20 degrees of 0 or 180, checkMesh's
+  70 degrees of non-orthogonality on a sheared cell): a seam wedge's apex
+  angle is what it is however the cells are distributed, and the severe
+  count is what a grading move acts on. Boundary vertices never move; with
+  no improving move the result reports a structural defect and nothing
+  changes. It is a registry command, so the CLI, batches and the MCP server
+  all have it; `checkMesh` stays the authority.
 - `blockdrawer/render.py`: headless SVG/PNG rendering through one layout routine
   and two painters. Labels (vertex IDs, block IDs, cell counts, patch legend)
   are on by default; bounds, zoom-to-entity, and highlights select a region.
@@ -717,7 +724,11 @@ them in the canvas widgets.
   shared edge when exactly two blocks remain).
 - Moving a shared vertex updates every incident block. Invalid/inverted moves and
   moves that invalidate attached curved-edge geometry are rejected and rolled
-  back.
+  back. `move_vertex` with `carry_curves` instead carries every incident curved
+  edge with the vertex - its points follow the similarity about the edge's
+  other end that maps the old chord onto the new one, so an arc stays an arc
+  and a spline keeps its shape relative to its chord; the GUI drag keeps the
+  default.
 - The z direction is not drawn. `zCells` defaults to 1 and `zMin`/`zMax` default
   to 0/1. Extrusion and scale controls appear only in Export mode, entered with
   the configurable `E` shortcut; editing those fields does not mutate the model

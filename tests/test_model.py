@@ -562,6 +562,28 @@ class MeshModelTests(unittest.TestCase):
         self.assertLess(model.edge_point(selected, 0.5)[1], 0.0)
         model.validate()
 
+    def test_a_vertex_move_can_carry_its_curved_edges(self) -> None:
+        """Without ``carry_curves`` an arc's point stays and a move that
+        flattens it is rejected; with it the point follows the similarity
+        that maps the old chord onto the new one, so the arc keeps its shape."""
+        model = MeshModel()
+        selected = edge_key("v0", "v1")
+        model.set_edge_type(selected, "arc")
+        model.set_arc_point(selected, 0.5, -0.2)
+        # Move v1 so the arc's point would lie on the new chord.
+        with self.assertRaises(TopologyError):
+            model.move_vertex("v1", 1.5, -0.6)
+        self.assertEqual(model.vertices["v1"].x, 1.0)
+        self.assertEqual(model.arc_point(selected), (0.5, -0.2))
+
+        model.move_vertex("v1", 2.0, 0.0, carry_curves=True)
+
+        point_x, point_y = model.arc_point(selected)
+        # The chord doubled about v0: so did the point's offset.
+        self.assertAlmostEqual(point_x, 1.0)
+        self.assertAlmostEqual(point_y, -0.4)
+        model.validate()
+
     def test_arc_point_can_be_moved_and_collinear_move_is_rolled_back(self) -> None:
         model = MeshModel()
         selected = edge_key("v0", "v1")

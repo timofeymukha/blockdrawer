@@ -1,12 +1,17 @@
 """Local repair of one block by the moves an agent would try by hand.
 
 ``repair_block`` measures a block's corner angles, tries a deterministic set
-of local moves - moving one of its interior vertices, combining it with a
-neighbour across an internal edge, splitting one of its edges - each on a
-copy of the model, keeps the one that raises the worst corner angle of the
-block and its neighbours the most, and applies it. The corner-angle screen
-of :mod:`blockdrawer.quality` is the judge, measured from the first mesh
-cell so curved edges and grading count; ``checkMesh`` remains the authority
+of local moves - moving one of its interior vertices (its curved edges
+carried along), combining it with a neighbour across an internal edge,
+splitting one of its edges, regrading one of its edges to the series of the
+opposite edge - each on a copy of the model, keeps the one that most
+improves the block and its neighbours, and applies it. The judge is the
+corner-angle screen of :mod:`blockdrawer.quality`, measured from the first
+mesh cell so curved edges and grading count, plus the block interiors
+sampled at the real cell counts: a move must raise the worst cell by half a
+degree, or keep it and cut the number of severely sheared cells by a tenth
+- the measure a grading move acts on, since a wedge's apex angle is what it
+is however the cells are distributed. ``checkMesh`` remains the authority
 on the result.
 
 Vertices on a boundary edge never move: a wall vertex must stay on the
@@ -26,7 +31,7 @@ from .preview import _block_mesh_point, _directed_edge_samples, _sample_indices
 from .quality import QualityThresholds, block_quality
 from .session import from_data, to_data
 
-MOVES = ("move", "combine", "split")
+MOVES = ("move", "combine", "split", "grade")
 # The interior of every judged block is sampled at its real cell counts, up
 # to this many a side, with blockMesh's transfinite interpolation (the
 # preview's), so a candidate that folds or shears a block between its
@@ -43,6 +48,14 @@ NEIGHBOURHOOD_PADDING = 0.2
 # many degrees; a chain of hundredth-degree gains is a structural defect
 # asking for a different topology, and the agent should hear that.
 MIN_GAIN = 0.5
+# A sampled cell is severe when a corner is within this many degrees of 0 or
+# 180: for a sheared cell that is checkMesh's 70 degrees of non-orthogonality.
+# A move that does not raise the worst cell may still be applied when it
+# removes at least this fraction of the severe cells - crossed gradings on
+# the two spokes of a seam wedge put five thousand such cells into the wedge
+# on 30P30N while its 12-degree apex stayed what it was.
+SEVERE_ANGLE = 20.0
+SEVERE_GAIN = 0.1
 # Displacements tried for a movable vertex, as fractions of its shortest
 # incident edge, along eight compass directions and the corner's bisector.
 MOVE_STEPS = (0.1, 0.2, 0.35)
@@ -63,13 +76,23 @@ class RepairScore:
     min_angle: float
     max_angle: float
     interior: float
+    severe: int = 0
 
     @property
     def worst(self) -> float:
         return min(self.min_angle, 180.0 - self.max_angle, self.interior)
 
-    def key(self) -> tuple[float, float]:
-        return (self.worst, self.min_angle)
+    def improves(self, before: "RepairScore") -> bool:
+        """Half a degree on the worst cell, or a tenth fewer severe cells at no cost to it."""
+        if self.worst >= before.worst + MIN_GAIN:
+            return True
+        return (
+            self.worst >= before.worst - 1.0e-9
+            and self.severe <= before.severe - max(1, math.ceil(SEVERE_GAIN * before.severe))
+        )
+
+    def key(self) -> tuple[float, int, float, float]:
+        return (math.floor(self.worst / MIN_GAIN), -self.severe, self.worst, self.min_angle)
 
 
 @dataclass(frozen=True)
@@ -137,9 +160,13 @@ def _block_grid(model: MeshModel, block) -> list[list[tuple[float, float]]]:
     ]
 
 
-def _grid_worst(grid: list[list[tuple[float, float]]]) -> float:
-    """The worst corner, as distance from 0 or 180 degrees, over the grid's cells; -inf when a cell folds."""
+def _grid_worst(grid: list[list[tuple[float, float]]]) -> tuple[float, int]:
+    """The worst corner, as distance from 0 or 180 degrees, over the grid's cells, and the severe count.
+
+    The worst is ``-inf`` when a cell folds.
+    """
     worst = 180.0
+    severe = 0
     for row, upper in zip(grid, grid[1:]):
         for a in range(len(row) - 1):
             quad = (row[a], row[a + 1], upper[a + 1], upper[a])
@@ -147,7 +174,8 @@ def _grid_worst(grid: list[list[tuple[float, float]]]) -> float:
             for (x0, y0), (x1, y1) in zip(quad, quad[1:] + quad[:1]):
                 area += x0 * y1 - x1 * y0
             if area <= 0.0:
-                return -math.inf
+                return -math.inf, severe
+            cell_worst = 180.0
             for index in range(4):
                 here = quad[index]
                 before = quad[index - 1]
@@ -156,26 +184,32 @@ def _grid_worst(grid: list[list[tuple[float, float]]]) -> float:
                 bx, by = after[0] - here[0], after[1] - here[1]
                 norms = math.hypot(ax, ay) * math.hypot(bx, by)
                 if norms <= 0.0:
-                    return -math.inf
+                    return -math.inf, severe
                 cosine = max(-1.0, min(1.0, (ax * bx + ay * by) / norms))
                 angle = math.degrees(math.acos(cosine))
-                worst = min(worst, angle, 180.0 - angle)
-    return worst
+                cell_worst = min(cell_worst, angle, 180.0 - angle)
+            worst = min(worst, cell_worst)
+            if cell_worst < SEVERE_ANGLE:
+                severe += 1
+    return worst, severe
 
 
 def _score(model: MeshModel, box: tuple[float, float, float, float], limits: QualityThresholds) -> RepairScore:
     angles_min: list[float] = []
     angles_max: list[float] = []
     interior = 180.0
+    severe = 0
     blocks = {block.id: block for block in model.blocks}
     for identifier in _blocks_in(model, box):
         quality = block_quality(model, identifier, limits)
         angles_min.append(quality.min_angle)
         angles_max.append(quality.max_angle)
-        interior = min(interior, _grid_worst(_block_grid(model, blocks[identifier])))
+        block_worst, block_severe = _grid_worst(_block_grid(model, blocks[identifier]))
+        interior = min(interior, block_worst)
+        severe += block_severe
     if not angles_min:
         return RepairScore(0.0, 180.0, -math.inf)
-    return RepairScore(min(angles_min), max(angles_max), interior)
+    return RepairScore(min(angles_min), max(angles_max), interior, severe)
 
 
 def _copy(model: MeshModel) -> MeshModel:
@@ -237,7 +271,7 @@ def repair_block(
     moves: tuple[str, ...] = MOVES,
     thresholds: QualityThresholds | None = None,
 ) -> RepairResult:
-    """Apply the local move that most raises the worst corner angle around ``block_id``.
+    """Apply the local move that most improves the cells around ``block_id``.
 
     Candidates are tried on copies; the chosen one is replayed on ``model``
     and validated. With no improving candidate the model is untouched and
@@ -252,7 +286,7 @@ def repair_block(
     before = _score(model, box, limits)
     target = next(block for block in model.blocks if block.id == block_id)
 
-    best: tuple[tuple[float, float], str, dict[str, Any], RepairScore] | None = None
+    best: tuple[tuple, str, dict[str, Any], RepairScore] | None = None
     considered = 0
     rejected: list[str] = []
 
@@ -270,7 +304,7 @@ def repair_block(
         if score.interior == -math.inf:
             rejected.append(f"{operation} {arguments}: folds a sampled cell")
             return
-        if score.worst < before.worst + MIN_GAIN:
+        if not score.improves(before):
             return
         if best is None or score.key() > best[0]:
             best = (score.key(), operation, arguments, score)
@@ -289,8 +323,10 @@ def repair_block(
                     y = here.y + step * reach * direction[1]
                     consider(
                         "move_vertex",
-                        {"vertex": vertex_id, "x": x, "y": y},
-                        lambda working, v=vertex_id, x=x, y=y: working.move_vertex(v, x, y),
+                        {"vertex": vertex_id, "x": x, "y": y, "carry_curves": True},
+                        lambda working, v=vertex_id, x=x, y=y: working.move_vertex(
+                            v, x, y, carry_curves=True
+                        ),
                     )
     if "combine" in moves:
         occurrences = model.edge_occurrences()
@@ -312,23 +348,55 @@ def repair_block(
                     {"edge": list(current), "fraction": fraction},
                     lambda working, e=current, f=fraction: working.split_edge(e, f),
                 )
+    if "grade" in moves:
+        # Each edge may take the series of its opposite edge in the block's
+        # physical direction - the two run opposite ways round the block, so
+        # one is read reversed.  Crossed opposite gradings shear every cell
+        # between them whatever the corners say.
+        for first_index, second_index in ((0, 2), (1, 3)):
+            first = target.directed_edge(first_index)
+            second = target.directed_edge(second_index)
+            along = {
+                first: model.edge_expansion_in_direction(*first),
+                second: model.edge_expansion_in_direction(second[1], second[0]),
+            }
+            for taker, giver in ((first, second), (second, first)):
+                key = edge_key(*taker)
+                if model.edge_cells.get(key, 1) < 2:
+                    continue
+                wanted = along[giver]
+                if math.isclose(wanted, along[taker], rel_tol=1.0e-9):
+                    continue
+                # ``along`` is read in ``first``'s traversal direction; the
+                # taker's canonical value is that, or its reciprocal when the
+                # canonical order runs the other way.
+                directed = taker if taker is first else (taker[1], taker[0])
+                canonical = wanted if directed == key else 1.0 / wanted
+                consider(
+                    "set_edge_grading",
+                    {"edge": list(key), "parameter": "total_ratio", "value": canonical},
+                    lambda working, k=key, v=canonical: working.set_edge_grading(k, "total_ratio", v),
+                )
 
     if best is None:
         return RepairResult(
             block_id, None, {}, before, before, considered, neighbourhood,
             reason=(
                 f"no local move raises the worst cell around {block_id} by {MIN_GAIN:g} degrees "
+                f"or removes a tenth of its {before.severe} severe cells "
                 f"(corners {before.min_angle:.1f} to {before.max_angle:.1f} degrees, interior "
                 f"{before.interior:.1f}; {considered} candidates): the defect is in the "
-                "topology round it, not in a vertex"
+                "topology round it, not in a vertex or a grading"
             ),
             rejected=tuple(rejected[:8]),
         )
     _key, operation, arguments, after = best
     if operation == "move_vertex":
-        model.move_vertex(arguments["vertex"], arguments["x"], arguments["y"])
+        model.move_vertex(arguments["vertex"], arguments["x"], arguments["y"], carry_curves=True)
     elif operation == "combine_blocks":
         model.combine_blocks(tuple(arguments["edge"]))
+    elif operation == "set_edge_grading":
+        model.set_edge_grading(tuple(arguments["edge"]), arguments["parameter"], arguments["value"])
     else:
         model.split_edge(tuple(arguments["edge"]), arguments["fraction"])
     model.validate()
@@ -336,7 +404,9 @@ def repair_block(
         block_id, operation, arguments, before, after, considered, neighbourhood,
         reason=(
             f"{operation} took the corners around {block_id} from "
-            f"{before.min_angle:.1f}..{before.max_angle:.1f} (interior {before.interior:.1f}) to "
-            f"{after.min_angle:.1f}..{after.max_angle:.1f} (interior {after.interior:.1f}) degrees"
+            f"{before.min_angle:.1f}..{before.max_angle:.1f} (interior {before.interior:.1f}, "
+            f"{before.severe} severe cells) to "
+            f"{after.min_angle:.1f}..{after.max_angle:.1f} (interior {after.interior:.1f}, "
+            f"{after.severe} severe cells) degrees"
         ),
     )

@@ -398,17 +398,33 @@ a block corner wants a split there, a wake or far-field block with a
 170-degree corner wants its ring vertex moved (`move_vertex`) or the strip
 split, a band capped by the inscribed-disk rule in a circular far field
 wants the C-grid producer or a hand-built nose. `repair_block ID` does the
-local part of this for you: it tries moving the block's interior vertices,
-merging it across an internal edge and splitting its edges, judges each on
-the block and its neighbours by the corner screen *and* the sampled
-transfinite interior at the real cell counts (so a merge across a curved
-edge that folds between the corners is refused), and applies the best;
-repeat on the worst block until it reports that no move gains half a
-degree. On 30P30N main + flap eight repairs took the worst corner from 2 to
-14 degrees and checkMesh from 87 to 76 degrees of non-orthogonality, and
-there they stop: the cove and slot are sliver fans, and a fan does not
+local part of this for you: it tries moving the block's interior vertices
+(their curved edges carried along), merging it across an internal edge,
+splitting its edges and regrading an edge to the series of its opposite
+edge, judges each on the block and its neighbours by the corner screen
+*and* the sampled transfinite interior at the real cell counts (so a merge
+across a curved edge that folds between the corners is refused), and
+applies the best - the one that raises the worst cell by half a degree, or
+removes a tenth of the severely sheared cells when the worst cell is a
+block corner no move can change; repeat on the worst block until it
+reports a structural defect. Crossed gradings are the first thing it finds:
+two opposite edges graded towards opposite ends shear every cell between
+them while the block's corners stay as they were, and the quality screen's
+corner angles do not see it. On the full 30P30N at 475k cells twelve
+`repair_block` calls on the blocks checkMesh named (the cove's seam wedge
+twice, the slat cusp's dart twice, the cove core twice, the three seam
+corners, the flap base) took the severely non-orthogonal faces from 8725
+to 138 with the mesh still OK, in one batch of two minutes; an agent doing
+the same by hand with `set_edge_grading` and `move_vertex` reached 596 in
+36 minutes. On 30P30N main + flap eight repairs took the worst corner from
+2 to 14 degrees and checkMesh from 87 to 76 degrees of non-orthogonality,
+and there they stop: the cove and slot are sliver fans, and a fan does not
 become an array by local moves. A hand-built layout is the fallback, not
-the first move. A *circular* far field with `--wake` falls
+the first move. What the local moves cannot do on the full case is listed
+in the engine README's 30P30N notes: an edge two blocks need graded
+opposite ways (the cove core, a topological defect), a wake strip whose
+straight split edges fold its curved blocks, and the two-ended edges that
+want a multi-section grading. A *circular* far field with `--wake` falls
 back to the annular construction, since the C-grid producer wants a cap,
 two legs and an outlet; add `--farfield-outlet 25` and the circle is cut
 into those four chains on the circle itself (an `outlet` arc of that

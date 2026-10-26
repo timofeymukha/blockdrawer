@@ -559,7 +559,9 @@ def _run_set_control_point_count(
 
 
 def _run_move_vertex(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
-    model.move_vertex(args["vertex"], args["x"], args["y"])
+    model.move_vertex(
+        args["vertex"], args["x"], args["y"], carry_curves=bool(args.get("carry_curves", False))
+    )
     vertex = model.vertices[args["vertex"]]
     return {"vertex": vertex.id, "x": vertex.x, "y": vertex.y}
 
@@ -909,11 +911,21 @@ _register(CommandSpec(
 ))
 _register(CommandSpec(
     "move_vertex",
-    "Move a vertex; every incident block must stay strictly convex.",
+    (
+        "Move a vertex; every incident block must stay strictly convex. By "
+        "default the interpolation points of incident curved edges stay put; "
+        "carry_curves=true carries each curve with the vertex (scaled and "
+        "rotated about the edge's other end), so an arc stays an arc."
+    ),
     (
         Parameter("vertex", "vertex", "vertex ID"),
         Parameter("x", "float", "new x coordinate"),
         Parameter("y", "float", "new y coordinate"),
+        Parameter(
+            "carry_curves", "bool",
+            "carry incident curved edges with the vertex instead of leaving their points",
+            required=False, default=False,
+        ),
     ),
     _run_move_vertex,
 ))
@@ -966,16 +978,18 @@ _register(CommandSpec(
 _register(CommandSpec(
     "repair_block",
     (
-        "Raise a block's worst corner angle by the best local move - moving one "
-        "of its interior vertices, combining it across an internal edge, or "
-        "splitting one of its edges - judged on the block and its neighbours; "
-        "boundary vertices never move, and nothing changes when no move helps."
+        "Improve a block by the best local move - moving one of its interior "
+        "vertices (curved edges carried along), combining it across an internal "
+        "edge, splitting one of its edges, or regrading an edge to the series "
+        "of its opposite edge - judged on the block and its neighbours by the "
+        "worst cell and the count of severely sheared sampled cells; boundary "
+        "vertices never move, and nothing changes when no move helps."
     ),
     (
         Parameter("block", "str", "block ID"),
         Parameter(
             "moves", "optional_str",
-            "comma-separated subset of move,combine,split (default all)",
+            "comma-separated subset of move,combine,split,grade (default all)",
             required=False, default=None,
         ),
     ),

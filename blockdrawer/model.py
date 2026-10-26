@@ -156,6 +156,29 @@ def _spline_path_evaluator(
     return _cached_small_spline_path_evaluator(path)
 
 
+def _carried_geometry(
+    geometry: EdgeGeometry,
+    fixed: tuple[float, float],
+    moved_from: tuple[float, float],
+    moved_to: tuple[float, float],
+) -> EdgeGeometry:
+    """The geometry's points under the similarity about ``fixed`` taking the old chord end to the new one."""
+    old = complex(moved_from[0] - fixed[0], moved_from[1] - fixed[1])
+    new = complex(moved_to[0] - fixed[0], moved_to[1] - fixed[1])
+    if abs(old) <= 0.0:
+        return geometry
+    factor = new / old
+    origin = complex(*fixed)
+    points = tuple(
+        (
+            (origin + factor * (complex(px, py) - origin)).real,
+            (origin + factor * (complex(px, py) - origin)).imag,
+        )
+        for px, py in geometry.points
+    )
+    return EdgeGeometry(geometry.kind, points)
+
+
 class MeshModel(
     SpacingOperationsMixin,
     TopologyOperationsMixin,
@@ -1122,7 +1145,19 @@ class MeshModel(
             ) = previous
             raise
 
-    def move_vertex(self, vertex_id: str, x: float, y: float) -> None:
+    def move_vertex(
+        self, vertex_id: str, x: float, y: float, *, carry_curves: bool = False
+    ) -> None:
+        """Move a vertex; every incident block must stay strictly convex.
+
+        The interpolation points of incident curved edges stay where they
+        are, so a move that bends an arc flat or folds a spline is rejected.
+        With ``carry_curves`` each incident curved edge is instead carried
+        with the vertex: its points follow the similarity that maps the old
+        chord onto the new one about the fixed endpoint, so an arc stays the
+        same arc up to scale and rotation and a spline keeps its shape
+        relative to its chord.
+        """
         if vertex_id not in self.vertices:
             raise TopologyError(f"Unknown vertex {vertex_id!r}")
         if not (math.isfinite(x) and math.isfinite(y)):
@@ -1130,11 +1165,21 @@ class MeshModel(
 
         vertex = self.vertices[vertex_id]
         previous = (vertex.x, vertex.y)
+        previous_geometry = dict(self.edge_geometry)
         vertex.x, vertex.y = float(x), float(y)
+        if carry_curves:
+            for current, geometry in previous_geometry.items():
+                if vertex_id not in current:
+                    continue
+                other = self.vertices[current[1] if current[0] == vertex_id else current[0]]
+                self.edge_geometry[current] = _carried_geometry(
+                    geometry, (other.x, other.y), previous, (vertex.x, vertex.y)
+                )
         try:
             self.validate()
         except (TopologyError, ValueError):
             vertex.x, vertex.y = previous
+            self.edge_geometry = previous_geometry
             raise
 
     def add_vertex(self, x: float, y: float) -> Vertex:
