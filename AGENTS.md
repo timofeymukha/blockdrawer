@@ -319,7 +319,11 @@ them in the canvas widgets.
   percent of the perimeter turning through a reflex corner's worth together -
   is a rounded reflex corner: anchored and mitred at its turning midpoint
   (`layers.tight_concave_runs`, `effective_fluid_angles`), and the wall in
-  a rounded corner's mitre shadow carries the corner's far clearance. A
+  a reflex corner's mitre shadow - rounded or sharp, a sharp corner's
+  clearance capped by the notch beyond its two walls - carries the
+  corner's far clearance and is held at the corner's band height
+  (`layers.hold_corner_shadows`), since a band thickening past the mitre
+  leaves it along the bisector over the gate's core spoke. A
   tight convex bend - a curvature peak where the wall turns a corner's worth
   within a hundredth of the perimeter on each side, an ellipse tip or an
   airfoil nose - is a rounded convex corner, a forced and pinned gate like a

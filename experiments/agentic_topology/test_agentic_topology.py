@@ -485,6 +485,26 @@ class LayerTests(unittest.TestCase):
         # The outgoing side (the upper flank) keeps the feature's height.
         self.assertAlmostEqual(float(np.linalg.norm(outgoing - wall[0])), 0.2, places=9)
 
+    def test_the_band_inside_a_reflex_corner_shadow_holds_the_corner_height(self):
+        """Caps rising along both walls from a 90-degree pocket corner are held
+        at the corner's own cap within its mitre shadow - one corner height
+        along each wall - and untouched beyond it."""
+        # A closed square pocket wall traversed so the corner at the origin
+        # sees a 90-degree fluid sector; only the angles and arc lengths matter.
+        wall = np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [0.0, 0.0]])
+        wall = np.vstack([wall[0], *(np.linspace(wall[k], wall[k + 1], 21)[1:] for k in range(4))])
+        arclength = g2.cumulative_length(wall)
+        angles = np.full(len(wall), math.pi)
+        angles[0] = angles[-1] = 0.5 * math.pi
+        caps = 0.1 + 0.5 * np.minimum(arclength, arclength[-1] - arclength)
+        held = layer_module.hold_corner_shadows(caps, arclength, angles, closed=True)
+        gaps = np.minimum(arclength, arclength[-1] - arclength)
+        shadow = gaps <= 0.1
+        self.assertTrue(np.any(shadow[1:-1]))
+        self.assertTrue(np.allclose(held[shadow], 0.1), held[shadow])
+        self.assertTrue(np.allclose(held[~shadow], caps[~shadow]))
+        self.assertEqual(held[0], held[-1])
+
     def test_two_close_walls_clearance_limit_their_fronts(self):
         first = g2.orient_anticlockwise(
             g2.close_loop(cases.circle((-0.6, 0.0), 0.5, 200), 0.0)
@@ -2212,6 +2232,26 @@ class RegressionFixtureTests(unittest.TestCase):
         for cut in reflex_gates:
             gap = float(np.min(np.linalg.norm(corners - cut.wall_point, axis=1)))
             self.assertLess(gap, 1.0e-6 * result.scale)
+
+    def test_the_peanut_waist_band_is_held_at_the_corner_height_through_its_shadow(self):
+        """A reflex corner's shadow carries the corner's band height - raised to
+        it where the probe read the adjacent wall as a collapse, held to it
+        where the band would thicken past the mitre - so the front leaves the
+        mitre along the walls, not along the bisector over the core spoke."""
+        result = run_case("peanut_body", CAVITY_FAST)
+        self.assertTrue(result.admissible, (result.failures, result.problems[:2]))
+        front = next(iter(result.assembly.fronts.values()))
+        stations = g2.cumulative_length(front.wall)
+        angles = layer_module.fluid_angles(front.wall, 1.0 if g2.signed_area(front.wall) > 0.0 else -1.0)
+        total = float(stations[-1])
+        for index in np.where(np.degrees(angles) < 170.0)[0]:
+            height = float(front.heights[index])
+            self.assertGreater(height, 0.5 * float(np.median(front.heights)), height)
+            gaps = np.abs(stations[: len(angles)] - stations[index])
+            gaps = np.minimum(gaps, total - gaps)
+            shadow = gaps <= height / math.tan(0.5 * float(angles[index]))
+            self.assertTrue(np.all(front.heights[: len(angles)][shadow] <= height + 1e-9))
+            self.assertTrue(np.all(front.heights[: len(angles)][shadow] >= 0.9 * height - 1e-9), front.heights[: len(angles)][shadow])
 
     def test_the_skimming_tail_is_a_narrow_slot(self):
         """One sharp tip, one smooth hull, a gap near one percent of the scale."""

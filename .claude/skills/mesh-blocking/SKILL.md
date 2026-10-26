@@ -227,7 +227,8 @@ choose a far field: that came with the brief.
   since the cove's own medial axis is not in the diagram - so its band
   blocks turn 45 degrees at most instead of 117. Not resolved: 84-degree
   cells remain at the cusp's seam and the slat edge's seam, the main's
-  cove lip keeps its 85-degree corner, and the slat's level row ties the
+  cove lip corner is a proper mitre (its band used to pinch to a tenth
+  there), and the slat's level row ties the
   ring and front counts into one component of length ratio 473. Sized
   with `--wall-aspect 25` (cells along the wall 25 first widths long) the
   run gives 5532 cells and a `checkMesh` that passes: no negative volumes,
@@ -240,14 +241,22 @@ choose a far field: that came with the brief.
   lip wedge and the flap's band under the main's wake. Repair those by
   hand (the repair recipe in section 4); the engine's next steps are a
   smooth join of band front and wake front at the seam, the count
-  coupling of the level rows and the main's cove lip. Refined to about
+  coupling of the level rows and the 12-degree seam wedge at the cove's
+  reflex corner. Refined to about
   fifty cells across each band (`--first-width 5e-5 --growth 1.08
   --count-rule max`) the run gives 444k cells, and the cell sizes jump
   by up to 330 across the interfaces of the thin wake strips and of the
   band and core spokes graded from different ends; `--interface-growth
   1.25` grades the wall-normal edges from their neighbours (504k cells,
   `checkMesh` OK, worst interface jump 117, severely non-orthogonal
-  faces 7543 from 9335, max aspect ratio 284 from 637). What remains are
+  faces 7543 from 9335, max aspect ratio 284 from 637). With the main's
+  cove lip mitred the fine mesh is 475k cells, max non-orthogonality
+  84.7 from 89.5, skewness 2.8 from 3.2; the lip's blocks lost most of
+  their severely non-orthogonal faces (635 from 3307) but the seam wedge
+  at the cove's reflex corner - two seam spokes converging at 12 degrees
+  on one ring anchor far below the pocket - gained them (5210 from 1326)
+  once its core spokes were graded from the ring end, so the total rose
+  to 8725. What remains are that wedge and the
   two-ended edges - a wake line or hull piece asked for fine cells at
   both ends, which one geometric series cannot give - listed under
   `sizing.interface_grading.mismatches`; those want a split or a
@@ -259,7 +268,11 @@ choose a far field: that came with the brief.
 - **Concave corner** (fluid sector below about 157 degrees): the corner is a
   gate and its spoke runs along the bisector; the two adjacent blocks meet it at
   45 degrees. Acceptable; a single corner block with a 90-degree corner is
-  better and is a documented follow-up.
+  better and is a documented follow-up. The band keeps the corner's height
+  one corner height along each wall (the mitre shadow) and thickens beyond;
+  a pocket corner whose band pinched to a tenth, or whose band blocks
+  overlap the core patch beside the corner's spoke, is a defect of an
+  older engine, not a feature of the geometry.
 - **Singularities** (interior vertices of valence 3 or 5) are where fans,
   wakes and gap strips need them. Keep them off the wall; the total index is
   fixed by the domain's Euler characteristic, so every extra valence-5 vertex

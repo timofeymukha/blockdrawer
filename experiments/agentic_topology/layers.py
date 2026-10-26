@@ -196,6 +196,7 @@ def far_clearance(
     window: float = 2.0,
     steps: int = 26,
     rounded=(),
+    sharp_angle: float = math.radians(250.0),
 ) -> np.ndarray:
     """Height at which the level set owned by each wall vertex collapses.
 
@@ -260,19 +261,64 @@ def far_clearance(
     # probe reads as a collapse a fraction of the corner's clearance away.
     # Those vertices are the mitre's, so they carry the corner's clearance;
     # left at their own value, the slope limit would drag the corner's height
-    # down to it - the cove's band thinned to a third at its apex.  Sharp
-    # reflex corners keep their shadow's own values: in 30P30N's coves the
-    # inherited clearance let the lip's band cross the next element's spokes.
-    for index in sorted(set(int(item) for item in rounded)):
+    # down to it - the cove's band thinned to a third at its apex.  A sharp
+    # reflex corner's shadow is the same case, read with the window above:
+    # a point on the vertical wall of 30P30N's main cove four thousandths
+    # below its corner probes the ceiling beyond the window at four
+    # thousandths, the band ramped down to nothing at the corner and its
+    # blocks fanned into it (88 degrees of non-orthogonality).  The corner's
+    # own probe, at its mitre point with both adjacent walls inside the
+    # window, reads only the other bodies, so a sharp corner's clearance is
+    # capped by the *notch*: the distance from the corner to the wall's own
+    # segments beyond the two walls adjacent to it (up to the next sharp
+    # vertex on each side) - the cove's lip under the cove corner - and the
+    # shadow carries that.
+    sharp_reflex = [int(index) for index in np.nonzero(angles[:count] < REFLEX_FLUID_ANGLE)[0]]
+    rounded_set = set(int(item) for item in rounded)
+    sharp_mask = angles[:count] >= sharp_angle
+    for index in sorted(rounded_set | set(sharp_reflex)):
         if not angles[index] < REFLEX_FLUID_ANGLE:
             continue
+        clearance = float(low[index])
+        if index not in rounded_set:
+            adjacent = np.zeros(len(starts), dtype=bool)
+            for step in (1, -1):
+                cursor = index
+                for _ in range(len(starts)):
+                    following = (cursor + step) % count if closed else cursor + step
+                    if not closed and not (0 <= following < count):
+                        break
+                    segment = cursor if step > 0 else following
+                    if 0 <= segment < len(starts):
+                        adjacent[segment % len(starts)] = True
+                    cursor = following
+                    if cursor == index or sharp_mask[cursor % count] or angles[cursor % count] < REFLEX_FLUID_ANGLE:
+                        break
+            if not adjacent.all():
+                # The closest points of the other segments, kept only where
+                # they lie inside the corner's fluid sector: the wall across
+                # the solid (the main's upper surface a hundredth above its
+                # cove's ceiling) is no notch.
+                rest = np.nonzero(~adjacent)[0]
+                offset = points[index][None, :] - starts[rest]
+                fraction = (offset[:, 0] * vectors[rest, 0] + offset[:, 1] * vectors[rest, 1]) / safe[rest]
+                np.clip(fraction, 0.0, 1.0, out=fraction)
+                closest = starts[rest] + fraction[:, None] * vectors[rest]
+                towards = closest - points[index][None, :]
+                distance = np.sqrt(np.einsum("ij,ij->i", towards, towards))
+                bisector = direction[index] / max(float(np.linalg.norm(direction[index])), 1.0e-300)
+                inside = (towards @ bisector) >= np.cos(0.5 * float(angles[index])) * distance * (1.0 - 1.0e-9)
+                visible = distance[inside & (distance > 0.0)]
+                if len(visible):
+                    clearance = min(clearance, float(np.min(visible)))
+            low[index] = min(float(low[index]), clearance)
         cot = 1.0 / math.tan(max(0.5 * float(angles[index]), 1.0e-3))
-        shadow_reach = 1.5 * float(low[index]) * cot
+        shadow_reach = 1.5 * clearance * cot
         gaps = np.abs(stations[:count] - stations[index])
         if closed:
             gaps = np.minimum(gaps, total - gaps)
         shadow = gaps <= shadow_reach
-        low = np.where(shadow, np.maximum(low, low[index]), low)
+        low = np.where(shadow, np.maximum(low, clearance), low)
     return low
 
 
@@ -473,6 +519,46 @@ def reflex_shadow_cap(
             continue
         result[index] = min(result[index], fraction * float(np.min(gaps)) / cot)
     return result
+
+
+def hold_corner_shadows(
+    caps: np.ndarray, arclength: np.ndarray, fluid_angles_at: np.ndarray, *, closed: bool
+) -> np.ndarray:
+    """Hold the band inside a reflex corner's mitre shadow at the corner's height.
+
+    The level set owned by the wall within ``h / tan(theta / 2)`` of a reflex
+    corner is the corner's mitre point.  A band that thickens along the wall
+    past the corner has no front of its own there either - it leaves the
+    mitre along the bisector, which is the corner's own medial direction, and
+    so runs over the core spoke of the corner's gate: in 30P30N's main cove,
+    whose ring lies outside the pocket, the ceiling's band thickening from
+    the lip's mitre put the band block over the core patch beside it.  Held
+    at the corner's height through the shadow, the front leaves the mitre
+    along the wall and thickens at the slope limit beyond, on the wall's side
+    of any spoke steeper than that slope.
+    """
+    values = np.array(caps, dtype=np.float64)
+    angles = np.asarray(fluid_angles_at, dtype=np.float64)
+    stations = np.asarray(arclength, dtype=np.float64)
+    count = min(len(values), len(angles), len(stations))
+    if closed:
+        count -= 1
+    if count < 3:
+        return values
+    total = float(stations[count]) if closed else float(stations[count - 1])
+    for index in np.nonzero(angles[:count] < REFLEX_FLUID_ANGLE)[0]:
+        cot = 1.0 / math.tan(max(0.5 * float(angles[index]), 1.0e-3))
+        reach = float(values[index]) * cot
+        if reach <= 0.0:
+            continue
+        gaps = np.abs(stations[:count] - stations[index])
+        if closed:
+            gaps = np.minimum(gaps, total - gaps)
+        shadow = gaps <= reach
+        values[:count] = np.where(shadow, np.minimum(values[:count], values[index]), values[:count])
+    if closed and len(values) > count:
+        values[count] = values[0]
+    return values
 
 
 def slope_limited(
@@ -800,7 +886,10 @@ def build_front(
         # the flap's seam stops being constructible and two non-convex core
         # faces come back - and it does not remove the collapse it was aimed at.
         heights = slope_limited(
-            np.maximum(current, 0.0), arclength, options.slope_limit, closed=True
+            hold_corner_shadows(np.maximum(current, 0.0), arclength, angles_at, closed=True),
+            arclength,
+            options.slope_limit,
+            closed=True,
         )
         # Offset along the same windowed normals the level-set trimming
         # uses: a plain vertex normal turns the angular jitter of a dense

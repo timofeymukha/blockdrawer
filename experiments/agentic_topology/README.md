@@ -342,9 +342,26 @@ result can be read either way; the session is written whenever the result is
    corner's mitre shadow carries the corner's far clearance, since its own
    offset point lands on the other flank and the probe read that as a
    collapse; left at its own value the slope limit dragged the corner's band
-   down to a third. Sharp reflex corners keep their shadow's own values: in
-   30P30N's coves the inherited clearance let a lip's band cross the next
-   element's spokes. Vertices on a straight line are left out when the runs
+   down to a third. A sharp reflex corner's shadow is the same case read
+   with the window: on 30P30N's main cove a point of the vertical wall four
+   thousandths below the lip probed the ceiling beyond the window at four
+   thousandths, the band ramped down to nothing at the lip and the pocket's
+   blocks fanned into it. The sharp corner's clearance is capped by the
+   *notch* - the distance to the wall's own segments beyond the two walls
+   adjacent to the corner, inside its fluid sector - and its shadow carries
+   that (`layers.far_clearance`). The band inside the shadow is then *held*
+   at the corner's height (`layers.hold_corner_shadows`): a band that
+   thickens past the mitre has no front of its own there either, it leaves
+   the mitre along the bisector - the corner's own medial direction - and
+   runs over the core spoke of the corner's gate when the ring lies outside
+   the pocket, as the main cove's does (two overlapping coverage samples,
+   every wake refused). Held, the front leaves the mitre along the walls and
+   thickens at the slope limit beyond. (A check that failed a band block
+   whose front crosses the core spoke of its gate was tried and dropped: it
+   also caught a two-thousandths crossing on the tandem foils' rear nose,
+   which the cavity stage repairs by slanting the spoke, and thinning the
+   band for it refused the front foil's wake.) Vertices on a
+   straight line are left out when the runs
    are found, so a polygon densified by midpoints gives the same corners (it
    used to break the cove's run at 38 instead of 91 degrees and invert cells).
    The cove of `concave_and_convex` bottoms out in a bend
