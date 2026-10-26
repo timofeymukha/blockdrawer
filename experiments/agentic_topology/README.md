@@ -880,7 +880,12 @@ of the first cell width, flooring the size metric along every tangential
 edge, `SizingOptions.wall_aspect`; the wall-normal spokes and the rungs
 across a wake keep the isotropic law, and along a curved edge the floor is
 capped so that a cell turns at most fifteen degrees,
-`SizeMetric.MAX_CELL_TURNING`) - and
+`SizeMetric.MAX_CELL_TURNING`), `--count-rule mean|max` (one cell count
+per equality component: the length-weighted mean of its edges' demands,
+the default, lets a far-field piece hundreds of times longer than the wall
+piece it is tied to decide the count, so the wall is resolved as the far
+field asks; `max` takes the finest demand, so every edge meets the metric
+and the far field carries the wall's count, `SizingOptions.count_rule`) - and
 `--split CELL:CUT` forces an anchor where an agent asks for one. Because the
 run is stateless, that is also how `apply` realises a move: it rebuilds the
 very case the arguments describe, explicit `--outer` chains included, with the

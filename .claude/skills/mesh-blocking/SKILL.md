@@ -63,6 +63,7 @@ the engine directly:
 | free-stream direction, incidence | `--wake-direction dx,dy` (also selects which sharp vertices get a wake); incidence stays in the velocity |
 | boundary layer: first cell, band height | `--first-width W`, `--layer-height H` (absolute, in the geometry's units); `--core-size` for the far cells |
 | wall-parallel stretching | `--wall-aspect 25`: cells along the wall 25 first widths long, the usual RANS boundary-layer stretching; without it the wall is resolved as finely along as across |
+| which edge decides a count | `--count-rule max`: the finest demand in an equality component wins, so a wall piece tied to the far field is resolved as the wall asks (a real mesh); the default `mean` lets the long far-field pieces decide and under-resolves such walls |
 | patch names | `rename_boundary OLD NEW` on the session afterwards |
 
 What the engine then *builds* follows from the geometry - how many bodies,

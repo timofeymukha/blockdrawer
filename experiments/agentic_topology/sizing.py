@@ -43,6 +43,13 @@ class SizingOptions:
     # wake.  None keeps the isotropic law, first-cell-sized cells along the
     # wall.
     wall_aspect: float | None = None
+    # How one cell count is chosen for an opposite-edge equality component
+    # whose edges ask for different counts: ``mean`` takes the
+    # length-weighted mean of the edges' metric lengths, so a wall piece
+    # tied to a far-field piece hundreds of times longer is resolved as
+    # the far field asks; ``max`` takes the finest demand, so every edge
+    # meets the metric and the far field carries the wall's count.
+    count_rule: str = "mean"
     minimum_cells: int = 1
     maximum_cells: int = 400
     budget: int | None = None
@@ -182,6 +189,7 @@ class SizeMetric:
             "core_cell_size": self.core,
             "wall_aspect": self.options.wall_aspect,
             "tangential_floor": self.tangential_floor,
+            "count_rule": self.options.count_rule,
             "first_width_over_scale": self.first / self.scale,
             "core_size_over_scale": self.core / self.scale,
             "layer_cells": self.layer_cells,
@@ -238,7 +246,12 @@ def assign_counts(
         weights = np.asarray(lengths)
         wanted = np.asarray(targets)
         total = float(np.sum(weights))
-        mean = float(np.dot(weights, wanted) / total) if total > 0.0 else 1.0
+        if options.count_rule == "max":
+            mean = float(np.max(wanted)) if len(wanted) else 1.0
+        elif options.count_rule == "mean":
+            mean = float(np.dot(weights, wanted) / total) if total > 0.0 else 1.0
+        else:
+            raise ValueError(f"unknown count rule {options.count_rule!r}; use 'mean' or 'max'")
         records.append(
             {
                 "component": index,

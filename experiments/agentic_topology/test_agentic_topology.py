@@ -609,6 +609,26 @@ class DiscreteMoveTests(unittest.TestCase):
 
 
 class SizingTests(unittest.TestCase):
+    def test_the_finest_demand_count_rule_resolves_the_wall_not_the_far_field(self):
+        """With one count per equality component, the length-weighted mean
+        lets a far-field piece hundreds of times longer than the wall piece
+        it is tied to decide the count; ``count_rule="max"`` takes the
+        finest demand, so every edge meets the metric."""
+        names, loops = cases.two_circles()
+        mean = run_case("two_circles", FAST)
+        finest = pipeline.run_external(
+            names, loops, dataclasses.replace(FAST, sizing=dataclasses.replace(FAST.sizing, count_rule="max"))
+        )
+        self.assertTrue(finest.admissible, finest.problems or finest.failures)
+        self.assertEqual(finest.metric.described()["count_rule"], "max")
+        for record in finest.counts.components:
+            wanted = min(finest.metric.options.maximum_cells, max(record["metric_lengths"]) * finest.counts.budget_factor)
+            self.assertGreaterEqual(record["cells"] + 0.5, wanted, record["roles"])
+        self.assertGreaterEqual(finest.counts.total_cells, mean.counts.total_cells)
+        bad = pipeline.run_external(names, loops, dataclasses.replace(FAST, sizing=dataclasses.replace(FAST.sizing, count_rule="median")))
+        self.assertIsNone(bad.counts)
+        self.assertTrue(any("count rule" in str(error) for error in bad.errors), bad.errors)
+
     def test_the_wall_aspect_floors_the_size_along_tangential_edges(self):
         """``wall_aspect`` sets the wall-parallel spacing at the wall as a
         multiple of the first cell width: the size metric along every

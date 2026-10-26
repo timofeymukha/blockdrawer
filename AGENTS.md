@@ -359,8 +359,11 @@ them in the canvas widgets.
   is thin at the body widens towards the outlet instead of carrying its
   first-cell count for the length of the far field; the sizing stage grades
   the wake strips' streamwise edges and the channel lines from the end
-  nearer the wall, and `--wall-aspect RATIO` (`SizingOptions.wall_aspect`)
-  floors the size metric along tangential edges at that many first widths. The near field is built with the hull as
+  nearer the wall, `--wall-aspect RATIO` (`SizingOptions.wall_aspect`)
+  floors the size metric along tangential edges at that many first widths,
+  and `--count-rule max` (`SizingOptions.count_rule`) lets the finest demand
+  in an equality component decide its count instead of the length-weighted
+  mean. The near field is built with the hull as
   one chain first and with the outer boundary's chains mirrored onto it only
   when no wake leaves; a hull's chain breaks are anchored by the inward ray
   (`LayoutOptions.outer_by_ray`). The whole
