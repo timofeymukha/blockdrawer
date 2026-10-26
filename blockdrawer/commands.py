@@ -42,9 +42,10 @@ class CommandError(ValueError):
 class Parameter:
     """One typed command argument.
 
-    ``kind`` is one of ``edge``, ``edges``, ``vertex``, ``vertices``,
-    ``curve``, ``curves``, ``int``, ``float``, ``str``, ``bool``, ``point``,
-    ``points``, ``choice``, or ``optional_str``.
+    ``kind`` is one of ``edge``, ``directed_edge`` (the same edge, kept in
+    the order written, for values given along it), ``edges``, ``vertex``,
+    ``vertices``, ``curve``, ``curves``, ``int``, ``float``, ``str``,
+    ``bool``, ``point``, ``points``, ``choice``, or ``optional_str``.
     """
 
     name: str
@@ -134,8 +135,20 @@ def edge_text(edge: EdgeKey) -> str:
 
 def parse_edge(model: MeshModel, value: Any) -> EdgeKey:
     """Resolve ``a-b`` text or a two-item sequence into a known edge."""
+    return edge_key(*parse_directed_edge(model, value))
+
+
+def parse_directed_edge(model: MeshModel, value: Any) -> tuple[str, str]:
+    """Resolve ``a-b`` text or a two-item sequence into a known edge, in the order written.
+
+    The topological edge is unordered, but a grading value or a split
+    fraction is given along the edge, and the natural reading is the order
+    the agent wrote: ``set_edge_grading v9-v2 start_width 0.01`` puts the
+    small cell at ``v9``. A hand-built mesh whose every edge sorted the other
+    way got all its gradings crossed before this read the written order.
+    """
     if isinstance(value, str):
-        candidates: list[EdgeKey] = []
+        candidates: list[tuple[str, str]] = []
         for index in range(1, len(value)):
             if value[index] != EDGE_SEPARATOR:
                 continue
@@ -143,7 +156,7 @@ def parse_edge(model: MeshModel, value: Any) -> EdgeKey:
             second = value[index + 1:]
             if first in model.vertices and second in model.vertices \
                     and first != second:
-                candidates.append(edge_key(first, second))
+                candidates.append((first, second))
         if not candidates:
             raise CommandError(
                 f"Unknown edge {value!r}; expected two known vertex IDs "
@@ -154,7 +167,7 @@ def parse_edge(model: MeshModel, value: Any) -> EdgeKey:
                 f"Edge {value!r} is ambiguous; use the JSON form "
                 '["first", "second"] instead'
             )
-        current = candidates[0]
+        first, second = candidates[0]
     else:
         try:
             first, second = value
@@ -167,15 +180,15 @@ def parse_edge(model: MeshModel, value: Any) -> EdgeKey:
         for vertex_id in (first, second):
             if vertex_id not in model.vertices:
                 raise CommandError(f"Unknown vertex {vertex_id!r}")
-        try:
-            current = edge_key(first, second)
-        except TopologyError as exc:
-            raise CommandError(str(exc)) from exc
+    try:
+        current = edge_key(first, second)
+    except TopologyError as exc:
+        raise CommandError(str(exc)) from exc
     if current not in model.edge_cells:
         raise CommandError(
             f"{edge_text(current)} is not an edge of any block"
         )
-    return current
+    return (first, second)
 
 
 def resolve_curve(model: MeshModel, value: Any) -> str:
@@ -329,6 +342,8 @@ def coerce_argument(
     kind = parameter.kind
     if kind == "edge":
         return parse_edge(model, value)
+    if kind == "directed_edge":
+        return parse_directed_edge(model, value)
     if kind == "edges":
         return tuple(
             parse_edge(model, item) for item in _split_edges(model, value, name)
@@ -490,11 +505,25 @@ def _run_set_edge_cells(model: MeshModel, args: dict[str, Any]) -> dict[str, Any
     }
 
 
+_REVERSED_GRADING = {
+    "start_width": "end_width",
+    "end_width": "start_width",
+    "total_ratio": "total_ratio",
+    "cell_ratio": "cell_ratio",
+}
+
+
 def _run_set_edge_grading(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
-    edge = args["edge"]
-    model.set_edge_grading(
-        edge, args["parameter"], args["value"], propagate=args["propagate"]
-    )
+    written = args["edge"]
+    edge = edge_key(*written)
+    parameter, value = args["parameter"], args["value"]
+    if tuple(written) != edge:
+        # The value was given along the edge as written; the model stores
+        # gradings in canonical order, so read it the other way round.
+        parameter = _REVERSED_GRADING[parameter]
+        if parameter in ("total_ratio", "cell_ratio") and value > 0.0:
+            value = 1.0 / value
+    model.set_edge_grading(edge, parameter, value, propagate=args["propagate"])
     data = _grading_data(model, edge)
     links = model.spacing_links_for_edge(edge)
     if links:
@@ -598,7 +627,13 @@ def _run_remove_edge(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
 
 
 def _run_split_edge(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
-    result = model.split_edge(args["edge"], args["fraction"])
+    written = args["edge"]
+    edge = edge_key(*written)
+    fraction = args["fraction"]
+    if tuple(written) != edge:
+        # The fraction counts from the first vertex as written.
+        fraction = 1.0 - fraction
+    result = model.split_edge(edge, fraction)
     return to_json_value(result)
 
 
@@ -818,6 +853,10 @@ def export_settings_data(model: MeshModel) -> dict[str, Any]:
 
 
 _EDGE = Parameter("edge", "edge", "topological edge as first-second, e.g. v0-v1")
+_DIRECTED_EDGE = Parameter(
+    "edge", "directed_edge",
+    "edge as first-second; the value is read along the edge in the order written",
+)
 _BOUNDARY_TYPES = MeshModel.SUPPORTED_BOUNDARY_TYPES
 
 COMMANDS: dict[str, CommandSpec] = {}
@@ -840,13 +879,13 @@ _register(CommandSpec(
     "set_edge_grading",
     "Set directional grading from one representation; the others are derived.",
     (
-        _EDGE,
+        _DIRECTED_EDGE,
         Parameter(
             "parameter", "choice",
             "which representation the value uses",
             choices=MeshModel.GRADING_PARAMETERS,
         ),
-        Parameter("value", "float", "positive grading value in first->second direction"),
+        Parameter("value", "float", "positive grading value along the edge as written (start_width at the first vertex)"),
         Parameter(
             "propagate", "bool",
             "also grade the whole opposite-edge constraint component",
@@ -960,10 +999,10 @@ _register(CommandSpec(
     "split_edge",
     "Split the complete conformal block strip through an edge at a fraction.",
     (
-        _EDGE,
+        _DIRECTED_EDGE,
         Parameter(
             "fraction", "float",
-            "0-1 position along the edge in first->second direction; "
+            "0-1 position along the edge from the first vertex as written; "
             "snaps to the nearest existing mesh node",
         ),
     ),

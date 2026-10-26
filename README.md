@@ -457,8 +457,10 @@ blockdrawer-cli commands                           # lists every editing command
 ```
 
 Edits are applied atomically with `apply`. Commands are short text lines or
-JSON objects; edges are written `first-second` in either order, and several
-commands may be given at once, read from a file with `-f`, or piped through
+JSON objects; edges are written `first-second` in either order, a grading
+value or split fraction is read along the edge in the order you wrote it
+(`set_edge_grading v9-v2 start_width 0.01` puts the small cell at `v9`), and
+several commands may be given at once, read from a file with `-f`, or piped through
 `--stdin`. If any command fails nothing is written.
 
 ```bash

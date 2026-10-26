@@ -453,7 +453,11 @@ them in the canvas widgets.
 ## Headless and agent workflow
 
 - An edge is always written `first-second` in canonical (sorted) vertex-ID
-  order, and accepted in either order. Because vertex IDs may themselves contain
+  order, and accepted in either order. A value given *along* an edge - a
+  grading (`start_width` is at the first vertex as written, a ratio runs
+  first to second) or a split fraction - follows the order the command was
+  written in (`Parameter` kind `directed_edge`); the registry converts to the
+  canonical order the model stores. Because vertex IDs may themselves contain
   hyphens, text parsing tries every split against known vertex IDs and asks for
   the JSON list form when that is ambiguous. Blocks, vertices, patches, and
   curves are referenced by ID; curves also accept a unique name.

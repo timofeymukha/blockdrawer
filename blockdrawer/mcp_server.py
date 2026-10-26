@@ -51,7 +51,9 @@ JSON file; every tool takes its path, so several agents or a person in the GUI
 can share one file. Mechanics:
 
 1. describe_session for block, vertex, edge and patch IDs. Edges are written
-   first-second in either order, e.g. v0-v1.
+   first-second in either order, e.g. v0-v1; a grading value or a split
+   fraction is read along the edge in the order written (start_width at the
+   first vertex).
 2. edit_session with a list of commands ("set_edge_cells v0-v1 40",
    "add_block v1-v2", "set_edge_grading v0-v1 start_width 0.002",
    "set_edge_type v2-v3 arc", "split_edge v1-v2 0.5", "repair_block b12",
@@ -137,7 +139,10 @@ def list_commands(name: str | None = None) -> dict[str, Any]:
         return {"commands": [spec.describe()]}
     return {
         "commands": [spec.describe() for spec in command_specs()],
-        "edge_notation": "first-second in either order, e.g. v0-v1",
+        "edge_notation": (
+            "first-second in either order, e.g. v0-v1; a grading value or split "
+            "fraction is read along the edge in the order written"
+        ),
     }
 
 

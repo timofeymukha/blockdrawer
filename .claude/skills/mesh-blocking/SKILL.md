@@ -449,7 +449,9 @@ $$
   about $0.064$ element heights for $p = 7$, so the first element height is
   $y_1 / 0.064$.
 - **Growth** at most 1.2 to 1.3 per cell inside the band:
-  `set_edge_grading v0-v1 start_width 0.002` on the band spokes; grading
+  `set_edge_grading v0-v1 start_width 0.002` on the band spokes (the small
+  cell goes at the first vertex as you write it; write the wall vertex
+  first); grading
   propagates through the opposite-edge constraint component when asked
   (`propagate=true`).
 - **Counts are shared** along every constraint component (opposite edges of

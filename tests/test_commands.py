@@ -30,6 +30,25 @@ class EdgeParsingTests(unittest.TestCase):
         self.assertEqual(parse_edge(model, "v1-v0"), edge_key("v0", "v1"))
         self.assertEqual(parse_edge(model, ["v1", "v0"]), edge_key("v0", "v1"))
 
+    def test_grading_values_and_split_fractions_follow_the_written_order(self) -> None:
+        """``v3-v0 start_width w`` puts the small cell at v3, and ``split_edge
+        v3-v0 0.2`` cuts a fifth of the way from v3 - whichever way the
+        canonical key sorts. A hand-built mesh whose edges sorted the other
+        way had every grading crossed before this."""
+        model = MeshModel()
+        model.set_edge_cells(edge_key("v0", "v3"), 10)
+        batch = apply_commands(model, ["set_edge_grading v3-v0 start_width 0.01"])
+        values = batch.model.edge_grading_values(edge_key("v0", "v3"))  # canonical v0 -> v3
+        self.assertAlmostEqual(values.end_width, 0.01)
+        self.assertGreater(values.start_width, values.end_width)
+        ratio = apply_commands(model, ["set_edge_grading v3-v0 total_ratio 4"])
+        self.assertAlmostEqual(ratio.model.edge_grading_values(edge_key("v0", "v3")).total_ratio, 0.25)
+        same = apply_commands(model, [{"op": "set_edge_grading", "edge": ["v0", "v3"], "parameter": "total_ratio", "value": 4}])
+        self.assertAlmostEqual(same.model.edge_grading_values(edge_key("v0", "v3")).total_ratio, 4.0)
+        split = apply_commands(model, ["split_edge v3-v0 0.2"])
+        new_y = sorted(round(vertex.y, 6) for vertex in split.model.vertices.values() if vertex.id not in model.vertices)
+        self.assertEqual(new_y, [0.8, 0.8])
+
     def test_parse_edge_handles_hyphenated_vertex_ids(self) -> None:
         model = MeshModel()
         model.vertices["a-b"] = model.vertices.pop("v0")
