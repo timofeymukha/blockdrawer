@@ -629,6 +629,35 @@ class SizingTests(unittest.TestCase):
         self.assertIsNone(bad.counts)
         self.assertTrue(any("count rule" in str(error) for error in bad.errors), bad.errors)
 
+    def test_the_interface_growth_grades_the_spokes_from_their_neighbours(self):
+        """With ``interface_growth`` the sizing stage matches the cell widths
+        of the spokes across every block interface, finest first, raising a
+        count where a series at the cap needs more cells: the two-circle case
+        keeps every block untangled, the core spokes next to the bands start
+        at the bands' last cells, and the report says what was raised."""
+        names, loops = cases.two_circles()
+        plain = run_case("two_circles", FAST)
+        graded = pipeline.run_external(
+            names, loops, dataclasses.replace(FAST, sizing=dataclasses.replace(FAST.sizing, interface_growth=1.25))
+        )
+        self.assertTrue(graded.admissible, graded.problems or graded.failures)
+        self.assertEqual(graded.grid.inverted_cells, 0)
+        report = graded.interface_grading
+        self.assertIsNotNone(report)
+        self.assertGreaterEqual(report["graded"], 1)
+        self.assertGreaterEqual(report["total_cells"], plain.counts.total_cells)
+        before = (plain.grid.interface or {}).get("maximum_size_ratio") or 1.0
+        after = (graded.grid.interface or {}).get("maximum_size_ratio") or 1.0
+        self.assertLessEqual(after, max(1.0, before) + 1e-9)
+        # A core spoke's grading request points at its band end.
+        requests = {tuple(q.edge): q for q in sizing.propagate_counts_and_grading(graded.graph, dataclasses.replace(graded.counts), sizing.layer_grading_requests(graded.graph, graded.metric), graded.options.sizing)[0]}
+        core = [key for key, edge in graded.graph.edges.items() if edge.role == "core_spoke" and key in requests]
+        self.assertTrue(core)
+        for key in core:
+            band_end = [vertex for vertex in key if vertex[0] in ("ring", "front")]
+            self.assertTrue(band_end, key)
+            self.assertIn(tuple(requests[key].wall_vertex), [tuple(vertex) for vertex in band_end], key)
+
     def test_the_wall_aspect_floors_the_size_along_tangential_edges(self):
         """``wall_aspect`` sets the wall-parallel spacing at the wall as a
         multiple of the first cell width: the size metric along every

@@ -885,7 +885,21 @@ per equality component: the length-weighted mean of its edges' demands,
 the default, lets a far-field piece hundreds of times longer than the wall
 piece it is tied to decide the count, so the wall is resolved as the far
 field asks; `max` takes the finest demand, so every edge meets the metric
-and the far field carries the wall's count, `SizingOptions.count_rule`) - and
+and the far field carries the wall's count, `SizingOptions.count_rule`),
+`--interface-growth RATIO` (`SizingOptions.interface_growth`, off by default:
+after the counts, the wall-normal edges - band and core spokes, the rungs
+across the wake bands and the far-field lines continuing them - are graded
+so that the cell widths match across every block interface, finest first:
+a band spoke's last cell sets the first cell of the core spoke continuing
+it, a thin wake strip's width the first cell of the block beside it, and
+the opposite edge of a block takes the same series when its length is
+within a factor of two; one geometric series per edge, its cell-to-cell
+ratio capped at `RATIO` by raising the equality component's count, and a
+series at the cap hands nothing further on. Tangential edges keep their
+own rules. The report's `sizing.interface_grading` lists what was graded,
+which components were raised and the interfaces the single series could
+not match - the two-ended ones, where a wake line or hull piece is asked
+for fine cells at both ends) - and
 `--split CELL:CUT` forces an anchor where an agent asks for one. Because the
 run is stateless, that is also how `apply` realises a move: it rebuilds the
 very case the arguments describe, explicit `--outer` chains included, with the

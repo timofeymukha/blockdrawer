@@ -139,6 +139,8 @@ class PipelineResult:
     refused: list = field(default_factory=list)
     # Export decisions: a spline wall edge exported as its validated polyline.
     export_notes: list = field(default_factory=list)
+    # The interface grading propagation's report, when it ran.
+    interface_grading: dict | None = None
     # ``shape`` samples every block at uniform fractions and is judged against
     # the shape limits only; ``grid`` samples the graded mesh nodes the
     # session defines and carries the sizing report.
@@ -1283,6 +1285,10 @@ def _finish(result: PipelineResult, settings: PipelineOptions) -> None:
                 result.graph, result.metric, settings.sizing
             )
             requests = sizing.layer_grading_requests(result.graph, result.metric)
+            if settings.sizing.interface_growth is not None and settings.sizing.graded_layers:
+                requests, result.interface_grading = sizing.propagate_counts_and_grading(
+                    result.graph, result.counts, requests, settings.sizing
+                )
             model, identifiers, refused = session_emit.build_model_from_graph(
                 result.graph,
                 result.domain,
@@ -1464,6 +1470,7 @@ def build_analysis(result: PipelineResult) -> dict:
                 [] if result.counts is None else result.counts.unattainable
             ),
             "refused_grading": result.refused,
+            "interface_grading": result.interface_grading,
             # Informational: how the mesh the default counts define measures
             # up.  Not part of ``resolved``.
             "report": None if result.grid is None else result.grid.described(),

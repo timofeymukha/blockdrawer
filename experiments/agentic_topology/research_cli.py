@@ -238,6 +238,10 @@ def add_input_arguments(parser: argparse.ArgumentParser) -> None:
         help="one cell count per equality component: the length-weighted mean of its edges' demands (default) or the finest demand",
     )
     parser.add_argument(
+        "--interface-growth", type=float, default=None, metavar="RATIO",
+        help="largest cell-size ratio across a block interface and from cell to cell along an edge; the grading is propagated across the interfaces and counts raised where needed (default: off)",
+    )
+    parser.add_argument(
         "--wall-aspect", type=float, default=None, metavar="RATIO",
         help="wall-parallel spacing at the wall as a multiple of the first cell width (floors the size along tangential edges; default: the isotropic law)",
     )
@@ -408,6 +412,7 @@ def build_options(arguments) -> pipeline.PipelineOptions:
             growth=arguments.growth,
             wall_aspect=arguments.wall_aspect,
             count_rule=arguments.count_rule,
+            interface_growth=arguments.interface_growth,
             budget=arguments.cell_budget,
         ),
     )

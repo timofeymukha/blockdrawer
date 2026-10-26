@@ -363,7 +363,11 @@ them in the canvas widgets.
   floors the size metric along tangential edges at that many first widths,
   and `--count-rule max` (`SizingOptions.count_rule`) lets the finest demand
   in an equality component decide its count instead of the length-weighted
-  mean. The near field is built with the hull as
+  mean; `--interface-growth RATIO` (`SizingOptions.interface_growth`,
+  `sizing.propagate_counts_and_grading`) then grades the wall-normal edges
+  finest first so cell widths match across block interfaces, one geometric
+  series per edge with its ratio capped by raising the component's count,
+  and reports the interfaces one series cannot match. The near field is built with the hull as
   one chain first and with the outer boundary's chains mirrored onto it only
   when no wake leaves; a hull's chain breaks are anchored by the inward ray
   (`LayoutOptions.outer_by_ray`). The whole

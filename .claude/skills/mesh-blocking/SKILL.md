@@ -64,6 +64,7 @@ the engine directly:
 | boundary layer: first cell, band height | `--first-width W`, `--layer-height H` (absolute, in the geometry's units); `--core-size` for the far cells |
 | wall-parallel stretching | `--wall-aspect 25`: cells along the wall 25 first widths long, the usual RANS boundary-layer stretching; without it the wall is resolved as finely along as across |
 | which edge decides a count | `--count-rule max`: the finest demand in an equality component wins, so a wall piece tied to the far field is resolved as the wall asks (a real mesh); the default `mean` lets the long far-field pieces decide and under-resolves such walls |
+| cell sizes continuous across blocks | `--interface-growth 1.25`: the wall-normal edges are graded finest first so the cells match across every block interface (a band's last cell starts the core spoke, a thin wake strip's width starts its neighbour), the cell-to-cell ratio capped at 1.25 by raising counts; the report's `sizing.interface_grading.mismatches` names the interfaces one series per edge cannot match |
 | patch names | `rename_boundary OLD NEW` on the session afterwards |
 
 What the engine then *builds* follows from the geometry - how many bodies,
@@ -239,7 +240,18 @@ choose a far field: that came with the brief.
   lip wedge and the flap's band under the main's wake. Repair those by
   hand (the repair recipe in section 4); the engine's next steps are a
   smooth join of band front and wake front at the seam, the count
-  coupling of the level rows and the main's cove lip.
+  coupling of the level rows and the main's cove lip. Refined to about
+  fifty cells across each band (`--first-width 5e-5 --growth 1.08
+  --count-rule max`) the run gives 444k cells, and the cell sizes jump
+  by up to 330 across the interfaces of the thin wake strips and of the
+  band and core spokes graded from different ends; `--interface-growth
+  1.25` grades the wall-normal edges from their neighbours (504k cells,
+  `checkMesh` OK, worst interface jump 117, severely non-orthogonal
+  faces 7543 from 9335, max aspect ratio 284 from 637). What remains are
+  two-ended edges - a wake line or hull piece asked for fine cells at
+  both ends, which one geometric series cannot give - listed under
+  `sizing.interface_grading.mismatches`; those want a split or a
+  multi-section grading by hand.
 - **Internal flow** (channel, periodic hill, diffuser): a sweep between the two
   walls - columns from one wall band to the other, ends on inlet and outlet or
   on the cyclic pair. Corners of the domain are block corners; a guide wall's
