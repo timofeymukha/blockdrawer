@@ -547,7 +547,9 @@ them in the canvas widgets.
   particular, blending weights come from all four actual graded edge fractions,
   not uniform logical indices; this must remain consistent with `blockMesh` when
   opposite-edge grading differs. The configured positive coarsening factor keeps
-  every nth subdivision index and always both endpoints. Only interior logical
+  every nth subdivision index counted from *both* ends of the edge (so the set
+  is the same whichever way a block runs the edge and the lines of
+  neighbouring blocks meet on shared nodes) and always both endpoints. Only interior logical
   rows and columns are drawn; inter-block cell connectivity is deliberately
   irrelevant.
   The cache signature includes used block vertices, ordered blocks, edge cell

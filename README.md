@@ -263,8 +263,10 @@ numeric edge cell-count labels, mesh subdivision nodes, and curved-edge
 interpolation points. Hiding a label does not affect selection or mesh data.
 
 While preview is active, the right panel exposes a positive **Coarsening factor**.
-A value of `1` uses every edge subdivision; `10` uses every tenth subdivision,
-while always retaining block corners. Press `Enter` or **Apply coarsening** to
+A value of `1` uses every edge subdivision; `10` uses every tenth subdivision
+counted from both ends of each edge (so neighbouring blocks keep the same
+nodes on their shared edge), while always retaining block corners. Press
+`Enter` or **Apply coarsening** to
 update it. The panel reports sampled-node and interior-line counts together with
 construction and canvas-drawing time. Preview data is cached by block geometry,
 edge geometry, grading, cell counts, and coarsening, so hiding and reopening an

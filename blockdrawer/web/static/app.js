@@ -631,10 +631,14 @@
   // ------------------------------------------------------------------
 
   function sampleIndices(cells, coarsening) {
-    const indices = [];
-    for (let index = 0; index <= cells; index += coarsening) indices.push(index);
-    if (indices[indices.length - 1] !== cells) indices.push(cells);
-    return indices;
+    // Every coarsening-th node from either end, as preview.py keeps them, so
+    // the blocks sharing an edge keep the same nodes whichever way they run it.
+    const kept = new Set();
+    for (let index = 0; index <= cells; index += coarsening) {
+      kept.add(index);
+      kept.add(cells - index);
+    }
+    return Array.from(kept).sort((a, b) => a - b);
   }
 
   /** Node fractions and positions of an edge in canonical order, indices 0..cells. */

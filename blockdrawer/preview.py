@@ -308,10 +308,18 @@ def _block_mesh_point(
 
 
 def _sample_indices(cells: int, coarsening: int) -> tuple[int, ...]:
-    indices = list(range(0, cells + 1, coarsening))
-    if indices[-1] != cells:
-        indices.append(cells)
-    return tuple(indices)
+    """The node indices a coarsened preview keeps along an edge of ``cells``.
+
+    Every ``coarsening``-th node counted from *either* end is kept, so the
+    set is the same whichever way a block traverses the edge: the two
+    blocks sharing an edge, and the two opposite edges of one block, keep
+    the same nodes and their lines meet. Counting from one end only left
+    the lines of neighbouring blocks landing on different nodes whenever
+    the count was not a multiple of the factor.
+    """
+    kept = set(range(0, cells + 1, coarsening))
+    kept.update(cells - index for index in range(0, cells + 1, coarsening))
+    return tuple(sorted(kept))
 
 
 def _edge_signature(model: MeshModel, current: EdgeKey) -> Hashable:

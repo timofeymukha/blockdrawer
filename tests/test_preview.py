@@ -38,12 +38,55 @@ class MeshPreviewTests(unittest.TestCase):
 
         preview = build_mesh_preview(model, coarsening=3)
 
-        self.assertEqual(preview.sampled_node_count, 6)
-        self.assertEqual(preview.line_count, 1)
+        # Every third node from either end of the four-cell edge: 0, 3 and
+        # 4, 1 - so the kept set does not depend on the edge's direction.
+        self.assertEqual(preview.sampled_node_count, 8)
+        self.assertEqual(preview.line_count, 2)
         self.assertEqual(
             preview.polylines[0],
+            ((0.25, 0.0), (0.25, 1.0)),
+        )
+        self.assertEqual(
+            preview.polylines[1],
             ((0.75, 0.0), (0.75, 1.0)),
         )
+
+    def test_coarsened_lines_of_neighbouring_blocks_meet_on_shared_nodes(self) -> None:
+        # Two blocks share v1-v2; the first runs it upward, the second
+        # downward. With five cells and a factor of two, counting from one
+        # end only kept nodes 0, 2, 4, 5 on one side and 5, 3, 1, 0 on the
+        # other, so the lines did not meet across the edge.
+        model = MeshModel()
+        model.add_block(edge_key("v1", "v2"))
+        model.set_edge_cells(edge_key("v1", "v2"), 5)
+        model.set_edge_cells(edge_key("v0", "v1"), 5)
+        shared = edge_key("v1", "v2")
+        x = model.vertices["v1"].x
+
+        preview = build_mesh_preview(model, coarsening=2)
+
+        on_shared = sorted(
+            {
+                round(point[1], 9)
+                for line in preview.polylines
+                for point in (line[0], line[-1])
+                if abs(point[0] - x) < 1e-12
+            }
+        )
+        expected = sorted(
+            {round(model.edge_point(shared, model.edge_node_fraction(shared, index))[1], 9)
+             for index in (1, 2, 3, 4)}
+        )
+        self.assertEqual(on_shared, expected)
+        kept_per_block = len(on_shared)
+        # Both blocks end a line on each of those nodes.
+        hits = [
+            point
+            for line in preview.polylines
+            for point in (line[0], line[-1])
+            if abs(point[0] - x) < 1e-12
+        ]
+        self.assertEqual(len(hits), 2 * kept_per_block)
 
     def test_preview_boundary_nodes_honor_curves_and_grading(self) -> None:
         model = self._rectangular_model()
