@@ -633,7 +633,7 @@ def _run_split_edge(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
     if tuple(written) != edge:
         # The fraction counts from the first vertex as written.
         fraction = 1.0 - fraction
-    result = model.split_edge(edge, fraction)
+    result = model.split_edge(edge, fraction, vertex_id=args.get("id"))
     return to_json_value(result)
 
 
@@ -1009,7 +1009,17 @@ _register(CommandSpec(
         Parameter(
             "fraction", "float",
             "0-1 position along the edge from the first vertex as written; "
-            "snaps to the nearest existing mesh node",
+            "the new vertex sits there, and the two halves take the cell "
+            "counts of the nearest existing mesh node, so a fraction on a "
+            "node keeps the node locations",
+        ),
+        Parameter(
+            "id", "str",
+            "ID for the new vertex on this edge; the vertices on the other "
+            "edges of the strip become ID_1, ID_2, ... in affected_edges "
+            "order (default: the next free vN), so later commands in the "
+            "same batch can name the halves",
+            required=False, default=None,
         ),
     ),
     _run_split_edge,

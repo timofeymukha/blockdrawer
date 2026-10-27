@@ -48,7 +48,13 @@ class _CombinedEdgePlan:
 class TopologyOperationsMixin:
     """Compound topology operations supplied to MeshModel."""
 
-    def split_edge(self, selected: EdgeKey, fraction: float) -> EdgeSplitResult:
+    def split_edge(
+        self,
+        selected: EdgeKey,
+        fraction: float,
+        *,
+        vertex_id: str | None = None,
+    ) -> EdgeSplitResult:
         """Split every block in an opposite-edge constraint strip atomically.
 
         ``fraction`` follows the selected edge's canonical direction. Each
@@ -56,6 +62,11 @@ class TopologyOperationsMixin:
         fraction, so the inserted vertices form a conformal cut without hanging
         topology. Existing subdivisions are divided at the nearest original mesh
         node; a one-cell strip necessarily becomes two one-cell strips.
+        ``vertex_id`` names the new vertex on the selected edge; the vertices
+        on the other affected edges are named ``<vertex_id>_1``,
+        ``<vertex_id>_2``, ... in the order of ``affected_edges``, so a batch
+        can grade the halves before it is applied. An affected edge whose
+        split point is an existing vertex keeps that vertex and its name.
         """
         selected = edge_key(*selected)
         first_cells, second_cells = self.edge_split_cell_counts(
@@ -136,8 +147,16 @@ class TopologyOperationsMixin:
         edge_boundaries_before = dict(self.edge_boundaries)
 
         try:
+            names: dict[EdgeKey, str | None] = {current: None for current in affected}
+            if vertex_id is not None:
+                names[selected] = vertex_id
+                others = [current for current in affected if current != selected]
+                for number, current in enumerate(others, start=1):
+                    names[current] = f"{vertex_id}_{number}"
             split_vertices = {
-                current: self._vertex_at_or_new(*split_points[current])
+                current: self._vertex_at_or_new(
+                    *split_points[current], names[current]
+                )
                 for current in affected
             }
             split_vertex_ids = tuple(dict.fromkeys(

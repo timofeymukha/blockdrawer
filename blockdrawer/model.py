@@ -1198,20 +1198,7 @@ class MeshModel(
                 raise TopologyError(
                     f"A vertex already exists at ({x:g}, {y:g})"
                 )
-        if vertex_id is None:
-            vertex_id = self._next_id("v", self.vertices)
-        else:
-            if not isinstance(vertex_id, str) or not vertex_id.strip() \
-                    or vertex_id != vertex_id.strip() or any(
-                        character.isspace() for character in vertex_id
-                    ):
-                raise TopologyError(
-                    "A vertex ID must be a non-empty string without whitespace"
-                )
-            if vertex_id in self.vertices:
-                raise TopologyError(f"Vertex {vertex_id!r} already exists")
-
-        vertex = Vertex(vertex_id, float(x), float(y))
+        vertex = Vertex(self._new_vertex_id(vertex_id), float(x), float(y))
         self.vertices[vertex.id] = vertex
         try:
             self.validate()
@@ -1690,14 +1677,29 @@ class MeshModel(
         ordered = ordered[start:] + ordered[:start]
         return tuple(ordered)  # type: ignore[return-value]
 
-    def _vertex_at_or_new(self, x: float, y: float) -> Vertex:
+    def _vertex_at_or_new(
+        self, x: float, y: float, vertex_id: str | None = None
+    ) -> Vertex:
+        """The vertex at a point, or a new one there named ``vertex_id``."""
         for vertex in self.vertices.values():
             if self._coordinates_match(vertex.x, vertex.y, x, y):
                 return vertex
-        vertex_id = self._next_id("v", self.vertices)
-        vertex = Vertex(vertex_id, x, y)
-        self.vertices[vertex_id] = vertex
+        vertex = Vertex(self._new_vertex_id(vertex_id), x, y)
+        self.vertices[vertex.id] = vertex
         return vertex
+
+    def _new_vertex_id(self, vertex_id: str | None) -> str:
+        """A free vertex ID: the requested one, checked, or the next ``vN``."""
+        if vertex_id is None:
+            return self._next_id("v", self.vertices)
+        if not isinstance(vertex_id, str) or not vertex_id \
+                or any(character.isspace() for character in vertex_id):
+            raise TopologyError(
+                "A vertex ID must be a non-empty string without whitespace"
+            )
+        if vertex_id in self.vertices:
+            raise TopologyError(f"Vertex {vertex_id!r} already exists")
+        return vertex_id
 
     @classmethod
     def _coordinates_match(cls, x1: float, y1: float,

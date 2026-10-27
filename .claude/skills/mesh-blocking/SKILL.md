@@ -389,7 +389,10 @@ every block, grading and patch command without predicting generated IDs),
 supplied geometry, `add_boundary`, `rename_boundary`, `set_boundary_type`,
 `set_edge_boundary`, `set_export_settings`. Prefer `split_edge` and
 `combine_blocks` for conformal refinement of a strip over rebuilding blocks by
-hand. Commit the batch with the session so the topology can be regenerated and
+hand; `split_edge v3-v4 0.5 id=core_mid` names the new vertex (the strip's
+others become `core_mid_1`, `core_mid_2`, ...) so the same batch can grade
+the halves (`set_edge_grading v3-core_mid end_width 0.017 propagate=true`).
+Commit the batch with the session so the topology can be regenerated and
 reviewed.
 
 **Running the engine.** A run takes seconds on a synthetic body and five to

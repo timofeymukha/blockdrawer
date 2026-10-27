@@ -713,6 +713,11 @@ them in the canvas widgets.
   Any boundary assignment on the extruded source edge moves to the new opposite
   exterior edge when possible. Other topology edits prune assignments that have
   become internal or disappeared.
+- `MeshModel.add_vertex()` and `split_edge()` take an optional vertex ID (a
+  non-empty string without whitespace, not yet used); a split names the vertex
+  on the selected edge and the others `ID_1`, `ID_2`, ... in `affected_edges`
+  order, so a batch can refer to the halves before it is applied. Without one
+  the next free `vN` is taken.
 - `MeshModel.add_block_from_vertices()` accepts four distinct existing vertex IDs
   in any order, sorts them counter-clockwise, requires a strictly convex block,
   and rejects duplicate/non-manifold/misoriented topology. Existing edge cell

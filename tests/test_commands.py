@@ -211,6 +211,30 @@ class ApplyCommandTests(unittest.TestCase):
         self.assertEqual(len(removed.results[0].result["removed_blocks"]), 1)
         self.assertEqual(len(removed.model.blocks), 1)
 
+    def test_a_named_split_lets_the_same_batch_grade_the_halves(self) -> None:
+        model = MeshModel()
+        model.add_block(edge_key("v1", "v2"))
+        model.set_edge_cells(edge_key("v0", "v3"), 10)
+        batch = apply_commands(model, [
+            "split_edge v0-v3 0.3 id=band_top",
+            "set_edge_grading v0-band_top start_width 0.01",
+        ])
+        edited = batch.model
+        split = batch.results[0].result
+        self.assertEqual(
+            sorted(split["split_vertex_ids"]), ["band_top", "band_top_1", "band_top_2"]
+        )
+        # The named vertex is on the selected edge; the others are numbered
+        # along the strip through the second block.
+        self.assertEqual((edited.vertices["band_top"].x, edited.vertices["band_top"].y), (0.0, 0.3))
+        self.assertEqual(
+            sorted(edited.vertices[name].x for name in ("band_top_1", "band_top_2")),
+            [1.0, 2.0],
+        )
+        self.assertIn(edge_key("v0", "band_top"), edited.edge_grading)
+        with self.assertRaises(CommandError):
+            apply_commands(edited, ["split_edge v0-band_top 0.5 id=band_top_1"])
+
     def test_add_block_from_vertices_and_remove_edge_keep_one_block(self) -> None:
         model = MeshModel()
         batch = apply_commands(model, [
