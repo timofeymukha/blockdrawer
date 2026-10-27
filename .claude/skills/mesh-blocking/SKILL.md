@@ -60,6 +60,7 @@ the engine directly:
 | far field: a circle of radius $R$ about a point | `--farfield-shape circle --farfield-radius R --farfield-center X,Y`; `--farfield-outlet DEGREES` cuts it into cap, legs and an outlet arc about the wake direction when a C-grid is wanted |
 | far field: a C-shape, or a rectangle | `--farfield-shape cshape` / `rectangle` with the same radius and centre |
 | far field: these point lists, these patch names | `--outer NAME:ROLE=PATH` per chain, anticlockwise, joined end to end; the names become the patches |
+| internal flow: these wall / inlet / outlet point lists | the same `--outer` chains with no `--curve`: the chains are the whole boundary and the sweep producer builds it (roles `wall`, `inlet`, `outlet`, `symmetry`; a `cyclic` pair is refused there, the built-in `--case periodic_hill` shows it) |
 | free-stream direction, incidence | `--wake-direction dx,dy` (also selects which sharp vertices get a wake); incidence stays in the velocity |
 | boundary layer: first cell, band height | `--first-width W`, `--layer-height H` (absolute, in the geometry's units); `--core-size` for the far cells |
 | wall-parallel stretching | `--wall-aspect 25`: cells along the wall 25 first widths long, the usual RANS boundary-layer stretching; without it the wall is resolved as finely along as across |
@@ -264,7 +265,16 @@ choose a far field: that came with the brief.
 - **Internal flow** (channel, periodic hill, diffuser): a sweep between the two
   walls - columns from one wall band to the other, ends on inlet and outlet or
   on the cyclic pair. Corners of the domain are block corners; a guide wall's
-  curvature is followed by the columns.
+  curvature is followed by the columns. The sweep reads the domain as one
+  four-sided region, so a reflex corner on a guide wall - a backward-facing
+  step, any L-shaped channel - is refused today (`sweep_correspondence: ribs
+  cross or invert`, the step taken into the lower guide, whatever the band
+  height, wall-turning limit, raster width or start point): build those by
+  hand as an H-grid of rectangles, every domain corner a block corner, the
+  step corner a valence-three vertex, one corner block at the step foot
+  carrying both bands, one series per row and column. The 2:1 step came out
+  Mesh OK at 0 degrees of non-orthogonality in 36 blocks and eight minutes
+  that way (`/tmp/timofey/data/blockdrawer/backward_step/`).
 - **Concave corner** (fluid sector below about 157 degrees): the corner is a
   gate and its spoke runs along the bisector; the two adjacent blocks meet it at
   45 degrees. Acceptable; a single corner block with a 90-degree corner is

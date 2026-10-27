@@ -57,7 +57,10 @@ result can be read either way; the session is written whenever the result is
    Normalisation makes translation, rotation, uniform scaling and reversal of the
    whole boundary representation produce the same structure. Two adapters feed
    it: the repeated `--curve NAME=PATH` external input and an internal-flow
-   case.
+   case - a built-in `--case`, or `--outer NAME:ROLE=PATH` chains given with
+   no `--curve`, which are then the whole boundary of an internal domain
+   (roles `wall`, `inlet`, `outlet`, `symmetry`; a `cyclic` pair needs the
+   translation the command line does not carry and is refused).
 
    **The outer boundary is explicit.** An external case either supplies it -
    `--outer NAME:ROLE=PATH`, repeated in anticlockwise order with consecutive
@@ -888,7 +891,8 @@ hidden state.
 
 The outer boundary is chosen the same way: `--farfield-shape circle|rectangle`,
 `--farfield-scale`, `--farfield-sides`, `--farfield-box`, or an explicit
-`--outer NAME:ROLE=PATH` per chain; `--wake` (with `--wake-direction DX,DY`
+`--outer NAME:ROLE=PATH` per chain (alone, without a `--curve`, the chains
+are an internal domain for the sweep producer); `--wake` (with `--wake-direction DX,DY`
 and `--wake-fluid-angle`) asks for the C-grid wake cut at every sharp
 trailing edge. Re-quantisation is the same `run` with different metric flags -
 `--first-width-ratio`, `--core-size-ratio`, `--growth`, `--cell-budget`,
@@ -1957,7 +1961,11 @@ installations whose LAPACK/BLAS build is broken.
   are chosen independently.
 * The sweep detector needs four corners from chain joins or high-turning points;
   a four-sided domain supplied as a single smooth chain is reported as
-  `too_few_corners`.
+  `too_few_corners`. It reads the domain as one four-sided region: a reflex
+  corner on a guide wall (a backward-facing step given as `--outer` chains)
+  is taken into that guide and the column there folds
+  (`sweep_correspondence: ribs cross or invert`); there is no submapping cut
+  at a reflex corner yet, so such a domain is a hand build.
 
 ## Files
 

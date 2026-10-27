@@ -135,7 +135,9 @@ def add_input_arguments(parser: argparse.ArgumentParser) -> None:
         help=(
             "one chain of an explicit outer boundary as an open point list; "
             "repeat in anticlockwise order with consecutive chains joined end "
-            "to end; replaces the fabricated far field"
+            "to end; replaces the fabricated far field around --curve bodies, "
+            "or, without any --curve, is the whole boundary of an internal "
+            "domain (roles wall, inlet, outlet, symmetry)"
         ),
     )
     parser.add_argument(
@@ -429,6 +431,28 @@ def read_outer(arguments):
     return chains
 
 
+def internal_domain(outer, arguments) -> pdm.PlanarDomain:
+    """An internal-flow domain from ``--outer`` chains given without a body.
+
+    The chains are the whole boundary, anticlockwise and joined end to end,
+    with the roles the sweep producer reads: ``wall`` chains get bands,
+    ``inlet``/``outlet``/``symmetry`` chains do not.  A translational
+    ``cyclic`` pair needs its translation, which the command line does not
+    carry yet, so it is refused here rather than built wrong.
+    """
+    if any(role == "cyclic" for _name, role, _points in outer):
+        raise SystemExit(
+            "an internal domain from --outer cannot carry cyclic chains yet; "
+            "the built-in --case periodic_hill shows the periodic producer"
+        )
+    name = "internal"
+    if getattr(arguments, "session", None) is not None:
+        name = Path(arguments.session).stem.split(".")[0] or name
+    return pdm.from_chains(
+        name, [pdm.Chain(chain_name, role, points) for chain_name, role, points in outer]
+    )
+
+
 def run_case(arguments, options: pipeline.PipelineOptions | None = None) -> pipeline.PipelineResult:
     """Build the case the arguments describe; ``options`` overrides theirs.
 
@@ -447,7 +471,12 @@ def run_case(arguments, options: pipeline.PipelineOptions | None = None) -> pipe
         names, loops = cases.CASES[arguments.case]()
         return pipeline.run_external(names, loops, options, outer=outer)
     if not arguments.curve:
-        raise SystemExit("supply --case NAME or at least one --curve NAME=PATH")
+        if outer is None:
+            raise SystemExit(
+                "supply --case NAME, at least one --curve NAME=PATH, or an "
+                "internal domain as --outer chains alone"
+            )
+        return pipeline.run_internal(internal_domain(outer, arguments), options)
     names = [name for name, _path in arguments.curve]
     if len(set(names)) != len(names):
         raise SystemExit("curve names must be unique")

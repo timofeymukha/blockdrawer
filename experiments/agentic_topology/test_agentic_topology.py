@@ -913,6 +913,37 @@ class SessionTests(unittest.TestCase):
         first, _ = research_cli.build_options(parsed).sizing.widths(39.6)
         self.assertAlmostEqual(first, 2.0e-3 * 39.6)
 
+    def test_outer_chains_alone_are_an_internal_domain(self):
+        import research_cli
+
+        case = cases.straight_channel()
+        with tempfile.TemporaryDirectory() as folder:
+            argv = ["run"]
+            for boundary in case.boundaries:
+                path = Path(folder) / f"{boundary.name}.dat"
+                path.write_text(
+                    "\n".join(f"{x} {y}" for x, y in boundary.points) + "\n"
+                )
+                argv += ["--outer", f"{boundary.name}:{boundary.kind}={path}"]
+            parsed = research_cli.build_parser().parse_args(argv)
+            result = research_cli.run_case(parsed, FAST)
+            self.assertEqual(result.family, "internal")
+            self.assertTrue(result.admissible, result.failures or result.problems)
+            patches = set(result.model.boundaries)
+            self.assertEqual(
+                patches, {"bottom_wall", "outlet", "top_wall", "inlet"}
+            )
+            # A cyclic pair needs its translation, which --outer does not carry.
+            argv[-1] = argv[-1].replace("inlet:inlet", "inlet:cyclic")
+            parsed = research_cli.build_parser().parse_args(argv)
+            with self.assertRaises(SystemExit):
+                research_cli.run_case(parsed, FAST)
+            # And nothing at all is still refused with a message naming the forms.
+            with self.assertRaises(SystemExit):
+                research_cli.run_case(
+                    research_cli.build_parser().parse_args(["run"]), FAST
+                )
+
     def test_internal_session_round_trip_render_and_export(self):
         from blockdrawer.foam import block_mesh_dict
 
