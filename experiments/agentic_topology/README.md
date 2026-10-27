@@ -1964,7 +1964,9 @@ installations whose LAPACK/BLAS build is broken.
   `too_few_corners`. It reads the domain as one four-sided region: a reflex
   corner on a guide wall (a backward-facing step given as `--outer` chains)
   is taken into that guide and the column there folds
-  (`sweep_correspondence: ribs cross or invert`); there is no submapping cut
+  (`sweep_correspondence: ribs cross or invert`; the refusal names the
+  reflex joins on the guides, chains, fluid angle and point, under
+  `reflex_joins` - `sweep.reflex_joins`); there is no submapping cut
   at a reflex corner yet, so such a domain is a hand build.
 
 ## Files

@@ -276,6 +276,39 @@ class PeriodicPairTests(unittest.TestCase):
 
 
 class SweepTests(unittest.TestCase):
+    def test_a_reflex_join_on_a_guide_is_named(self):
+        # The lower guide of a backward-facing step, in the loop's
+        # anticlockwise direction: upstream wall, step face, downstream wall.
+        # Labels are per segment, as ``detect`` builds its sides.
+        points = np.asarray(
+            [[-1.0, 0.0], [-0.5, 0.0], [0.0, 0.0], [0.0, -0.5], [0.0, -1.0], [0.5, -1.0], [1.0, -1.0]]
+        )
+        labels = ("up", "up", "step", "step", "down", "down")
+        side = sweep_module.Side(points, labels)
+
+        found = sweep_module.reflex_joins(side)
+
+        self.assertEqual(
+            [(item["between"], round(item["fluid_angle_degrees"])) for item in found],
+            [(["up", "step"], 270)],
+        )
+        self.assertEqual(found[0]["point"], [0.0, 0.0])
+        # The step's foot is a convex join and is not reported; a duplicated
+        # join point does not hide the corner.
+        doubled = np.asarray([[-1.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, -1.0], [1.0, -1.0]])
+        self.assertEqual(
+            [item["between"] for item in sweep_module.reflex_joins(
+                sweep_module.Side(doubled, ("up", "step", "step", "down"))
+            )],
+            [["up", "step"]],
+        )
+        failure = sweep_module._with_reflex_cause(
+            {"stage": "sweep_correspondence", "reason": "ribs cross"}, found
+        )
+        self.assertIn("up/step (270 degrees of fluid)", failure["reason"])
+        self.assertIn("build it by hand", failure["reason"])
+        self.assertEqual(failure["reflex_joins"], found)
+
     def test_straight_channel_is_detected_and_built(self):
         result = run_internal("straight_channel")
         self.assertTrue(result.resolved, result.failures or result.problems)

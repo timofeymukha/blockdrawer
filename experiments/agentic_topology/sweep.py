@@ -102,6 +102,79 @@ class Side:
         )
 
 
+REFLEX_JOIN_TOLERANCE = 1.0  # degrees of fluid angle over 180 that count
+
+
+def reflex_joins(side: Side) -> list[dict]:
+    """The chain joins on a side where the fluid turns a reflex corner.
+
+    The domain loop runs anticlockwise with the fluid on its left, so a
+    right turn at a join is a reflex corner of the domain - the edge of a
+    backward-facing step - which one four-sided sweep cannot carry on a
+    guide: the column there has to fold. Each entry names the two chains,
+    the fluid angle in degrees and the point.
+    """
+    points = np.asarray(side.points, dtype=np.float64)
+    labels = side.segment_labels
+    found: list[dict] = []
+    for index in range(1, min(len(labels), len(points))):
+        if labels[index] == labels[index - 1]:
+            continue
+        before = _step_before(points, index)
+        after = _step_after(points, index)
+        if before is None or after is None:
+            continue
+        cross = float(before[0] * after[1] - before[1] * after[0])
+        dot = float(before[0] * after[0] + before[1] * after[1])
+        fluid = 180.0 - math.degrees(math.atan2(cross, dot))
+        if fluid > 180.0 + REFLEX_JOIN_TOLERANCE:
+            found.append(
+                {
+                    "between": [labels[index - 1], labels[index]],
+                    "fluid_angle_degrees": fluid,
+                    "point": [float(points[index][0]), float(points[index][1])],
+                }
+            )
+    return found
+
+
+def _step_before(points: np.ndarray, index: int):
+    """The last non-zero step arriving at ``points[index]``."""
+    for previous in range(index - 1, -1, -1):
+        step = points[index] - points[previous]
+        if float(np.hypot(*step)) > 0.0:
+            return step
+    return None
+
+
+def _step_after(points: np.ndarray, index: int):
+    """The first non-zero step leaving ``points[index]``."""
+    for following in range(index + 1, len(points)):
+        step = points[following] - points[index]
+        if float(np.hypot(*step)) > 0.0:
+            return step
+    return None
+
+
+def _with_reflex_cause(failure: dict, reflex: list[dict]) -> dict:
+    """Name the reflex joins on the guides as the cause of a folded sweep."""
+    if not reflex:
+        return failure
+    joins = ", ".join(
+        f"{item['between'][0]}/{item['between'][1]} "
+        f"({item['fluid_angle_degrees']:.0f} degrees of fluid)"
+        for item in reflex
+    )
+    failure = dict(failure)
+    failure["reflex_joins"] = reflex
+    failure["reason"] += (
+        f"; a guide turns a reflex corner at the join {joins} - a step or an "
+        "L-shaped channel - which one four-sided sweep cannot carry (no "
+        "submapping cut there yet): build it by hand"
+    )
+    return failure
+
+
 @dataclass
 class FourSided:
     sides: tuple[Side, Side, Side, Side]
@@ -741,22 +814,29 @@ def build(
         mandatory_second=second_side.joins(),
     )
     correspondence = relax_correspondence(first, second, correspondence, settings)
+    reflex = [*reflex_joins(guide_a), *reflex_joins(guide_b)]
     if not correspondence.monotone:
         failures.append(
-            {
-                "stage": "sweep_correspondence",
-                "reason": "the relaxed guide correspondence is not monotone",
-                "first": [float(value) for value in correspondence.first],
-                "second": [float(value) for value in correspondence.second],
-            }
+            _with_reflex_cause(
+                {
+                    "stage": "sweep_correspondence",
+                    "reason": "the relaxed guide correspondence is not monotone",
+                    "first": [float(value) for value in correspondence.first],
+                    "second": [float(value) for value in correspondence.second],
+                },
+                reflex,
+            )
         )
     if correspondence.crossing:
         failures.append(
-            {
-                "stage": "sweep_correspondence",
-                "reason": "ribs cross or invert in these columns",
-                "columns": list(correspondence.crossing),
-            }
+            _with_reflex_cause(
+                {
+                    "stage": "sweep_correspondence",
+                    "reason": "ribs cross or invert in these columns",
+                    "columns": list(correspondence.crossing),
+                },
+                reflex,
+            )
         )
 
     # Cut stations become vertices of the guide before it is offset, so a front

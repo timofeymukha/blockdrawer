@@ -269,7 +269,8 @@ choose a far field: that came with the brief.
   four-sided region, so a reflex corner on a guide wall - a backward-facing
   step, any L-shaped channel - is refused today (`sweep_correspondence: ribs
   cross or invert`, the step taken into the lower guide, whatever the band
-  height, wall-turning limit, raster width or start point): build those by
+  height, wall-turning limit, raster width or start point; the refusal
+  names the reflex join under `reflex_joins`): build those by
   hand as an H-grid of rectangles, every domain corner a block corner, the
   step corner a valence-three vertex, one corner block at the step foot
   carrying both bands, one series per row and column. The 2:1 step came out
@@ -286,7 +287,15 @@ choose a far field: that came with the brief.
 - **Singularities** (interior vertices of valence 3 or 5) are where fans,
   wakes and gap strips need them. Keep them off the wall; the total index is
   fixed by the domain's Euler characteristic, so every extra valence-5 vertex
-  needs a valence-3 partner somewhere.
+  needs a valence-3 partner somewhere. They are also the only place a cell
+  count changes direction: in a conformal H-grid every transverse count
+  runs the whole length of the channel (the step mesh carries its 0.045
+  band-top cells to the outlet), and coarsening it downstream means
+  turning a column of blocks - a valence-3 vertex ends one strip of
+  blocks, its count continuing streamwise, a valence-5 vertex starts one -
+  with every block kept convex and the band rows untouched. Do that only
+  when the far field's cell count matters; a long uniform strip is cheaper
+  than a bad transition.
 
 ## 4. Build outward from the wall
 
