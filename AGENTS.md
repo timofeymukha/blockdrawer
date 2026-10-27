@@ -475,7 +475,9 @@ them in the canvas widgets.
   angles are measured between the first mesh cell's edges at each block corner
   so curved edges and grading count; interface ratios compare the transverse
   first-cell widths of the two blocks sharing an internal edge.
-- Rendering reserves a band for the legend so it never covers geometry, culls
+- Rendering sizes the canvas by the shown region's aspect ratio when no height
+  is given (`render.resolved_size`: between a quarter and twice the width,
+  padding and legend band added), reserves a band for the legend so it never covers geometry, culls
   entities outside the requested bounds, offsets cell-count labels outward from
   the first incident block, decimates control-point labels above 250 points,
   and hides node ticks above the canvas's individual-marker limit (200 cells). Highlight fills

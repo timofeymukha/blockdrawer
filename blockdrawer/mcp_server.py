@@ -246,7 +246,7 @@ def render_session(
     path: str,
     output: str | None = None,
     width: int = 1000,
-    height: int = 750,
+    height: int | None = None,
     zoom: list[str] | None = None,
     margin: float = 0.3,
     highlight: list[str] | None = None,
@@ -266,11 +266,14 @@ def render_session(
     and spacing links are drawn. ``zoom`` frames the named blocks, edges
     (a-b), or vertices with a relative ``margin``; ``bounds`` gives an explicit
     [xmin, ymin, xmax, ymax] region; ``highlight`` emphasizes entities;
-    ``preview`` adds interior mesh lines. When ``output`` ends in .svg or .png
-    the file is written as well. Pass ``return_image=false`` with ``output``
-    to write a deliverable picture without receiving it inline.
+    ``preview`` adds interior mesh lines. Without ``height`` the canvas
+    follows the shown region's aspect ratio (between a quarter and twice
+    the width), so a long channel is a wide strip. When ``output`` ends in
+    .svg or .png the file is written as well. Pass ``return_image=false``
+    with ``output`` to write a deliverable picture without receiving it
+    inline.
     """
-    if width < 50 or height < 50:
+    if width < 50 or (height is not None and height < 50):
         raise ToolFailure("width and height must be at least 50 pixels")
     if coarsening < 1:
         raise ToolFailure("coarsening must be a positive integer")

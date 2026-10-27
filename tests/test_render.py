@@ -128,6 +128,38 @@ class SvgRenderTests(unittest.TestCase):
         self.assertNotIn(">150<", svg)
 
 
+class CanvasSizeTests(unittest.TestCase):
+    def test_the_default_height_follows_the_shown_region(self) -> None:
+        from blockdrawer.render import MAX_HEIGHT_RATIO, MIN_HEIGHT_RATIO, resolved_size
+
+        strip = MeshModel()
+        strip.move_vertex("v1", 25.0, 0.0)
+        strip.move_vertex("v2", 25.0, 1.0)
+        options = RenderOptions(width=1000)
+
+        width, height = resolved_size(strip, options)
+
+        self.assertEqual(width, 1000)
+        self.assertEqual(height, int(MIN_HEIGHT_RATIO * 1000))
+        self.assertIn(f'height="{height}"', render_svg(strip, options))
+
+        tower = MeshModel()
+        tower.move_vertex("v2", 1.0, 30.0)
+        tower.move_vertex("v3", 0.0, 30.0)
+        self.assertEqual(resolved_size(tower, options)[1], int(MAX_HEIGHT_RATIO * 1000))
+
+        square = MeshModel()
+        _width, square_height = resolved_size(square, options)
+        self.assertGreater(square_height, 1000 - 2 * options.padding)
+        self.assertLess(square_height, 1000 + 4 * options.padding + 200)
+        # An explicit height is kept as given.
+        self.assertEqual(resolved_size(strip, RenderOptions(width=1000, height=120)), (1000, 120))
+        # A region given explicitly sizes the canvas, not the whole model.
+        zoomed = RenderOptions(width=1000, bounds=(0.0, 0.0, 1.0, 1.0), show_legend=False)
+        _width, zoomed_height = resolved_size(strip, zoomed)
+        self.assertEqual(zoomed_height, 1000)
+
+
 class FileRenderTests(unittest.TestCase):
     def test_render_to_file_dispatches_on_suffix(self) -> None:
         model = _sample_model()

@@ -57,7 +57,10 @@ class RenderOptions:
     """Everything that controls one rendered picture."""
 
     width: int = 1200
-    height: int = 900
+    # ``None`` sizes the canvas to the shown region's aspect ratio (see
+    # ``resolved_size``), so a long channel is a wide strip and a tall
+    # section a tall one instead of a thin line across a square.
+    height: int | None = None
     bounds: Bounds | None = None
     padding: float = 48.0
     show_grid: bool = True
@@ -103,10 +106,48 @@ def render_to_file(
 
 def render_svg(model: MeshModel, options: RenderOptions | None = None) -> str:
     """Return the picture as an SVG document."""
-    settings = options or RenderOptions()
+    settings = _with_resolved_size(model, options or RenderOptions())
     painter = _SvgPainter(settings.width, settings.height)
     _draw(model, settings, painter, scale=1.0)
     return painter.finish()
+
+
+# The canvas height a region gets by default lies between a quarter of the
+# width and twice it: a strip stays legible without a tall empty margin.
+MIN_HEIGHT_RATIO = 0.25
+MAX_HEIGHT_RATIO = 2.0
+
+
+def resolved_size(model: MeshModel, options: RenderOptions) -> tuple[int, int]:
+    """The canvas size a picture gets: the options' height, or one from the
+    shown region's aspect ratio when the height is ``None``.
+
+    The region is ``options.bounds`` or the content bounds; its aspect is
+    applied to the drawable width (inside the padding) and the legend band
+    and padding are added back, within ``MIN_HEIGHT_RATIO`` and
+    ``MAX_HEIGHT_RATIO`` of the width.
+    """
+    width = int(options.width)
+    if options.height is not None:
+        return width, int(options.height)
+    bounds = options.bounds or content_bounds(
+        model, include_curves=options.show_curves
+    )
+    span_x = max(bounds[2] - bounds[0], 1.0e-12)
+    span_y = max(bounds[3] - bounds[1], 1.0e-12)
+    legend_rows = _legend_rows(model, options, bounds) if options.show_legend else []
+    legend = _legend_height(legend_rows, options.font_size, 1.0)
+    drawable = max(1.0, width - 2.0 * options.padding)
+    height = drawable * span_y / span_x + 2.0 * options.padding + legend
+    height = min(max(height, MIN_HEIGHT_RATIO * width), MAX_HEIGHT_RATIO * width)
+    return width, int(round(height))
+
+
+def _with_resolved_size(model: MeshModel, options: RenderOptions) -> RenderOptions:
+    if options.height is not None:
+        return options
+    _width, height = resolved_size(model, options)
+    return RenderOptions(**{**options.__dict__, "height": height})
 
 
 def render_png(
@@ -122,7 +163,7 @@ def render_png_bytes(
     """Return the picture as PNG bytes using Pillow."""
     import io
 
-    settings = options or RenderOptions()
+    settings = _with_resolved_size(model, options or RenderOptions())
     try:
         from PIL import Image, ImageDraw, ImageFont  # noqa: F401
     except ImportError as exc:  # pragma: no cover - depends on environment

@@ -483,7 +483,9 @@ adjustable thresholds; these are screening heuristics, not a substitute for
 `checkMesh`. `render` draws the topology with vertex IDs, block IDs, cell
 counts, patch colors, reference curves, and spacing links to SVG (standard
 library) or PNG (requires Pillow, `pip install blockdrawer[png]`); `--zoom`
-frames named entities and `--highlight` emphasizes them.
+frames named entities and `--highlight` emphasizes them. Without `--height`
+the canvas follows the shown region's aspect ratio, between a quarter and
+twice the width, so a long channel comes out as a wide strip.
 
 `check` closes the loop with OpenFOAM. It writes a minimal case, runs
 `blockMesh` and `checkMesh`, and summarizes cell counts, patch sizes,

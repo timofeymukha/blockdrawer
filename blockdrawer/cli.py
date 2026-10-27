@@ -49,6 +49,7 @@ from .render import (
     entity_bounds,
     options_with_highlights,
     render_to_file,
+    resolved_size,
 )
 from .session import SessionError, load_session, save_session
 
@@ -182,7 +183,11 @@ def build_parser() -> argparse.ArgumentParser:
     render.add_argument("session", type=Path)
     render.add_argument("-o", "--output", type=Path, required=True, help=".svg or .png")
     render.add_argument("--width", type=int, default=RenderOptions.width)
-    render.add_argument("--height", type=int, default=RenderOptions.height)
+    render.add_argument(
+        "--height", type=int, default=None,
+        help="canvas height (default: from the aspect ratio of the shown "
+        "region, between a quarter and twice the width)",
+    )
     render.add_argument(
         "--bounds", type=float, nargs=4, metavar=("XMIN", "YMIN", "XMAX", "YMAX"),
         help="world region to show (default: everything)",
@@ -357,7 +362,7 @@ def _cmd_quality(args: argparse.Namespace) -> int:
 
 def _cmd_render(args: argparse.Namespace) -> int:
     model = _load(args.session)
-    if args.width < 50 or args.height < 50:
+    if args.width < 50 or (args.height is not None and args.height < 50):
         raise CliError("--width and --height must be at least 50 pixels")
     if args.coarsening < 1:
         raise CliError("--coarsening must be a positive integer")
@@ -390,12 +395,13 @@ def _cmd_render(args: argparse.Namespace) -> int:
     if args.highlight:
         options = options_with_highlights(model, options, args.highlight)
     destination = render_to_file(model, args.output, options)
+    width, height = resolved_size(model, options)
     _emit(
         {
             "ok": True,
             "output": str(destination),
-            "width": options.width,
-            "height": options.height,
+            "width": width,
+            "height": height,
             "bounds": list(options.bounds) if options.bounds else None,
         },
         f"Wrote {destination}\n",
