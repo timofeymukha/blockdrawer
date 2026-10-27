@@ -87,12 +87,20 @@ class ToolFailure(Exception):
 # ---------------------------------------------------------------------------
 
 
-def new_session(path: str, force: bool = False) -> dict[str, Any]:
-    """Create a fresh single-block session file at ``path``."""
+def new_session(
+    path: str, force: bool = False, box: list[float] | None = None
+) -> dict[str, Any]:
+    """Create a fresh single-block session file at ``path``.
+
+    ``box`` places the first block as [xmin, ymin, xmax, ymax] (default:
+    the unit square), so a hand layout starts from the block it wants.
+    """
     destination = Path(path)
     if destination.exists() and not force:
         raise ToolFailure(f"{destination} already exists; pass force=true to replace it")
-    model = MeshModel()
+    if box is not None and len(box) != 4:
+        raise ToolFailure("box needs four numbers: xmin, ymin, xmax, ymax")
+    model = MeshModel(box=tuple(box) if box else None)  # type: ignore[arg-type]
     save_session(model, destination)
     return {"ok": True, "session": str(destination), "summary": describe_model(model)["summary"]}
 

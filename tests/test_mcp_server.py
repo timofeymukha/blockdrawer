@@ -54,6 +54,10 @@ class ToolFunctionTests(unittest.TestCase):
         with self.assertRaisesRegex(ToolFailure, "already exists"):
             new_session(str(target))
         self.assertTrue(new_session(str(target), force=True)["ok"])
+        placed = new_session(str(target), force=True, box=[-5, 0, 0, 1])
+        self.assertTrue(placed["ok"])
+        with self.assertRaisesRegex(ToolFailure, "four numbers"):
+            new_session(str(target), force=True, box=[0, 1])
 
     def test_describe_sections_filter_and_text(self) -> None:
         edit_session(str(self.session), ["add_block v1-v2"], in_place=True)

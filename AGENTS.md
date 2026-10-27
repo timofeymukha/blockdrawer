@@ -464,6 +464,9 @@ them in the canvas widgets.
   hyphens, text parsing tries every split against known vertex IDs and asks for
   the JSON list form when that is ambiguous. Blocks, vertices, patches, and
   curves are referenced by ID; curves also accept a unique name.
+- `new --box XMIN YMIN XMAX YMAX` (the `new_session` tool's `box`) places
+  the first block, since a topology always has one; a hand layout starts from
+  that block rather than moving the unit square's corners.
 - `apply` is atomic: commands run in order against a copy of the loaded
   session, and nothing is written when any step fails. The error names the
   failing step and repeats the offending command. Without `-o` or `--in-place`

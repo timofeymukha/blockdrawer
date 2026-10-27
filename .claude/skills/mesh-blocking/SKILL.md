@@ -380,7 +380,11 @@ angle $\beta$ overshoots the cross-wake line by $h \sin\beta$, so the first
 station on each side must be held out from the edge by more than that, with a
 straight front edge, so every band block stays on its own side of the cut.
 
-The commands that carry a hand-built topology: `add_vertex X Y id=NAME`
+A hand build starts from `new SESSION --box XMIN YMIN XMAX YMAX` (the
+`new_session` tool's `box`), which places the one block every session has
+where the layout wants it - the inlet channel, say - instead of moving the
+unit square's corners into place. The commands that carry a hand-built
+topology: `add_vertex X Y id=NAME`
 (name the vertices - `step_foot`, `lip_3` - so the layout script writes
 every block, grading and patch command without predicting generated IDs),
 `add_block_from_vertices`, `set_edge_type spline|polyLine|arc`,

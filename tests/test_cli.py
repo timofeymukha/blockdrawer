@@ -55,6 +55,13 @@ class CliTests(unittest.TestCase):
         code, out, _ = run_cli("validate", str(target))
         self.assertEqual(code, 0)
         self.assertTrue(out.startswith("OK:"))
+        code, _, _ = run_cli("new", str(target), "--force", "--box", "-5", "0", "0", "1")
+        self.assertEqual(code, 0)
+        placed = load_session(target)
+        self.assertEqual((placed.vertices["v0"].x, placed.vertices["v2"].y), (-5.0, 1.0))
+        code, _, err = run_cli("new", str(target), "--force", "--box", "0", "0", "0", "1")
+        self.assertEqual(code, 1)
+        self.assertIn("xmax > xmin", err)
 
     def test_invalid_session_reports_error(self) -> None:
         broken = self.root / "broken.json"

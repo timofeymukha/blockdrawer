@@ -220,7 +220,15 @@ class MeshModel(
         "#087f5b",
     )
 
-    def __init__(self, *, initialize: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        initialize: bool = True,
+        box: tuple[float, float, float, float] | None = None,
+    ) -> None:
+        """A model with one block: the unit square, or ``box`` as
+        ``(xmin, ymin, xmax, ymax)`` so a layout starts from the block it
+        wants instead of moving the unit square's corners into place."""
         self.vertices: dict[str, Vertex] = {}
         self.blocks: list[Block] = []
         self.edge_cells: dict[EdgeKey, int] = {}
@@ -242,14 +250,27 @@ class MeshModel(
         self.z_max_patch_type = "patch"
 
         if initialize:
-            self._create_initial_block()
+            self._create_initial_block(box)
+        elif box is not None:
+            raise TopologyError("A box needs an initial block to place")
 
-    def _create_initial_block(self) -> None:
+    def _create_initial_block(
+        self, box: tuple[float, float, float, float] | None = None
+    ) -> None:
+        x_min, y_min, x_max, y_max = (0.0, 0.0, 1.0, 1.0) if box is None else (
+            float(value) for value in box
+        )
+        if not all(math.isfinite(value) for value in (x_min, y_min, x_max, y_max)):
+            raise TopologyError("The initial block's box must be finite")
+        if x_max <= x_min or y_max <= y_min:
+            raise TopologyError(
+                "The initial block's box needs xmax > xmin and ymax > ymin"
+            )
         self.vertices = {
-            "v0": Vertex("v0", 0.0, 0.0),
-            "v1": Vertex("v1", 1.0, 0.0),
-            "v2": Vertex("v2", 1.0, 1.0),
-            "v3": Vertex("v3", 0.0, 1.0),
+            "v0": Vertex("v0", x_min, y_min),
+            "v1": Vertex("v1", x_max, y_min),
+            "v2": Vertex("v2", x_max, y_max),
+            "v3": Vertex("v3", x_min, y_max),
         }
         self.blocks = [Block("b0", ("v0", "v1", "v2", "v3"))]
         self.edge_cells = {

@@ -448,6 +448,7 @@ accepts `--json` for machine-readable output and exits with status 1 and an
 
 ```bash
 blockdrawer-cli new case.json
+blockdrawer-cli new layout.json --box -5 0 0 1   # first block where the layout wants it
 blockdrawer-cli describe case.json                 # blocks, edges, vertices, patches, curves, links
 blockdrawer-cli describe case.json --json --section edges --only b1
 blockdrawer-cli quality case.json                  # angles, aspect, growth, size jumps, warnings

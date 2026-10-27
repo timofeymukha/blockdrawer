@@ -900,6 +900,18 @@ class MeshModelTests(unittest.TestCase):
             model.add_vertex(2.5, 3.5)
         model.validate()
 
+    def test_the_initial_block_can_be_placed_by_a_box(self) -> None:
+        model = MeshModel(box=(-5.0, 0.0, 0.0, 1.0))
+
+        self.assertEqual((model.vertices["v0"].x, model.vertices["v0"].y), (-5.0, 0.0))
+        self.assertEqual((model.vertices["v2"].x, model.vertices["v2"].y), (0.0, 1.0))
+        self.assertEqual(len(model.blocks), 1)
+        model.validate()
+        with self.assertRaisesRegex(TopologyError, "xmax > xmin"):
+            MeshModel(box=(0.0, 0.0, 0.0, 1.0))
+        with self.assertRaisesRegex(TopologyError, "finite"):
+            MeshModel(box=(0.0, 0.0, float("inf"), 1.0))
+
     def test_a_standalone_vertex_can_be_named(self) -> None:
         model = MeshModel()
 

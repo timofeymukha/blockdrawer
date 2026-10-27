@@ -130,6 +130,10 @@ def build_parser() -> argparse.ArgumentParser:
         "new", help="write a fresh single-block session",
     )
     new.add_argument("output", type=Path, help="session JSON path to create")
+    new.add_argument(
+        "--box", type=float, nargs=4, metavar=("XMIN", "YMIN", "XMAX", "YMAX"),
+        help="corners of the first block (default: the unit square)",
+    )
     new.add_argument("--force", action="store_true", help="replace an existing file")
     new.add_argument("--json", action="store_true")
     new.set_defaults(handler=_cmd_new)
@@ -316,7 +320,7 @@ def _load(path: Path) -> MeshModel:
 def _cmd_new(args: argparse.Namespace) -> int:
     if args.output.exists() and not args.force:
         raise CliError(f"{args.output} already exists; pass --force to replace it")
-    model = MeshModel()
+    model = MeshModel(box=tuple(args.box) if args.box else None)
     save_session(model, args.output)
     _emit(
         {"ok": True, "session": str(args.output), "blocks": len(model.blocks)},
