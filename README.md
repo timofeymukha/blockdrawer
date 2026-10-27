@@ -530,7 +530,10 @@ edges carried along, merging it across an internal edge, splitting an edge,
 regrading an edge to the series of its opposite edge - and applies the one
 that most improves the block and its neighbours, judged on the corner
 screen and the sampled transfinite interior by the worst cell and by the
-count of severely sheared cells; it reports when no move helps, which means
+count of severely sheared cells; it reports when no move helps - a sound
+neighbourhood (no severe cell, every angle at least 45 degrees from
+degenerate) is "nothing to repair", since it judges angles only and size
+jumps and aspect ratios belong to the quality report, and anything else means
 the defect is in the surrounding topology. `move_vertex ... carry_curves=true`
 is the same curve-carrying move on its own.
 A running server keeps the tool schemas it started with; restart it after

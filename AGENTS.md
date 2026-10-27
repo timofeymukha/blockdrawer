@@ -126,8 +126,11 @@ them in the canvas widgets.
   70 degrees of non-orthogonality on a sheared cell): a seam wedge's apex
   angle is what it is however the cells are distributed, and the severe
   count is what a grading move acts on. Boundary vertices never move; with
-  no improving move the result reports a structural defect and nothing
-  changes. It is a registry command, so the CLI, batches and the MCP server
+  no improving move nothing changes and the result says why: a sound
+  neighbourhood (no severe cell, every angle at least 45 degrees from
+  degenerate - `SOUND_ANGLE`) is reported as nothing to repair, pointing at
+  the quality report for size jumps and aspect ratios, and anything else as
+  a structural defect. It is a registry command, so the CLI, batches and the MCP server
   all have it; `checkMesh` stays the authority.
 - `blockdrawer/render.py`: headless SVG/PNG rendering through one layout routine
   and two painters. Labels (vertex IDs, block IDs, cell counts, patch legend)

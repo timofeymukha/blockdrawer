@@ -422,7 +422,11 @@ across a curved edge that folds between the corners is refused), and
 applies the best - the one that raises the worst cell by half a degree, or
 removes a tenth of the severely sheared cells when the worst cell is a
 block corner no move can change; repeat on the worst block until it
-reports a structural defect. Crossed gradings are the first thing it finds:
+reports a structural defect, or "nothing to repair" - a neighbourhood with
+no severe cell and every angle at least 45 degrees from degenerate, where
+the remaining defects are size jumps or aspect ratios that `repair_block`
+does not judge: read the quality report and fix those with `split_edge` and
+`set_edge_grading`. Crossed gradings are the first thing it finds:
 two opposite edges graded towards opposite ends shear every cell between
 them while the block's corners stay as they were, and the quality screen's
 corner angles do not see it. On the full 30P30N at 475k cells twelve

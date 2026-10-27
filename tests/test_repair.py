@@ -63,7 +63,10 @@ class RepairBlockTests(unittest.TestCase):
         result = repair_block(model, block, moves=("move",))
 
         self.assertFalse(result.applied)
-        self.assertIn("no local move", result.reason)
+        # A sound neighbourhood is reported as such, not as a defect.
+        self.assertIn("nothing to repair", result.reason)
+        self.assertIn("quality report", result.reason)
+        self.assertNotIn("defect", result.reason)
         self.assertEqual({vertex.id: (vertex.x, vertex.y) for vertex in model.vertices.values()}, before)
 
     def test_the_repair_is_deterministic(self) -> None:

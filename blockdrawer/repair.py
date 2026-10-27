@@ -56,6 +56,10 @@ MIN_GAIN = 0.5
 # on 30P30N while its 12-degree apex stayed what it was.
 SEVERE_ANGLE = 20.0
 SEVERE_GAIN = 0.1
+# A neighbourhood with no severe cell whose worst cell is this far from
+# degenerate (every angle between 45 and 135 degrees) has nothing for a
+# local move to repair; the result says so instead of blaming the topology.
+SOUND_ANGLE = 45.0
 # Displacements tried for a movable vertex, as fractions of its shortest
 # incident edge, along eight compass directions and the corner's bisector.
 MOVE_STEPS = (0.1, 0.2, 0.35)
@@ -379,15 +383,26 @@ def repair_block(
                 )
 
     if best is None:
-        return RepairResult(
-            block_id, None, {}, before, before, considered, neighbourhood,
-            reason=(
+        if before.severe == 0 and before.worst >= SOUND_ANGLE:
+            reason = (
+                f"nothing to repair around {block_id}: no severe cells and every "
+                f"corner and sampled cell between {before.min_angle:.1f} and "
+                f"{before.max_angle:.1f} degrees ({considered} candidates tried); "
+                "repair_block judges angles only - a cell-size jump or an aspect "
+                "ratio is the quality report's, fixed with split_edge and "
+                "set_edge_grading"
+            )
+        else:
+            reason = (
                 f"no local move raises the worst cell around {block_id} by {MIN_GAIN:g} degrees "
                 f"or removes a tenth of its {before.severe} severe cells "
                 f"(corners {before.min_angle:.1f} to {before.max_angle:.1f} degrees, interior "
                 f"{before.interior:.1f}; {considered} candidates): the defect is in the "
                 "topology round it, not in a vertex or a grading"
-            ),
+            )
+        return RepairResult(
+            block_id, None, {}, before, before, considered, neighbourhood,
+            reason=reason,
             rejected=tuple(rejected[:8]),
         )
     _key, operation, arguments, after = best
