@@ -186,10 +186,15 @@ class ApplyCommandTests(unittest.TestCase):
             "add_block v1-v2",
             "split_edge v0-v1 0.5",
             "add_vertex 5 5",
+            "add_vertex 6 6 id=step_foot",
+            {"op": "add_vertex", "x": 7, "y": 7, "id": "lip"},
             "move_vertex v3 -0.1 1.0",
         ])
         edited = batch.model
         self.assertEqual(len(edited.blocks), 3)
+        self.assertEqual(batch.results[3].result["vertex"], "step_foot")
+        self.assertEqual(batch.results[4].result["vertex"], "lip")
+        self.assertEqual(edited.vertices["lip"].x, 7.0)
         split = batch.results[1].result
         self.assertEqual(split["source_edge"], "v0-v1")
         self.assertEqual(len(split["cut_edges"]), 1)

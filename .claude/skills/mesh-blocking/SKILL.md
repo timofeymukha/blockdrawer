@@ -380,7 +380,9 @@ angle $\beta$ overshoots the cross-wake line by $h \sin\beta$, so the first
 station on each side must be held out from the edge by more than that, with a
 straight front edge, so every band block stays on its own side of the cut.
 
-The commands that carry a hand-built topology: `add_vertex`,
+The commands that carry a hand-built topology: `add_vertex X Y id=NAME`
+(name the vertices - `step_foot`, `lip_3` - so the layout script writes
+every block, grading and patch command without predicting generated IDs),
 `add_block_from_vertices`, `set_edge_type spline|polyLine|arc`,
 `set_control_point_count` and `set_control_point` for curved edges,
 `import_curve` plus `project ... fit=true` to put wall edges exactly on the

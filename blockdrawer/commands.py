@@ -596,7 +596,7 @@ def _run_move_vertex(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
 
 
 def _run_add_vertex(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
-    vertex = model.add_vertex(args["x"], args["y"])
+    vertex = model.add_vertex(args["x"], args["y"], vertex_id=args.get("id"))
     return {"vertex": vertex.id, "x": vertex.x, "y": vertex.y}
 
 
@@ -974,6 +974,12 @@ _register(CommandSpec(
     (
         Parameter("x", "float", "x coordinate"),
         Parameter("y", "float", "y coordinate"),
+        Parameter(
+            "id", "str",
+            "ID for the new vertex (default: the next free vN); naming the "
+            "vertices lets a batch refer to them before it is applied",
+            required=False, default=None,
+        ),
     ),
     _run_add_vertex,
 ))

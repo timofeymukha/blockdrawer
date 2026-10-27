@@ -1182,8 +1182,15 @@ class MeshModel(
             self.edge_geometry = previous_geometry
             raise
 
-    def add_vertex(self, x: float, y: float) -> Vertex:
-        """Create a standalone vertex that can later be used by a block."""
+    def add_vertex(
+        self, x: float, y: float, *, vertex_id: str | None = None
+    ) -> Vertex:
+        """Create a standalone vertex that can later be used by a block.
+
+        ``vertex_id`` names it; otherwise the next free ``vN`` is taken. A
+        layout script that names its vertices can write every later edge
+        and block command without predicting the generated IDs.
+        """
         if not (math.isfinite(x) and math.isfinite(y)):
             raise TopologyError("Vertex coordinates must be finite")
         for vertex in self.vertices.values():
@@ -1191,12 +1198,20 @@ class MeshModel(
                 raise TopologyError(
                     f"A vertex already exists at ({x:g}, {y:g})"
                 )
+        if vertex_id is None:
+            vertex_id = self._next_id("v", self.vertices)
+        else:
+            if not isinstance(vertex_id, str) or not vertex_id.strip() \
+                    or vertex_id != vertex_id.strip() or any(
+                        character.isspace() for character in vertex_id
+                    ):
+                raise TopologyError(
+                    "A vertex ID must be a non-empty string without whitespace"
+                )
+            if vertex_id in self.vertices:
+                raise TopologyError(f"Vertex {vertex_id!r} already exists")
 
-        vertex = Vertex(
-            self._next_id("v", self.vertices),
-            float(x),
-            float(y),
-        )
+        vertex = Vertex(vertex_id, float(x), float(y))
         self.vertices[vertex.id] = vertex
         try:
             self.validate()

@@ -900,6 +900,23 @@ class MeshModelTests(unittest.TestCase):
             model.add_vertex(2.5, 3.5)
         model.validate()
 
+    def test_a_standalone_vertex_can_be_named(self) -> None:
+        model = MeshModel()
+
+        named = model.add_vertex(4.0, 4.0, vertex_id="step_foot")
+
+        self.assertEqual(named.id, "step_foot")
+        self.assertIn("step_foot", model.vertices)
+        # The generated IDs keep counting past the named one.
+        self.assertEqual(model.add_vertex(5.0, 5.0).id, "v4")
+        with self.assertRaisesRegex(TopologyError, "already exists"):
+            model.add_vertex(6.0, 6.0, vertex_id="step_foot")
+        with self.assertRaisesRegex(TopologyError, "without whitespace"):
+            model.add_vertex(7.0, 7.0, vertex_id="step foot")
+        with self.assertRaisesRegex(TopologyError, "without whitespace"):
+            model.add_vertex(7.0, 7.0, vertex_id="")
+        model.validate()
+
     def test_invalid_vertex_move_is_rolled_back(self) -> None:
         model = MeshModel()
         before = (model.vertices["v2"].x, model.vertices["v2"].y)
