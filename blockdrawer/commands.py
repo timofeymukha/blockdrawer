@@ -45,7 +45,8 @@ class Parameter:
     ``kind`` is one of ``edge``, ``directed_edge`` (the same edge, kept in
     the order written, for values given along it), ``edges``, ``vertex``,
     ``vertices``, ``curve``, ``curves``, ``int``, ``float``, ``str``,
-    ``bool``, ``point``, ``points``, ``choice``, or ``optional_str``.
+    ``bool``, ``point``, ``points``, ``choice``, ``optional_str``,
+    ``blocks`` (block IDs) or ``numbers`` (a list of numbers).
     """
 
     name: str
@@ -374,6 +375,19 @@ def coerce_argument(
         return _coerce_point(value, name)
     if kind == "points":
         return _coerce_points(value, name)
+    if kind == "blocks":
+        known = {block.id for block in model.blocks}
+        identifiers = [str(item).strip() for item in _coerce_list(value, name)]
+        unknown = [item for item in identifiers if item not in known]
+        if unknown:
+            raise CommandError(f"Unknown block(s) {', '.join(unknown)}")
+        return tuple(identifiers)
+    if kind == "numbers":
+        if isinstance(value, str) and not value.strip().startswith("["):
+            items: list[Any] = [item for item in value.replace(",", " ").split() if item]
+        else:
+            items = _coerce_list(value, name)
+        return tuple(_coerce_float(item, name) for item in items)
     if kind == "choice":
         text = _coerce_str(value, name)
         if text not in parameter.choices:
@@ -649,6 +663,27 @@ def _run_repair_block(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
     moves = tuple(item.strip() for item in chosen.split(",") if item.strip()) if chosen else MOVES
     result = repair_block(model, args["block"], moves=moves)
     return to_json_value(result)
+
+
+def _run_smooth(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
+    from .smooth import SmoothOptions, smooth_model
+
+    bbox = args.get("bbox") or None
+    if bbox is not None and len(bbox) != 4:
+        raise CommandError("bbox needs four numbers: xmin, ymin, xmax, ymax")
+    options = SmoothOptions(
+        band_tolerance=args["band_tolerance"],
+        size_cap=args["size_cap"],
+        length_tolerance=args["length_tolerance"],
+    )
+    result = smooth_model(
+        model,
+        blocks=args.get("blocks") or None,
+        bbox=bbox,
+        hold=args.get("hold") or (),
+        options=options,
+    )
+    return result.to_data()
 
 
 def _run_add_boundary(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
@@ -1049,6 +1084,49 @@ _register(CommandSpec(
         ),
     ),
     _run_repair_block,
+))
+_register(CommandSpec(
+    "smooth",
+    (
+        "Move the free interior vertices (curved edges carried along) to lower "
+        "checkMesh's face non-orthogonality over the sampled block interiors at "
+        "the real counts and grading, without raising any block's worst face; "
+        "boundary and held vertices stay, wall band spokes keep their length "
+        "(band_tolerance), no edge changes length by more than "
+        "length_tolerance, and no interface size jump crosses size_cap. The "
+        "result is applied only when the full sampled check stays untangled "
+        "with no more severe faces and no higher maximum."
+    ),
+    (
+        Parameter(
+            "blocks", "blocks", "only the corners of these blocks move (default: all)",
+            required=False, default=(),
+        ),
+        Parameter(
+            "bbox", "numbers", "only vertices inside xmin,ymin,xmax,ymax move",
+            required=False, default=(),
+        ),
+        Parameter(
+            "hold", "vertices", "vertices that must not move", required=False, default=(),
+        ),
+        Parameter(
+            "band_tolerance", "float",
+            "largest relative length change of an edge from a wall vertex",
+            required=False, default=0.05,
+        ),
+        Parameter(
+            "length_tolerance", "float",
+            "largest relative length change of any edge (0: unbounded)",
+            required=False, default=0.5,
+        ),
+        Parameter(
+            "size_cap", "float",
+            "a first-cell size jump across an internal edge below this may not "
+            "cross it; one above may grow by a tenth",
+            required=False, default=2.5,
+        ),
+    ),
+    _run_smooth,
 ))
 _register(CommandSpec(
     "add_boundary",
@@ -1528,6 +1606,14 @@ def _note(result: CommandResult) -> dict[str, Any] | None:
             "applied": data.get("operation") is not None,
             "operation": data.get("operation"),
             "arguments": data.get("arguments"),
+            "reason": data.get("reason"),
+        }
+    if result.name == "smooth":
+        return {
+            **base,
+            "applied": data.get("applied"),
+            "moved": data.get("moved"),
+            "max_band_change": data.get("max_band_change"),
             "reason": data.get("reason"),
         }
     if result.name == "split_edge":

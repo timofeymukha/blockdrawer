@@ -1203,6 +1203,59 @@ class MeshModel(
             self.edge_geometry = previous_geometry
             raise
 
+    def move_vertices(
+        self, positions: dict[str, tuple[float, float]], *, carry_curves: bool = True
+    ) -> None:
+        """Move several vertices at once and validate the result once.
+
+        With ``carry_curves`` every curved edge with a moved endpoint follows
+        the similarity that maps its old chord onto its new one - for one
+        moved endpoint exactly :meth:`move_vertex`'s carry, and for two the
+        unique similarity whatever order the moves are thought of in. A
+        failed validation restores every vertex and edge.
+        """
+        for vertex_id, (x, y) in positions.items():
+            if vertex_id not in self.vertices:
+                raise TopologyError(f"Unknown vertex {vertex_id!r}")
+            if not (math.isfinite(x) and math.isfinite(y)):
+                raise TopologyError("Vertex coordinates must be finite")
+        previous = {
+            vertex_id: (self.vertices[vertex_id].x, self.vertices[vertex_id].y)
+            for vertex_id in positions
+        }
+        previous_geometry = dict(self.edge_geometry)
+        for vertex_id, (x, y) in positions.items():
+            vertex = self.vertices[vertex_id]
+            vertex.x, vertex.y = float(x), float(y)
+        if carry_curves:
+            for current, geometry in previous_geometry.items():
+                if current[0] not in positions and current[1] not in positions:
+                    continue
+                first_old = complex(*previous.get(current[0], (
+                    self.vertices[current[0]].x, self.vertices[current[0]].y
+                )))
+                second_old = complex(*previous.get(current[1], (
+                    self.vertices[current[1]].x, self.vertices[current[1]].y
+                )))
+                first_new = complex(self.vertices[current[0]].x, self.vertices[current[0]].y)
+                second_new = complex(self.vertices[current[1]].x, self.vertices[current[1]].y)
+                chord = second_old - first_old
+                if abs(chord) <= 0.0:
+                    continue
+                factor = (second_new - first_new) / chord
+                points = []
+                for px, py in geometry.points:
+                    moved = first_new + factor * (complex(px, py) - first_old)
+                    points.append((moved.real, moved.imag))
+                self.edge_geometry[current] = EdgeGeometry(geometry.kind, tuple(points))
+        try:
+            self.validate()
+        except (TopologyError, ValueError):
+            for vertex_id, (x, y) in previous.items():
+                self.vertices[vertex_id].x, self.vertices[vertex_id].y = x, y
+            self.edge_geometry = previous_geometry
+            raise
+
     def add_vertex(
         self, x: float, y: float, *, vertex_id: str | None = None
     ) -> Vertex:

@@ -105,7 +105,8 @@ them in the canvas widgets.
   per-command notes for the results worth reading (`_note`: repairs,
   splits, merges, fits, spacing links left out of sync), capped at
   `MAX_NOTES`. A new command whose result an agent must read adds a case to
-  `_note`.
+  `_note`. Parameter kinds `blocks` (block IDs) and `numbers` (a list of
+  floats, e.g. a bbox) serve `smooth`.
 - `blockdrawer/command_line.py`: shared shell-like tokenization for textual
   commands and OpenFOAM command prefixes. POSIX hosts use normal shell escaping;
   Windows preserves path backslashes while retaining POSIX quote grouping for
@@ -174,6 +175,33 @@ them in the canvas widgets.
   the quality report for size jumps and aspect ratios, and anything else as
   a structural defect. It is a registry command, so the CLI, batches and the MCP server
   all have it; `checkMesh` stays the authority.
+- `blockdrawer/smooth.py`: `smooth_model`, the global vertex smoother behind
+  the `smooth` registry command. Free vertices are those used by a block, on
+  no exterior edge, in the optional `blocks`/`bbox` scope and not in `hold`.
+  The judge is checkMesh's face non-orthogonality on the sampled interiors at
+  the real counts and grading, with its own sampled state: two real cells at
+  each end of every edge and at `samples` stations (`_indices`), faces
+  measured only between real cells (merged cells across a thin first-cell
+  interface read 75 degrees where checkMesh read 43), interpolation weights
+  precomputed because a similarity keeps the graded fractions, and edge
+  samples carried by the same similarity as the curves. Phase 1 lowers
+  sum(tan^2 phi) by a Gauss-Seidel pattern search (eight directions, halving
+  steps) taking a move only when it does not raise the worst face of the
+  blocks it touches; phase 2 moves the vertices of the blocks holding the
+  global worst face to lower it; a last phase-1 pass recovers the sum.
+  Constraints on every trial position: no folded sampled cell, no block
+  corner newly within 20 degrees of 0 or 180, every band spoke (an internal
+  edge from a vertex of a `wall` patch) within `band_tolerance` (5 percent)
+  of its length and, at a smooth wall vertex with a single spoke, no further
+  from the wall normal than it was (`SMOOTH_WALL_TURN`, `wall_angle`); every
+  edge within `length_tolerance` (50 percent) of its length; the quality
+  screen's width pairs (interface jumps, corner aspects) not crossing
+  `size_cap` 2.5 / `aspect_cap` 100 where below, else growing by at most
+  `size_slack`. The result is verified with `sample_model` at 256 cells a
+  side and applied only when untangled, with no more severe faces and no
+  higher maximum, else scaled back by halves; one `MeshModel.move_vertices`
+  call (atomic, curves carried by the chord similarity), so one history
+  entry. Measured trade-offs are in the README. Boundary vertices never move.
 - `blockdrawer/render.py`: headless SVG/PNG rendering through one layout routine
   and two painters. Labels (vertex IDs, block IDs, cell counts, patch legend)
   are on by default; bounds, zoom-to-entity, and highlights select a region.

@@ -578,6 +578,27 @@ degenerate) is "nothing to repair", since it judges angles only and size
 jumps and aspect ratios belong to the quality report, and anything else means
 the defect is in the surrounding topology. `move_vertex ... carry_curves=true`
 is the same curve-carrying move on its own.
+
+`smooth` is the global counterpart, to run before `repair_block`: it moves
+every free interior vertex (boundary vertices never move; `blocks=`, `bbox=`
+and `hold=` narrow the scope), carrying curved edges, to lower checkMesh's
+face non-orthogonality over the block interiors sampled at the real counts
+and grading - a sum of $\tan^2\varphi$ over the faces, then the worst faces
+directly, a move never raising the worst face of the blocks it touches.
+It keeps what the measure does not see: every edge from a `wall` vertex keeps
+its length within 5 percent (`band_tolerance`) and, at a smooth wall vertex
+with one spoke, may turn towards the wall normal but not away from it, so a
+boundary-layer band keeps its height and first cell; every edge keeps its
+length within 50 percent (`length_tolerance`), so a thin wake strip is not
+widened; and no first-cell size jump across an internal edge crosses 2.5
+(`size_cap`), nor a corner cell's aspect 100, where it was below. The result
+is applied only when the full sampled check stays untangled with no more
+faces above 70 degrees and no higher maximum (else the displacement is
+scaled back by halves), as one undoable edit; the report gives both
+verdicts, the vertices moved and the largest band-edge change, or says there
+was nothing to gain. On the engine's 30P30N it took checkMesh from 60 faces
+above 70 degrees (max 77.9) to none (max 68.7) in 10 s, and the 475k-cell
+version from 8725 to 4716 in 68 s.
 A running server keeps the tool schemas it started with; restart it after
 upgrading BlockDrawer. Every tool takes the session path, so agents and the GUI
 can share one file: save in the editor, let the agent edit and check, then

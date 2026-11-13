@@ -426,8 +426,19 @@ remedies are the ones in section 6 - a sharp or rounded corner that is not
 a block corner wants a split there, a wake or far-field block with a
 170-degree corner wants its ring vertex moved (`move_vertex`) or the strip
 split, a band capped by the inscribed-disk rule in a circular far field
-wants the C-grid producer or a hand-built nose. `repair_block ID` does the
-local part of this for you: it tries moving the block's interior vertices
+wants the C-grid producer or a hand-built nose. Run `smooth` first: it
+moves every interior vertex of the session at once (curved edges carried,
+boundary vertices fixed) to lower the face non-orthogonality checkMesh
+measures, never raising any block's worst face, keeping wall-band spokes
+within 5 percent of their length and no further from the wall normal,
+every edge within 50 percent, and no size jump across an internal edge
+past 2.5 where it was below; it is applied only when the full sampled check
+gets no worse. On the engine's 30P30N it removed all 60 faces above 70
+degrees (checkMesh max 77.9 to 68.7); where it stops - a seam wedge whose
+apex angle is fixed by a wall corner, a size jump it may not create - the
+report says so and the topology is the remedy. `smooth hold=...` keeps
+vertices you placed on purpose, `blocks=`/`bbox=` limit it to a region.
+Then `repair_block ID` does the local part of what remains: it tries moving the block's interior vertices
 (their curved edges carried along), merging it across an internal edge,
 splitting its edges and regrading an edge to the series of its opposite
 edge, judges each on the block and its neighbours by the corner screen

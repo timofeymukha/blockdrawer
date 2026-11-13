@@ -95,6 +95,12 @@ class ModelSampleTests(unittest.TestCase):
         self.assertGreater(block.severe_faces, 0)
         self.assertEqual(block.severe_faces, sample.summary()["severe_faces"])
         self.assertEqual(block.severe_cells, 100)
+        # checkMesh's average is the angle of the mean cosine; every face of
+        # an affine parallelogram grid is equally non-orthogonal.
+        self.assertAlmostEqual(
+            sample.summary()["average_non_orthogonality"], block.max_non_orthogonality, places=6
+        )
+        self.assertAlmostEqual(sample_model(MeshModel()).summary()["average_non_orthogonality"], 0.0)
 
 
 if __name__ == "__main__":

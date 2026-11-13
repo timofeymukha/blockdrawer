@@ -230,9 +230,12 @@ class _FaceTally:
     severe: int = 0
     worst: float = 0.0
     worst_at: Point | None = None
+    total: float = 0.0
 
     def add(self, value: float, start: Point, end: Point) -> None:
         self.faces += 1
+        # checkMesh averages the cosines and reports the angle of the mean.
+        self.total += math.cos(math.radians(value))
         if value > SEVERE_NON_ORTHOGONALITY:
             self.severe += 1
         if value > self.worst or self.worst_at is None:
@@ -302,6 +305,8 @@ class BlockSample:
     severe_faces: int
     worst_face: Point | None
     folded_at: Point | None = None
+    faces: int = 0
+    sum_cosines: float = 0.0
 
     def to_data(self) -> dict[str, Any]:
         return {
@@ -315,6 +320,11 @@ class BlockSample:
             "severe_faces": self.severe_faces,
             "worst_face": list(self.worst_face) if self.worst_face else None,
             "folded_at": list(self.folded_at) if self.folded_at else None,
+            "faces": self.faces,
+            "mean_non_orthogonality": (
+                math.degrees(math.acos(max(-1.0, min(1.0, self.sum_cosines / self.faces))))
+                if self.faces else 0.0
+            ),
         }
 
 
@@ -343,6 +353,11 @@ class ModelSample:
             "severe_cells": sum(item.severe_cells for item in self.blocks),
             "severe_faces": sum(item.severe_faces for item in self.blocks),
             "severe_threshold": SEVERE_NON_ORTHOGONALITY,
+            "faces": sum(item.faces for item in self.blocks),
+            "average_non_orthogonality": math.degrees(math.acos(max(-1.0, min(1.0, (
+                sum(item.sum_cosines for item in self.blocks)
+                / max(1, sum(item.faces for item in self.blocks))
+            ))))) if any(item.faces for item in self.blocks) else 0.0,
         }
 
 
@@ -389,6 +404,8 @@ def sample_model(model: MeshModel, max_cells: int | None = DEFAULT_MAX_CELLS) ->
             tally.severe,
             tally.worst_at,
             measured.folded_at,
+            tally.faces,
+            tally.total,
         )
         for grid, measured, tally in zip(grids, angles, tallies)
     )

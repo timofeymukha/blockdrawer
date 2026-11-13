@@ -82,14 +82,19 @@ JSON); ask for the part you need rather than the whole session.
    patch, as chains).
 2. edit_session with a list of commands ("set_edge_cells v0-v1 40",
    "add_block v1-v2", "set_edge_grading v0-v1 start_width 0.002",
-   "set_edge_type v2-v3 arc", "split_edge v1-v2 0.5", "repair_block b12",
+   "set_edge_type v2-v3 arc", "split_edge v1-v2 0.5", "smooth",
+   "repair_block b12",
    "add_boundary inlet",
    "set_edge_boundary v0-v3 inlet") or with commands_file pointing at a
    generated batch (one command per line, # comments, JSON objects allowed).
    list_commands documents every command. Batches are atomic: nothing is
    saved when any command fails. The answer counts the commands and lists
    the IDs created and removed and the results worth reading (repairs,
-   splits, fits); detail=true returns every command's result.
+   smoothing, splits, fits); detail=true returns every command's result.
+   To improve a finished topology run "smooth" first (moves every interior
+   vertex, keeps wall bands, cell sizes and the worst face; applied only
+   when checkMesh's measure gets no worse), then "repair_block" on the
+   blocks that remain bad.
 3. quality_report: a verdict (valid, untangled, worst non-orthogonality and
    faces above 70 degrees, measured as checkMesh does on the block
    interiors sampled at the real counts), the worst blocks and edges, and
