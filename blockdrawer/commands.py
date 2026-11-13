@@ -712,6 +712,8 @@ def _run_size(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
         budget=args["budget"] or None,
         patch_first_widths=tuple(overrides),
         split=args["split"],
+        continuity_rounds=args["continuity_rounds"],
+        keep_counts=args["keep_counts"],
     )
     result = size_model(model, options, blocks=args.get("blocks") or None, bbox=bbox)
     return result.to_data()
@@ -1196,8 +1198,8 @@ _register(CommandSpec(
                   "wall-parallel spacing at a wall in first widths (0: first width)",
                   required=False, default=0.0),
         Parameter("interface_growth", "float",
-                  "largest cell-size ratio across an interface and along an edge (0: none)",
-                  required=False, default=0.0),
+                  "largest cell-size ratio across a block interface (0: unmatched)",
+                  required=False, default=1.25),
         Parameter("count_rule", "choice", "count of a component from its edges' demands",
                   required=False, default="max", choices=("max", "mean")),
         Parameter("budget", "int", "largest total cell count (0: none)",
@@ -1207,6 +1209,13 @@ _register(CommandSpec(
                   required=False, default=None),
         Parameter("split", "bool", "split two-ended strips where their size peaks",
                   required=False, default=True),
+        Parameter("continuity_rounds", "int",
+                  "rounds of grading the blocks beside forced-fine strips from them "
+                  "(raises counts; 0: none)",
+                  required=False, default=0),
+        Parameter("keep_counts", "bool",
+                  "keep every count and recompute only the gradings (after a smoothing)",
+                  required=False, default=False),
         Parameter("blocks", "blocks", "only these blocks' edges are graded (default: all)",
                   required=False, default=()),
         Parameter("bbox", "numbers", "only blocks with a corner inside xmin,ymin,xmax,ymax",

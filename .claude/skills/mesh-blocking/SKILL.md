@@ -499,20 +499,28 @@ The order is shape, sizing, polish, then hand corrections:
    engine's square cylinder this alone took checkMesh from 87.7 to 54.6
    degrees with 1344 -> 0 faces above 70.
 2. `size first_width=... core_size=... growth=... [wall_aspect=25]
-   [count_rule=max|mean]` - every count and grading from the wall distance:
-   wall-normal edges graded from their wall, opposite wall-normal sides of a
-   block sharing one series, tangential edges uniform at `wall_aspect` first
-   widths, two-ended strips (wall to wall) split where the wanted size
-   peaks. Read its report: cells per wall band, the worst interface jump and
-   aspect, splits, refusals, links left out of sync.
+   [count_rule=max|mean] [continuity_rounds=N]` - every count and grading
+   from a directional wall-distance field: wall-normal growth across each
+   wall, `wall_aspect` along it, cells along a wall shrinking towards a
+   corner whose other wall faces along it; widths matched within
+   `interface_growth` (1.25) across interfaces; opposite sides of every
+   strip of similar blocks sharing one series (no shear); strips fine at
+   both ends split. Read its report: interface jumps above 2.5/5/20 and the
+   worst, splits, refusals, links left out of sync.
 3. `smooth` - the real-count polish.
-4. Hand corrections where the report or `quality_report` point: an
-   interface jump `size` cannot see (a corner where one wall's normal runs
-   along another wall - the backward step's lip, size jump 10; a thin strip
-   beside a far-field block), a shear layer that is not a wall, the
-   per-edge rules below. `interface_growth` matches widths across interfaces
-   by propagation but on 30P30N it raised the counts and the jumps; measure
-   before keeping it.
+4. Hand corrections where the report or `quality_report` point.
+
+Measured limits (checkMesh after shape, size, polish): a pure H-grid is
+sized as a human would (backward step: 21,750 cells against the hand's
+23,598, 0 degrees, worst jump 1.1). A strip a long count component makes
+fine - a groove strip, a wake strip, a seam sliver two thousandths long
+sharing its count with spokes thirty times longer - leaves a jump beside it
+(grooved tandem 63, 30P30N 130 coarse, 183 fine) that only refining the
+blocks beside it removes: `continuity_rounds=1` brings the grooved tandem to
+4.5 and the three ellipses from 45 to 6 but costs cells (grooved tandem
+37k -> 240k; the coarse 30P30N 28k -> 480k with 2346 faces above 70), and
+e3 at 0 rounds fails checkMesh's skewness (4.2). Those jumps are the
+topology's: fix the sliver or the strip, or accept the cells.
 
 The physical inputs, and what the hand corrections should respect:
 

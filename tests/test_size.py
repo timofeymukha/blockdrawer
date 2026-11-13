@@ -62,7 +62,9 @@ class SizeTests(unittest.TestCase):
                 if vertex in current and abs(model.vertices[current[0]].x - model.vertices[current[1]].x) < 1e-12
             ]
             (spoke,) = spokes
-            self.assertAlmostEqual(model.edge_width_at_vertex(spoke, vertex), 0.005, places=9)
+            # At most the first width; a whole count makes it a little finer.
+            self.assertLessEqual(model.edge_width_at_vertex(spoke, vertex), 0.005 * (1 + 1e-9))
+            self.assertGreater(model.edge_width_at_vertex(spoke, vertex), 0.004)
         self.assertLess(result.worst_interface, 1.0 + 1e-6 + 0.25)
         self.assertEqual(result.bands[0]["patch"], "wall")
         self.assertEqual(result.total_cells, sum(
@@ -79,21 +81,21 @@ class SizeTests(unittest.TestCase):
         result = size_model(model, SizeOptions(first_width=0.01, core_size=0.4, growth=1.2))
         self.assertEqual(result.splits, [])
         spoke = edge_key("v0", "i0")
-        self.assertAlmostEqual(model.edge_width_at_vertex(spoke, "i0"), 0.01, places=9)
+        self.assertLessEqual(model.edge_width_at_vertex(spoke, "i0"), 0.01 * (1 + 1e-9))
+        self.assertGreater(model.edge_width_at_vertex(spoke, "i0"), 0.009)
         far = model.edge_width_at_vertex(spoke, "v0")
         self.assertGreater(far, 0.1)
         # The wall is resolved at the first width along it without wall_aspect,
         # and at 10 first widths with it.
-        fine = model.edge_cells[edge_key("i0", "i1")]
         coarse = o_grid()
-        size_model(coarse, SizeOptions(first_width=0.01, core_size=0.4, wall_aspect=10.0))
-        self.assertGreater(fine, 5 * coarse.edge_cells[edge_key("i0", "i1")])
-        self.assertEqual(result.bands[0]["first_width"][0], result.bands[0]["first_width"][1])
+        stretched = size_model(coarse, SizeOptions(first_width=0.01, core_size=0.4, wall_aspect=10.0))
+        self.assertLess(stretched.total_cells, result.total_cells / 3)
         override = o_grid()
         size_model(override, SizeOptions(
             first_width=0.01, core_size=0.4, patch_first_widths=(("wall", 0.002),)
         ))
-        self.assertAlmostEqual(override.edge_width_at_vertex(spoke, "i0"), 0.002, places=9)
+        self.assertLessEqual(override.edge_width_at_vertex(spoke, "i0"), 0.002 * (1 + 1e-9))
+        self.assertGreater(override.edge_width_at_vertex(spoke, "i0"), 0.0018)
 
     def test_without_a_wall_every_cell_is_the_core_size(self) -> None:
         model = MeshModel(box=(0, 0, 2, 1))
@@ -136,6 +138,122 @@ class SizeTests(unittest.TestCase):
             "size first_width=0.01 core_size=0.4 blocks=b1 first_widths=wall=0.005",
         ]).results[0].result
         self.assertGreater(scoped["total_cells"], 0)
+
+
+def step() -> MeshModel:
+    """A backward-facing step as an L of three blocks: the upstream channel
+    b0 (x -2..0, y 0..1), the block above the step b1 (x 0..2, y 0..1) and
+    the block below it b2 (x 0..2, y -1..0). Walls: the upstream floor, the
+    step face, the downstream floor and the ceiling."""
+    from blockdrawer.session import from_data
+
+    data = to_data(MeshModel())
+    points = {
+        "a": (-2.0, 0.0), "lip": (0.0, 0.0), "b": (2.0, 0.0), "c": (2.0, 1.0),
+        "d": (0.0, 1.0), "e": (-2.0, 1.0), "foot": (0.0, -1.0), "f": (2.0, -1.0),
+    }
+    data["vertices"] = [{"id": key, "x": x, "y": y} for key, (x, y) in points.items()]
+    quads = [("a", "lip", "d", "e"), ("lip", "b", "c", "d"), ("foot", "f", "b", "lip")]
+    data["blocks"] = [{"id": f"b{index}", "vertices": list(quad)} for index, quad in enumerate(quads)]
+    edges = set()
+    for quad in quads:
+        for k in range(4):
+            edges.add(tuple(sorted((quad[k], quad[(k + 1) % 4]))))
+    data["edgeCells"] = [{"vertices": list(edge), "cells": 10} for edge in sorted(edges)]
+    model = from_data(data)
+    return apply_commands(model, WALL + [
+        f"set_edge_boundary {edge} wall" for edge in ("a-lip", "foot-lip", "f-foot", "d-e", "c-d")
+    ]).model
+
+
+class ContinuityTests(unittest.TestCase):
+    def test_the_upstream_wall_is_graded_towards_the_lip(self) -> None:
+        model = step()
+        size_model(model, SizeOptions(
+            first_width=0.005, core_size=0.25, growth=1.1, wall_aspect=30.0, split=False,
+        ))
+        floor = edge_key("a", "lip")
+        at_lip = model.edge_width_at_vertex(floor, "lip")
+        upstream = model.edge_width_at_vertex(floor, "a")
+        # The step face's normal runs along the upstream floor: the cells
+        # along it shrink to about the first width at the lip.
+        self.assertLess(at_lip, 0.01)
+        self.assertGreater(upstream, 5 * at_lip)
+        # The opposite side of b0 shares the series: no shear in a rectangle.
+        from blockdrawer.sampling import sample_model
+
+        self.assertLess(sample_model(model).summary()["max_non_orthogonality"], 1.0e-6)
+
+    def test_a_strip_beside_a_fine_strip_is_graded_from_it(self) -> None:
+        # A fan block b0 from a wall (1 long, 100 cells along it at the first
+        # width) narrows to a 0.02 side that keeps those 100 cells: a strip
+        # of forced-fine cells. The blocks beside it see only the field
+        # until a continuity round feeds those widths back.
+        from blockdrawer.session import from_data
+
+        data = to_data(MeshModel())
+        points = {"a": (0, 0), "b": (1, 0.49), "c": (1, 0.51), "d": (0, 1),
+                  "e": (3, 0.49), "f": (3, 0.51), "g": (3, 0.0), "h": (3, 1.0)}
+        data["vertices"] = [{"id": key, "x": x, "y": y} for key, (x, y) in points.items()]
+        quads = [("a", "b", "c", "d"), ("b", "e", "f", "c"), ("a", "g", "e", "b"), ("c", "f", "h", "d")]
+        data["blocks"] = [{"id": f"b{index}", "vertices": list(quad)} for index, quad in enumerate(quads)]
+        edges = set()
+        for quad in quads:
+            for k in range(4):
+                edges.add(tuple(sorted((quad[k], quad[(k + 1) % 4]))))
+        data["edgeCells"] = [{"vertices": list(edge), "cells": 10} for edge in sorted(edges)]
+        base = apply_commands(from_data(data), WALL + ["set_edge_boundary a-d wall"]).model
+        options = dict(first_width=0.01, core_size=0.2, growth=1.2, split=False)
+        plain = from_data(to_data(base))
+        before = size_model(plain, SizeOptions(**options))
+        fed = from_data(to_data(base))
+        after = size_model(fed, SizeOptions(**options, continuity_rounds=2))
+        forced = 0.02 / fed.edge_cells[edge_key("b", "c")]
+        self.assertLess(fed.edge_width_at_vertex(edge_key("b", "e"), "b"), 2.0 * forced)
+        self.assertGreater(plain.edge_width_at_vertex(edge_key("b", "e"), "b"), 10.0 * forced)
+        self.assertLess(after.worst_interface, before.worst_interface / 10.0)
+        self.assertGreater(after.total_cells, before.total_cells)
+
+    def test_a_ring_terminates(self) -> None:
+        # A closed chain of interfaces (the O-grid's four blocks round the
+        # body) with continuity rounds must stop, and deterministically.
+        first, second = o_grid(), o_grid()
+        options = SizeOptions(first_width=0.01, core_size=0.4, continuity_rounds=6)
+        one = size_model(first, options)
+        size_model(second, options)
+        self.assertEqual(to_data(first), to_data(second))
+        self.assertLessEqual(one.rounds, 6)
+        self.assertLess(one.total_cells, 10 ** 6)
+
+    def test_an_edge_reached_fine_from_both_ends_is_split(self) -> None:
+        # The middle row of a three-row channel touches no wall, but the two
+        # fine wall rows reach it from both sides: its strip is two-ended
+        # once the widths are fed back, and is split.
+        from blockdrawer.session import from_data
+
+        data = to_data(MeshModel())
+        ys = [0.0, 0.05, 0.95, 1.0]
+        points = {}
+        for row, y in enumerate(ys):
+            points[f"l{row}"] = (0.0, y)
+            points[f"r{row}"] = (3.0, y)
+        data["vertices"] = [{"id": key, "x": x, "y": y} for key, (x, y) in points.items()]
+        quads = [(f"l{k}", f"r{k}", f"r{k + 1}", f"l{k + 1}") for k in range(3)]
+        data["blocks"] = [{"id": f"b{index}", "vertices": list(quad)} for index, quad in enumerate(quads)]
+        edges = set()
+        for quad in quads:
+            for k in range(4):
+                edges.add(tuple(sorted((quad[k], quad[(k + 1) % 4]))))
+        data["edgeCells"] = [{"vertices": list(edge), "cells": 10} for edge in sorted(edges)]
+        model = apply_commands(from_data(data), WALL + [
+            "set_edge_boundary l0-r0 wall", "set_edge_boundary l3-r3 wall",
+        ]).model
+        result = size_model(model, SizeOptions(
+            first_width=0.002, core_size=0.2, growth=1.2, continuity_rounds=1,
+        ))
+        self.assertGreaterEqual(len(result.splits), 1)
+        # The middle row's strip is cut in two: one more block.
+        self.assertEqual(len(model.blocks), 4)
 
 
 if __name__ == "__main__":

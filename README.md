@@ -614,24 +614,35 @@ degrees, where the real-count smoother is held at 86.7 by the cell sizes.
 
 `size` sets every cell count and grading from a few physical inputs
 (`first_width`, `core_size`, `growth`, optional `wall_aspect`,
-`interface_growth`, `count_rule`, `budget`, per-patch `first_widths`,
-`blocks`/`bbox` scope), using only what a session has. The size field is the
-wall-normal series from the patches of type `wall`, capped at the core size.
-An edge along which the wall distance changes by half its length is
-wall-normal and carries one geometric series from its wall; every other edge
-is tangential and uniform, floored at `wall_aspect` first widths. Each
-opposite-edge component takes the max (or length-weighted mean) of its
-edges' demands, the integral of ds/size. A strip that wants fine cells at
-both ends (wall to wall across a channel) is cut with `split_edge` where the
-wanted size peaks, since one series cannot serve both ends and multi-section
-grading is out of scope. The opposite wall-normal sides of a block take one
-series (two long wake lines graded from a thousandth and a tenth sheared their
-block to 88 degrees). Counts and gradings are written directly; spacing links
-are kept and reported when left out of sync. The report gives the cells, the
-cells per wall band, the worst interface jump and aspect, the splits, the
-components raised and the refusals. The sequence for a finished topology is
-`smooth mode=shape allow_stale_fold=true`, `size ...`, `smooth`; measured
-results are in the commit that added it and the skill.
+`interface_growth` (default 1.25), `count_rule`, `budget`, per-patch
+`first_widths`, `continuity_rounds`, `blocks`/`bbox` scope), using only what a
+session has. The size field is directional: every wall segment asks for the
+wall-normal series across it and for `wall_aspect` times that along it, and
+the size wanted along an edge is the smallest any wall asks in that
+direction, so the cells along a wall shrink towards a corner whose other
+wall's normal runs along it. Each edge end gets the largest width it may
+carry, finest first: within `interface_growth` of the edge continuing it
+across a block interface, growing at most `growth - 1` per unit length along
+an edge. Opposite sides of a block share one geometric series through every
+strip of similar blocks (chosen to need the fewest cells), so no rectangle
+is sheared; counts per component are the demand of the size profile and
+what that shared series needs to stay within its bounds. A strip that wants
+fine cells at both ends is cut with `split_edge` where the wanted size peaks
+(multi-section grading is out of scope), unless the cut would leave a
+sliver. With `continuity_rounds` the actual widths are fed back as sources,
+so the blocks beside a strip that a long component made fine are graded
+from it; each round only lowers bounds and raises counts. `keep_counts=true`
+recomputes the gradings only. The report gives the cells, blocks, the
+interface jumps above 2.5, 5 and 20 and the worst ones, the splits, the
+refusals and the links left out of sync. Measured (shape, size, polish,
+checkMesh): the backward step at 21,750 cells (hand 23,598), 0 degrees,
+worst jump 1.1; the square cylinder 48.8 degrees, jump 3.3; the grooved
+tandem 27.1 degrees but jump 63 at the groove strips, 4.5 with one
+continuity round at 240k cells; the 30P30N meshes keep jumps of 130 (coarse)
+and 183 (fine) where an edge two thousandths long shares its count with
+spokes thirty times longer - one round of continuity multiplied the coarse
+mesh's cells by seventeen. The sequence for a finished topology is
+`smooth mode=shape allow_stale_fold=true`, `size ...`, `smooth`.
 A running server keeps the tool schemas it started with; restart it after
 upgrading BlockDrawer. Every tool takes the session path, so agents and the GUI
 can share one file: save in the editor, let the agent edit and check, then

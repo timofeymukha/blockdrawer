@@ -209,26 +209,32 @@ them in the canvas widgets.
   stale real-count verdict as `real_before`/`real_after`; a stale fold is
   refused unless `allow_stale_fold`.
 - `blockdrawer/size.py`: `size_model`, behind the `size` registry command.
-  `SizeField` gives the wall-normal series from the `wall` patches' sampled
-  paths (bucket grid; per-patch first widths) capped at `core_size`.
-  `_measure_edge` integrates ds/size along each edge (exact for a linear
-  size per piece), floors tangential sizes at `wall_aspect` first widths
-  (capped so a cell turns at most 15 degrees) and calls an edge wall-normal
-  when the wall distance varies along its part within the field's reach by
-  at least half that length - roles are not available in a session.
-  `_split_two_ended` cuts a strip whose wanted size peaks `SPLIT_RATIO`
-  above both ends (wall to wall) with `split_edge` at the peak. Counts per
-  component by the `max`/`mean` rule and an optional budget factor.
-  `_propagate` ports the engine's finest-first width propagation: seeds are
-  the wall-normal edges leaving a wall vertex at its first width (`SEEDS`;
-  seeding every wall-normal edge at the field's size sheared the backward
-  step's rectangles to 61 degrees), a series wanting a ratio below one is
-  uniform (a shrinking series put 6e-6 beside 0.003), and with
-  `interface_growth` links across interfaces carry widths and raise counts.
-  `_unify_opposite` then gives the opposite wall-normal sides of a block one
-  series (wake strip: 88 degrees otherwise) without feeding counts back.
-  Counts and gradings are written directly to the model (links kept and
-  reported); one validated edit.
+  `SizeField.size(x, y, u)` is directional: for each wall segment (bucket
+  grid; per-patch first widths) the across size `first + (growth-1) d`
+  along the segment's normal - also past its end, so the backward step's
+  lip grades the upstream wall - and `wall_aspect` times that along it,
+  combined as an ellipse metric; the minimum over segments, capped at the
+  core. No edge classification. `_bounds` is a Dijkstra over edge ends:
+  seeds are the field size along each edge at its ends; relaxations are the
+  quality screen's interface pairs (`_links`, factor `interface_growth`) and
+  along-edge gradation (`+ (growth-1) L`), both non-decreasing, so each end
+  settles once. `_strips` groups opposite sides within
+  `OPPOSITE_LENGTH_RATIO` through the blocks with their orientation;
+  `_ratios` gives each strip the one total ratio needing the fewest cells to
+  keep every member within its end bounds (`_fit_count`); a mean ratio left
+  the step's inlet column needing 313 cells. Counts per component: max of
+  the profile demand (integral of ds/size of the field capped by the
+  gradation from both bounds) and the strip fit. `_solve` then feeds actual
+  widths back as seeds for `continuity_rounds` (bounds only decrease, counts
+  only increase, bounded by `maximum_cells`); an edge whose profile peaks
+  `SPLIT_RATIO` above both ends and whose ends are finer than its own cells
+  (so not made fine by its own count - the O-grid's outer side was cut 28
+  times) is two-ended; `_split_strips` cuts up to `SPLITS_PER_ROUND` such
+  strips with `split_edge` at the peak, refusing a cut that leaves a piece
+  shorter than `SPLIT_MIN_PIECE` of the strip's shortest edge, and the
+  sizing is solved again (at most `SPLIT_ROUNDS` times). Counts and total
+  ratios are written directly (links kept and reported); one validated edit.
+  `quality` reports `interface_jumps` (above 2.5, 5, 20) in its summary.
 - `blockdrawer/render.py`: headless SVG/PNG rendering through one layout routine
   and two painters. Labels (vertex IDs, block IDs, cell counts, patch legend)
   are on by default; bounds, zoom-to-entity, and highlights select a region.

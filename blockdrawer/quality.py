@@ -142,6 +142,14 @@ class QualityReport:
                 (interface.max_size_ratio for interface in self.interfaces),
                 default=1.0,
             ),
+            # How many internal edges carry a first-cell size jump above
+            # each level: one worst number hides whether it is one edge or
+            # a hundred.
+            "interface_jumps": {
+                "above_2_5": sum(1 for item in self.interfaces if item.max_size_ratio > 2.5),
+                "above_5": sum(1 for item in self.interfaces if item.max_size_ratio > 5.0),
+                "above_20": sum(1 for item in self.interfaces if item.max_size_ratio > 20.0),
+            },
             "warning_count": len(self.warnings),
         }
         if self.interior is not None:
