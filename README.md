@@ -653,17 +653,21 @@ and 20 and the worst ones, the moves, the guard's refusals, the splits and
 the links left out of sync. Measured (shape, size, polish, checkMesh, budget
 = the reference's cells; references: hand meshes and the previous fixed
 sizing): the backward step 15,204 cells, 0 degrees, worst jump 1.1 (hand
-23,598, 1.1); the square cylinder 2.2 against 6.0 and the three foils
-16.5 against 34.0 with fewer faces above 70; the three ellipses 25.6
-against 17.4 (a thin gap strip beside a two-ended wedge whose split would
-leave a sliver); the grooved tandem 13.6 against the hand's 7.6 at the
-same 62.7k cells, 4.5 at twice them; the coarse 30P30N 74 against 56.8 at
-15.3k, 41 at twice the cells with every other jump count lower; the fine
-30P30N at 451k cells keeps 7 faces above 70 degrees (the guard samples 64
-cells a side and misses faces of blocks with hundreds) where the previous
-sizing had none. The remaining worst jumps are topological: a seam wedge
-whose four sides are one count component beside a sliver two thousandths
-long.
+23,598, 1.1); the square cylinder 2.2 against 6.0 and the three foils 9.1
+against 34.0; the three ellipses 25.1 against 17.4 (a thin gap strip
+beside an edge that needs fine cells at both ends, whose split would leave
+a sliver); the grooved tandem 10.3 against the hand's 7.6 at the same
+62.5k cells with fewer jumps above 2.5 and 5, 4.7 at twice them; the
+coarse 30P30N 64.7 against 56.8 at 15.2k cells with every jump count
+lower, 41 at twice the cells; the fine 30P30N at 451k cells keeps 7 faces
+above 70 degrees, and 53 at the default 890k (the guard samples 64 cells a
+side and misses faces of blocks with hundreds), where the previous sizing
+had none: size fine sessions with a budget near the field's own cells and
+check. The 30P30N seam
+jump (b21/b31) comes from the sliver's count: the field gives its
+component 9 cells for the wall-side edge it shares, the previous sizing
+gave it 2 and read 11; spending only adds cells, so it cannot take that
+back.
 The sequence for a finished topology is
 `smooth mode=shape allow_stale_fold=true`, `size ...`, `smooth`.
 A running server keeps the tool schemas it started with; restart it after

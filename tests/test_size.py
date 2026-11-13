@@ -47,6 +47,10 @@ class SizeTests(unittest.TestCase):
         ratio = series_ratio(0.01, 1.0, 20)
         self.assertAlmostEqual(0.01 * (ratio ** 20 - 1) / (ratio - 1), 1.0, places=9)
         self.assertEqual(series_ratio(0.05, 1.0, 20), 1.0)
+        # A first cell above the uniform width: a shrinking series.
+        shrinking = series_ratio(0.1, 1.0, 20)
+        self.assertLess(shrinking, 1.0)
+        self.assertAlmostEqual(0.1 * (1.0 - shrinking ** 20) / (1.0 - shrinking), 1.0)
 
     def test_a_channel_is_split_and_graded_from_both_walls(self) -> None:
         model = channel()

@@ -417,7 +417,11 @@ def series_ratio(first: float, length: float, cells: int) -> float:
     growing = first < uniform
 
     def total(q: float) -> float:
-        return first * cells if abs(q - 1.0) < 1.0e-12 else first * (q ** cells - 1.0) / (q - 1.0)
+        if abs(q - 1.0) < 1.0e-12:
+            return first * cells
+        if cells * math.log(q) > 700.0:
+            return math.inf
+        return first * (q ** cells - 1.0) / (q - 1.0)
 
     low, high = (1.0, 2.0) if growing else (0.5, 1.0)
     if growing:
@@ -428,7 +432,8 @@ def series_ratio(first: float, length: float, cells: int) -> float:
             low *= 0.5
     for _ in range(100):
         middle = 0.5 * (low + high)
-        if (total(middle) < length) == growing:
+        # The filled length grows with the ratio whichever way the series runs.
+        if total(middle) < length:
             low = middle
         else:
             high = middle
@@ -1436,9 +1441,23 @@ def _spend(model: MeshModel, state: dict, options: SizeOptions, budget: int, ske
                 write_raise(index, old, old_logs)
 
             if not guarded(component_blocks[index], apply, undo):
-                tabu.add(("raise", index, value))
-                refused += 1
-                continue
+                # The refitted ratios may be what the sampled check refuses
+                # (a tapered block sheared by a steeper series): try the
+                # raise with the strips' ratios as they are.
+                kept = {strip: logs[strip] for strip in refit}
+                plain = refit != kept and (
+                    cost_of(component_pairs[index])
+                    - cost_of(component_pairs[index], n_of={index: value}) > 1.0e-9
+                )
+                if not plain or not guarded(
+                    component_blocks[index],
+                    lambda index=index, value=value: write_raise(index, value, {}),
+                    lambda index=index, old=old: write_raise(index, old, {}),
+                ):
+                    tabu.add(("raise", index, value))
+                    refused += 1
+                    continue
+                refit = {}
             moves.append({"kind": "raise", "component": index, "from": old, "to": value, "cells": added})
             for member in components[index]:
                 counts[member] = value

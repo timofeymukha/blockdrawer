@@ -521,18 +521,18 @@ The order is shape, sizing, polish, then hand corrections:
 Measured limits (checkMesh after shape, size, polish, budget = the
 reference's cells): a pure H-grid is sized as a human would (backward
 step: 15,204 cells against the hand's 23,598, 0 degrees, worst jump 1.1).
-The default budget (1.5 times the field's own cells) roughly halves the
-interface jumps above 5; twice the reference's cells brought the grooved
-tandem to 4.5 (hand 7.6) and the coarse 30P30N to 41. What a budget cannot
-buy is topological: a seam wedge whose four sides are one count component
-beside a sliver two thousandths long (30P30N b21/b31 at v12: grading the
-wedge's side fine closes the jump but puts 10-35 faces above 70 degrees in
-the wedge, so the guard refuses it), and a thin strip beside an edge that
-needs fine cells at both ends whose split would leave a sliver (e3
-b67/b73). At hundreds of cells a block side (fine 30P30N) the guard, which
-samples 64 a side, misses faces above 70 degrees: run `check` and treat
-`size`'s result as a start there. Fix the sliver or the strip, or accept
-the cells.
+At the reference's cells the jumps above 5 fall by half or more (three
+foils 18 -> 5, coarse 30P30N 105 -> 29, grooved tandem 46 -> 22 against
+the hand); twice the cells brought the grooved tandem's worst to 4.7 (hand
+7.6) and the coarse 30P30N's to 41. What spending cannot fix: a sliver
+whose count the field sets from a longer edge it shares a component with
+(30P30N b21/b31 at v12: 9 cells on 0.0019, 64.7 beside a 0.07 spoke; set
+that component's count down by hand - 2 cells gave 11), and a thin strip
+beside an edge that needs fine cells at both ends whose split would leave
+a sliver (e3 b67/b73, 25). At hundreds of cells a block side (fine
+30P30N) the guard, which samples 64 a side, misses faces above 70
+degrees: run `check` and treat `size`'s result as a start there. Fix the
+sliver or the strip, or accept the cells.
 
 The physical inputs, and what the hand corrections should respect:
 
