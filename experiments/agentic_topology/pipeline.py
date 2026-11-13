@@ -104,6 +104,10 @@ class PipelineOptions:
     # construction inside the cluster's level set, the far field its level
     # sets beyond it (``hull.py``).
     hull: hull_module.HullOptions = field(default_factory=hull_module.HullOptions)
+    # Opt-in: run the production smoother (``blockdrawer.smooth``) on the
+    # emitted model before its grids are judged, so the verdict is the one
+    # of the session written. Off by default.
+    smooth: bool = False
 
 
 @dataclass
@@ -141,6 +145,8 @@ class PipelineResult:
     export_notes: list = field(default_factory=list)
     # The interface grading propagation's report, when it ran.
     interface_grading: dict | None = None
+    # The production smoother's report, when ``smooth`` ran it.
+    smoothing: dict | None = None
     # ``shape`` samples every block at uniform fractions and is judged against
     # the shape limits only; ``grid`` samples the graded mesh nodes the
     # session defines and carries the sizing report.
@@ -1308,6 +1314,13 @@ def _finish(result: PipelineResult, settings: PipelineOptions) -> None:
             block_mesh_dict(model)
         except Exception as error:
             result.errors.append({"stage": "session", "error": _describe(error)})
+    if result.model is not None and settings.smooth:
+        try:
+            from blockdrawer.smooth import smooth_model
+
+            result.smoothing = smooth_model(result.model).to_data()
+        except Exception as error:  # pragma: no cover - reported, not raised
+            result.errors.append({"stage": "smooth", "error": _describe(error)})
     if result.model is not None and settings.evaluate_grid:
         try:
             # The shape grid: the block map at uniform fractions, judged
@@ -1508,6 +1521,8 @@ def build_analysis(result: PipelineResult) -> dict:
                 else result.fold.minimum_scaled_jacobian.value
             ),
         }
+    if result.smoothing is not None:
+        analysis["smoothing"] = result.smoothing
     if result.model is not None:
         analysis["session"] = {
             "export_notes": list(result.export_notes),

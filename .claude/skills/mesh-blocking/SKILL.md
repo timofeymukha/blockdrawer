@@ -408,6 +408,14 @@ the halves (`set_edge_grading v3-core_mid end_width 0.017 propagate=true`).
 Commit the batch with the session so the topology can be regenerated and
 reviewed.
 
+**Smoothing engine output.** `research_cli.py run --smooth` applies the
+production `smooth` to the emitted session before it is judged, so the
+verdict is the smoothed session's. On the corpus it lowered the sampled
+maximum non-orthogonality on every case it moved, but where spokes are
+free to turn (sharp corners, fans, hull far fields) it raised wall
+misalignment, and wake_blunt fell from resolved to admissible - compare
+both verdicts before keeping it.
+
 **Running the engine.** A run takes seconds on a synthetic body and five to
 twenty minutes on an airfoil at fifteen chords, so start it in the
 background and poll, never in a shell call with a two-minute timeout. Its

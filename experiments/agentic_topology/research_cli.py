@@ -335,6 +335,15 @@ def add_input_arguments(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
+        "--smooth",
+        action="store_true",
+        help=(
+            "run the production smoother (blockdrawer.smooth, defaults) on the "
+            "emitted session before its grids are judged; the verdict and the "
+            "written session are the smoothed ones"
+        ),
+    )
+    parser.add_argument(
         "--no-reference-curves",
         action="store_true",
         help="do not attach the supplied point lists as reference geometry",
@@ -390,6 +399,7 @@ def build_options(arguments) -> pipeline.PipelineOptions:
         coverage_samples=arguments.coverage_samples,
         reference_curves=not arguments.no_reference_curves,
         evaluate_grid=not arguments.no_grid_quality,
+        smooth=getattr(arguments, "smooth", False),
         forced_splits=tuple(forced),
         layer_height_ratio=arguments.layer_height_ratio,
         structure=pg.StructureLimits(max_length_ratio=arguments.max_length_ratio),

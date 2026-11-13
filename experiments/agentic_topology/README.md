@@ -1435,6 +1435,48 @@ The next geometric step is a gap-end cavity that can consume more than the
 first branch interval, beginning with `narrow_gap_tip` and then 30P30N. That
 construction is not part of this audit, and spanning remains opt-in.
 
+### Production smoother (opt-in `--smooth`)
+
+`research_cli.py run --smooth` runs BlockDrawer's `smooth` command
+(`blockdrawer/smooth.py`, default options) on the emitted model inside
+`pipeline._finish`, after the session is built and before the shape grid,
+the counts grid and the fold check are evaluated, so the verdict is the
+one of the session written; the report carries the smoother's own record
+under `smoothing`. No engine rule changes, and without the flag nothing
+does. The corpus with and without it (each row "without -> with"; the last
+column is the smoother's checkMesh-measure of the counts grid):
+
+| case | blocks | verdict | shape non-orth | wall misalign | min scaled Jacobian | sampled max NO / faces > 70 |
+|---|---|---|---|---|---|---|
+| single_ellipse | 12 | admissible -> admissible | 38.8 -> 37.9 | 30.6 -> 30.6 | 0.779 -> 0.789 | 35.1/0 -> 34.4/0 |
+| two_circles | 32 | resolved -> resolved | 64.9 -> 58.0 | 7.0 -> 6.9 | 0.424 -> 0.531 | 63.3/0 -> 55.7/0 |
+| three_rotated_ellipses | 80 | admissible -> admissible | 80.0 -> 79.4 | 64.6 -> 64.0 | 0.173 -> 0.185 | 79.4/121 -> 78.7/100 |
+| concave_and_convex | 42 | admissible -> admissible | 65.6 -> 61.1 | 43.5 -> 44.2 | 0.412 -> 0.483 | 60.5/0 -> 56.7/0 |
+| four_bodies | 53 | resolved -> resolved | 65.7 -> 63.6 | 13.3 -> 13.3 | 0.411 -> 0.445 | 64.0/0 -> 61.2/0 |
+| sharp_bodies | 45 | admissible -> admissible | 76.2 -> 73.9 | 10.7 -> 11.4 | 0.238 -> 0.277 | 74.9/18 -> 72.4/6 |
+| narrow_gap_tip | 57 | admissible -> admissible | 69.6 -> 69.4 | 21.7 -> 19.6 | 0.348 -> 0.352 | 67.9/0 -> 63.1/0 |
+| peanut_body | 24 | admissible -> admissible | 46.1 -> 45.9 | 41.3 -> 41.1 | 0.693 -> 0.695 | 43.4/0 -> 43.2/0 |
+| skimming_tail | 50 | admissible -> admissible | 67.4 -> 70.0 | 67.4 -> 70.0 | 0.385 -> 0.342 | 64.3/0 -> 59.5/0 |
+| tandem_foils | 49 | admissible -> admissible | 76.4 -> 70.8 | 70.5 -> 70.5 | 0.234 -> 0.330 | 73.3/3 -> 68.3/0 |
+| blunt_foil | 15 | admissible -> admissible | 70.9 -> 62.8 | 70.5 -> 61.4 | 0.328 -> 0.457 | 68.3/0 -> 59.4/0 |
+| straight_channel | 48 | resolved -> resolved | 0.000 -> 0.000 | 0.000 -> 0.000 | 1.000 -> 1.000 | 0.0/0 -> 0.0/0 (no-op) |
+| periodic_hill | 33 | resolved -> resolved | 29.2 -> 27.5 | 21.2 -> 21.8 | 0.873 -> 0.887 | 36.2/0 -> 34.6/0 |
+| wake_tandem | 51 | admissible -> admissible | 70.5 -> 69.3 | 21.6 -> 29.8 | 0.333 -> 0.353 | 68.9/0 -> 67.0/0 |
+| wake_blunt | 18 | resolved -> admissible | 67.9 -> 67.4 | 16.5 -> 34.1 | 0.376 -> 0.384 | 77.6/64 -> 73.4/40 |
+| hull_tandem15 | 122 | admissible -> resolved | 70.5 -> 66.4 | 6.4 -> 22.5 | 0.333 -> 0.401 | 55.4/0 -> 35.6/0 |
+| hull_staggered | 197 | admissible -> admissible | 70.5 -> 70.0 | 6.2 -> 21.1 | 0.333 -> 0.342 | 65.6/0 -> 61.3/0 |
+
+`wake_tandem` is `--case tandem_foils --wake`, `wake_blunt` `--case blunt_foil
+--wake --layer-height 0.05`, `hull_tandem15` and `hull_staggered` the Makefile's
+`research-tandem-15c` and `research-staggered` arguments.
+
+The smoother optimises the counts grid, so the count-free shape grid can
+move either way (skimming_tail 67.4 -> 70.0). Wall misalignment rises where
+the smoother may turn spokes: at sharp corners and fans, where a spoke is
+not held to the wall normal (wake_blunt 16.5 -> 34.1 drops it from resolved
+to admissible; the hull far fields 6 -> 21 to 23), while hull_tandem15
+becomes resolved. Smooth-wall single spokes keep their alignment.
+
 ### Periodic hill (internal-flow acceptance)
 
 `synthetic_cases.periodic_hill()` is the classical Almeida channel: hill height

@@ -934,6 +934,28 @@ class SessionTests(unittest.TestCase):
         )
         self.assertEqual(research_cli.build_options(parsed).farfield_center, (0.0, 0.0))
 
+    def test_smoothing_is_opt_in_and_judged_as_written(self):
+        import research_cli
+
+        default = research_cli.build_parser().parse_args(["run", "--case", "single_ellipse"])
+        self.assertFalse(research_cli.build_options(default).smooth)
+        parsed = research_cli.build_parser().parse_args(
+            ["run", "--case", "single_ellipse", "--smooth"]
+        )
+        self.assertTrue(research_cli.build_options(parsed).smooth)
+        from dataclasses import replace
+
+        result = run_case("single_ellipse", options=replace(FAST, smooth=True))
+        self.assertIsNotNone(result.smoothing)
+        self.assertIn("smoothing", result.analysis)
+        # The grids were judged on the model the smoother left, which is the
+        # one written: its sampled maximum is the smoother's "after".
+        from blockdrawer.sampling import sample_model
+
+        after = sample_model(result.model).summary()["max_non_orthogonality"]
+        self.assertAlmostEqual(after, result.smoothing["after"]["max_non_orthogonality"], places=9)
+        self.assertIsNone(run_case("single_ellipse").smoothing)
+
     def test_sizing_can_be_given_in_the_geometry_units(self):
         import research_cli
 
