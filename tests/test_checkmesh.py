@@ -16,6 +16,8 @@ from blockdrawer.checkmesh import (
     run_mesh_check,
 )
 from blockdrawer.model import MeshModel
+from tests.polymesh_fixture import extruded_mesh, write_polymesh, write_set
+from tests.test_polymesh import CELLS, POINTS, two_block_model
 
 
 BLOCK_MESH_LOG = """
@@ -70,6 +72,28 @@ Failed 1 mesh checks.
 End
 """
 
+# The geometry part of a v2606 log that passed with 596 faces above 70
+# degrees: before the parser read single-star lines this was ok with no
+# problems and no count anywhere.
+SEVERE_LOG = """
+Checking geometry...
+    Overall domain bounding box (-14.1996 -15 0) (15.8 15 1)
+    Mesh has 2 solution (non-empty) directions (1 1 0)
+    Max cell openness = 7.20898e-15 OK.
+    Max aspect ratio = 156.7 OK.
+    Minimum face area = 1.21863e-09. Maximum face area = 1.58317.  Face area magnitudes OK.
+    Min volume = 1.21863e-09. Max volume = 0.648532.  Total volume = 803.363.  Cell volumes OK.
+    Mesh non-orthogonality Max: 80.2199 average: 21.2153
+   *Number of severely non-orthogonal (> 70 degrees) faces: 596.
+    Non-orthogonality check OK.
+  <<Writing 596 non-orthogonal faces to set nonOrthoFaces
+    Face pyramids OK.
+   *There are 3 faces with concave angles between consecutive edges. Min angle = 1.2 degrees
+    Max skewness = 2.49898 OK.
+Mesh OK.
+End
+"""
+
 FATAL_LOG = """
 --> FOAM FATAL ERROR: (openfoam-2606)
 cannot find file "/case/system/fvSchemes"
@@ -109,6 +133,21 @@ class ParsingTests(unittest.TestCase):
         self.assertIs(parsed["mesh_ok"], False)
         self.assertEqual(len(parsed["problems"]), 2)
         self.assertTrue(parsed["problems"][1].startswith("Number of edges not aligned"))
+
+    def test_single_star_lines_and_the_severe_count(self) -> None:
+        parsed = parse_check_mesh_log(SEVERE_LOG)
+        self.assertIs(parsed["mesh_ok"], True)
+        self.assertEqual(parsed["problems"], [])
+        self.assertEqual(parsed["severe_non_orthogonal_faces"], 596)
+        self.assertEqual(parsed["severe_non_orthogonality_threshold"], 70.0)
+        self.assertEqual(len(parsed["warnings"]), 2)
+        self.assertTrue(parsed["warnings"][0].startswith("Number of severely non-orthogonal"))
+        self.assertTrue(parsed["warnings"][1].startswith("There are 3 faces with concave"))
+        # No severe line after a non-orthogonality line means none.
+        self.assertEqual(
+            parse_check_mesh_log(CHECK_MESH_LOG)["severe_non_orthogonal_faces"], 0
+        )
+        self.assertNotIn("severe_non_orthogonal_faces", parse_check_mesh_log("nothing"))
 
     def test_mesh_ok_verdict(self) -> None:
         parsed = parse_check_mesh_log("Checking geometry...\n    Max skewness = 0.5 OK.\n\nMesh OK.\n\nEnd\n")
@@ -248,6 +287,79 @@ print({BLOCK_MESH_LOG!r} if 'blockMesh' in sys.argv else 'Mesh OK.')
             )
             self.assertIsNone(only.check_mesh)
             self.assertTrue(only.ok)
+
+    def _fixture_stub(self, root: Path, log: str) -> list[str]:
+        """A stub whose blockMesh copies a prepared polyMesh into the case."""
+        source = root / "fixture"
+        write_polymesh(source, extruded_mesh(POINTS, CELLS))
+        write_set(source, "nonOrthoFaces", "faceSet", [1, 2])
+        stub = self._write_stub(root, "meshstub.py", f"""
+import shutil, sys
+case = sys.argv[sys.argv.index('-case') + 1]
+if sys.argv[1] == 'blockMesh':
+    shutil.copytree({str(source / 'constant')!r}, case + '/constant', dirs_exist_ok=True)
+    print({BLOCK_MESH_LOG!r})
+else:
+    print({log!r})
+""")
+        return [sys.executable, str(stub)]
+
+    def test_sets_are_mapped_to_blocks_before_a_temporary_case_goes(self) -> None:
+        log = SEVERE_LOG.replace("596", "2")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stub = self._fixture_stub(root, log)
+            result = run_mesh_check(
+                two_block_model(),
+                blockmesh_command=[*stub, "blockMesh"],
+                checkmesh_command=[*stub, "checkMesh"],
+            )
+            self.assertFalse(Path(result.case_dir).exists())
+        self.assertTrue(result.ok)
+        self.assertIsNone(result.set_error)
+        (report,) = result.sets
+        self.assertEqual(report.name, "nonOrthoFaces")
+        self.assertEqual({hits.block for hits in report.blocks}, {"b0", "b1"})
+        data = result.to_data(worst=1)
+        self.assertEqual(data["severe_non_orthogonal_faces"], 2)
+        self.assertEqual(data["sets"][0]["block_count"], 2)
+        self.assertEqual(len(data["sets"][0]["blocks"]), 1)
+        self.assertEqual(len(data["warnings"]), 2)
+        text = format_mesh_check(result)
+        self.assertIn("severely non-orthogonal faces (> 70 degrees): 2", text)
+        self.assertIn("nonOrthoFaces: 2 faces in 2 block(s)", text)
+        self.assertIn("* There are 3 faces with concave", text)
+        self.assertEqual(text.count("Number of severely"), 0)
+
+    def test_a_set_that_does_not_map_leaves_the_verdict_alone(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stub = self._fixture_stub(root, SEVERE_LOG)
+            result = run_mesh_check(
+                MeshModel(),  # 100 cells, not the fixture's four
+                blockmesh_command=[*stub, "blockMesh"],
+                checkmesh_command=[*stub, "checkMesh"],
+                case_dir=root / "case",
+            )
+            self.assertTrue(result.ok)
+            self.assertEqual(result.sets, ())
+            self.assertIn("does not belong", result.set_error)
+            self.assertIn("sets: could not map", format_mesh_check(result))
+            skipped = run_mesh_check(
+                MeshModel(),
+                blockmesh_command=[*stub, "blockMesh"],
+                checkmesh_command=[*stub, "checkMesh"],
+                case_dir=root / "case",
+                locate=False,
+            )
+            self.assertIsNone(skipped.set_error)
+
+    def test_the_case_asks_for_ascii(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            case = prepare_case(MeshModel(), Path(directory) / "case")
+            control = (case / "system" / "controlDict").read_text()
+            self.assertIn("writeFormat ascii;", control)
+            self.assertIn("writeCompression off;", control)
 
     def test_unstartable_command_raises(self) -> None:
         with self.assertRaisesRegex(CheckMeshError, "Could not start blockMesh"):

@@ -395,3 +395,40 @@ class SerializationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BatchDigestTests(unittest.TestCase):
+    def test_compress_ids(self) -> None:
+        from blockdrawer.commands import compress_ids
+
+        self.assertEqual(
+            compress_ids(["v3", "v4", "v5", "b1", "x", "v10", "v11", "v007", "v008", "v009"]),
+            ["v3..v5", "b1", "x", "v10", "v11", "v007", "v008", "v009"],
+        )
+        self.assertEqual(compress_ids([]), [])
+
+    def test_digest_counts_created_removed_and_notes(self) -> None:
+        from blockdrawer.commands import batch_digest, format_digest
+
+        before = MeshModel()
+        commands = [f"add_block v{2 * k + 2}-v{2 * k + 3}" for k in range(1, 4)]
+        batch = apply_commands(before, [
+            "add_block v1-v2", *commands, "split_edge v0-v1 0.5", "add_boundary wall",
+        ])
+        digest = batch_digest(before, batch, max_notes=5)
+        self.assertEqual(digest["operations"], {"add_block": 4, "split_edge": 1, "add_boundary": 1})
+        self.assertIn("b1..b4", digest["created"]["blocks"])
+        self.assertGreaterEqual(digest["created_counts"]["blocks"], 5)
+        self.assertEqual(digest["created"]["boundaries"], ["wall"])
+        (note,) = digest["notes"]
+        self.assertEqual(note["op"], "split_edge")
+        self.assertEqual(note["index"], 5)
+        self.assertEqual(sum(note["cells"]), 10)
+        self.assertEqual(digest["notes_omitted"], 0)
+        lines = format_digest(len(batch.results), digest)
+        self.assertTrue(lines[0].startswith("Applied 6 command(s): add_block 4"))
+        self.assertTrue(any(line.startswith("Created:") for line in lines))
+        removed = batch_digest(batch.model, apply_commands(batch.model, ["remove_edge v6-v7"]))
+        self.assertIn("blocks", removed["removed"])
+        capped = batch_digest(before, batch, max_notes=0)
+        self.assertEqual((capped["notes"], capped["notes_omitted"]), ([], 1))

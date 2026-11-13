@@ -5,11 +5,15 @@ dictionary to a real OpenFOAM installation and reading back what it says. The
 installation is reached through a command prefix, the same ``BLOCKMESH_COMMAND``
 convention the integration tests use, so a container wrapper works as well as
 a sourced local installation.
+
+checkMesh writes the faces and cells it objects to as sets; while the case
+still exists they are read back (:mod:`blockdrawer.polymesh`) and mapped to
+the blocks that own them, worst block first, with where they are.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import os
 from pathlib import Path
 import re
@@ -22,6 +26,7 @@ from typing import Any, Sequence
 from .command_line import split_command_line
 from .foam import write_block_mesh_dict
 from .model import MeshModel
+from .polymesh import PolyMeshError, SetReport, locate_sets, written_set_names
 
 
 BLOCKMESH_ENV = "BLOCKMESH_COMMAND"
@@ -42,6 +47,8 @@ endTime 1;
 deltaT 1;
 writeControl timeStep;
 writeInterval 1;
+writeFormat ascii;
+writeCompression off;
 """
 
 FV_SCHEMES = """FoamFile
@@ -102,6 +109,12 @@ class MeshCheckResult:
     mesh_ok: bool | None = None
     problems: tuple[str, ...] = ()
     fatal_errors: tuple[str, ...] = ()
+    # Single-star checkMesh lines ("*Number of severely non-orthogonal ...
+    # faces: 596."): reported, but not failures, so ``ok`` ignores them.
+    warnings: tuple[str, ...] = ()
+    # checkMesh's sets mapped to blocks, and why that failed when it did.
+    sets: tuple[SetReport, ...] = ()
+    set_error: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -111,7 +124,8 @@ class MeshCheckResult:
             return True
         return self.check_mesh.ok and bool(self.mesh_ok)
 
-    def to_data(self) -> dict[str, Any]:
+    def to_data(self, *, worst: int | None = None) -> dict[str, Any]:
+        """Structured result; ``worst`` lists at most N blocks per set."""
         return {
             "ok": self.ok,
             "case_dir": self.case_dir,
@@ -127,6 +141,10 @@ class MeshCheckResult:
             "mesh_ok": self.mesh_ok,
             "problems": list(self.problems),
             "fatal_errors": list(self.fatal_errors),
+            "warnings": list(self.warnings),
+            "severe_non_orthogonal_faces": self.geometry.get("severe_non_orthogonal_faces"),
+            "sets": [report.to_data(worst) for report in self.sets],
+            "set_error": self.set_error,
         }
 
 
@@ -198,12 +216,16 @@ def run_mesh_check(
     keep: bool = False,
     run_checkmesh: bool = True,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    locate: bool = True,
 ) -> MeshCheckResult:
     """Export ``model``, run blockMesh, then checkMesh, and parse both logs.
 
     ``case_dir`` is kept when given. Otherwise a temporary case is created
     and deleted afterwards unless ``keep`` is true. Logs are stored in the case
     as ``log.blockMesh`` and ``log.checkMesh`` and are also returned in full.
+    With ``locate`` the sets checkMesh wrote are mapped to blocks before a
+    temporary case is deleted; a failure there is reported in ``set_error``
+    and never changes the verdict.
     """
     block_command = list(blockmesh_command or blockmesh_command_from_env() or ())
     if not block_command:
@@ -232,6 +254,8 @@ def run_mesh_check(
         if check_command is not None and block_run.ok:
             check_run = _run_application("checkMesh", check_command, case, timeout)
         result = _parse(case, kept, block_run, check_run)
+        if locate and check_run is not None:
+            result = _with_sets(result, model, case, check_run.log)
     finally:
         if temporary and not kept:
             shutil.rmtree(case, ignore_errors=True)
@@ -376,10 +400,25 @@ def parse_check_mesh_log(log: str) -> dict[str, Any]:
         geometry["mesh_ok"] = False
     else:
         geometry["mesh_ok"] = None
+    match = re.search(
+        rf"\*Number of severely non-orthogonal \(> ({_NUMBER}) degrees\) faces: (\d+)",
+        log,
+    )
+    if match:
+        geometry["severe_non_orthogonality_threshold"] = float(match.group(1))
+        geometry["severe_non_orthogonal_faces"] = int(match.group(2))
+    elif "max_non_orthogonality" in geometry:
+        # checkMesh prints the count only when it is not zero.
+        geometry["severe_non_orthogonal_faces"] = 0
     geometry["problems"] = [
         line.strip().lstrip("*").strip()
         for line in log.splitlines()
         if line.lstrip().startswith("***")
+    ]
+    geometry["warnings"] = [
+        line.strip().lstrip("*").strip()
+        for line in log.splitlines()
+        if line.lstrip().startswith("*") and not line.lstrip().startswith("***")
     ]
     return geometry
 
@@ -411,9 +450,11 @@ def _parse(
     failed_checks: int | None = None
     mesh_ok: bool | None = None
     problems: list[str] = []
+    warnings: list[str] = []
     if check_run is not None:
         parsed = parse_check_mesh_log(check_run.log)
         problems = parsed.pop("problems")
+        warnings = parsed.pop("warnings")
         failed_checks = parsed.pop("failed_checks")
         mesh_ok = parsed.pop("mesh_ok")
         check_stats = parsed.pop("mesh_stats")
@@ -435,7 +476,21 @@ def _parse(
         mesh_ok,
         tuple(problems),
         tuple(dict.fromkeys(errors)),
+        tuple(warnings),
     )
+
+
+def _with_sets(
+    result: MeshCheckResult, model: MeshModel, case: Path, log: str
+) -> MeshCheckResult:
+    names = written_set_names(log)
+    if not names:
+        return result
+    try:
+        sets = locate_sets(case, model, names)
+    except (PolyMeshError, OSError, ValueError, IndexError) as exc:
+        return replace(result, set_error=f"could not map checkMesh sets to blocks: {exc}")
+    return replace(result, sets=sets)
 
 
 # ---------------------------------------------------------------------------
@@ -443,7 +498,8 @@ def _parse(
 # ---------------------------------------------------------------------------
 
 
-def format_mesh_check(result: MeshCheckResult) -> str:
+def format_mesh_check(result: MeshCheckResult, *, worst: int = 5) -> str:
+    """Terminal text; ``worst`` blocks are listed per checkMesh set."""
     lines: list[str] = []
     block = result.block_mesh
     if block.ok:
@@ -471,6 +527,14 @@ def format_mesh_check(result: MeshCheckResult) -> str:
         )
         lines.append(f"checkMesh: {verdict} (exit code {check.returncode})")
         geometry = result.geometry
+        severe = geometry.get("severe_non_orthogonal_faces")
+        if severe is not None:
+            threshold = geometry.get("severe_non_orthogonality_threshold", 70.0)
+            lines.append(
+                f"  severely non-orthogonal faces (> {threshold:g} degrees): {severe}"
+                + (f" of {result.mesh_stats['internal_faces']} internal"
+                   if severe and "internal_faces" in result.mesh_stats else "")
+            )
         details = []
         if "max_non_orthogonality" in geometry:
             details.append(
@@ -492,6 +556,14 @@ def format_mesh_check(result: MeshCheckResult) -> str:
             lines.append("  " + "; ".join(details))
         for problem in result.problems:
             lines.append(f"  *** {problem}")
+        for warning in result.warnings:
+            if severe is not None and warning.startswith("Number of severely non-orthogonal"):
+                continue  # already the headline line above
+            lines.append(f"  * {warning}")
+        for report in result.sets:
+            lines.extend(_format_set(report, worst))
+        if result.set_error:
+            lines.append(f"  sets: {result.set_error}")
     for error in result.fatal_errors:
         lines.append(f"  FATAL: {error}")
     location = "kept at" if result.kept else "deleted from"
@@ -501,3 +573,29 @@ def format_mesh_check(result: MeshCheckResult) -> str:
             if run is not None and run.log_path:
                 lines.append(f"  log: {run.log_path}")
     return "\n".join(lines) + "\n"
+
+
+def _format_set(report: SetReport, worst: int) -> list[str]:
+    noun = {"face": "faces", "cell": "cells", "point": "points"}.get(report.kind, "items")
+    head = (
+        f"  {report.name}: {report.count} {noun} in {len(report.blocks)} block(s)"
+    )
+    if report.max_non_orthogonality is not None:
+        head += f", max {report.max_non_orthogonality:.4g} degrees"
+    if report.unmapped:
+        head += f", {report.unmapped} not mapped to a block"
+    shown = report.blocks[: max(0, worst)]
+    lines = [head + (", worst first:" if shown else "")]
+    for hits in shown:
+        x0, y0, x1, y1 = hits.bounds
+        detail = f"    {hits.block}: {hits.count}"
+        if hits.max_non_orthogonality is not None:
+            detail += f" (max {hits.max_non_orthogonality:.4g} deg)"
+        detail += (
+            f" at ({hits.centroid[0]:.6g}, {hits.centroid[1]:.6g}),"
+            f" bounds {x0:.6g} {y0:.6g} {x1:.6g} {y1:.6g}"
+        )
+        lines.append(detail)
+    if len(report.blocks) > len(shown):
+        lines.append(f"    ... {len(report.blocks) - len(shown)} more block(s)")
+    return lines

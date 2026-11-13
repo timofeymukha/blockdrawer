@@ -61,18 +61,54 @@ class ToolFunctionTests(unittest.TestCase):
 
     def test_describe_sections_filter_and_text(self) -> None:
         edit_session(str(self.session), ["add_block v1-v2"], in_place=True)
-        data = describe_session(str(self.session))
+        data = describe_session(str(self.session), as_text=False)
         self.assertEqual(data["summary"]["blocks"], 2)
         self.assertIn("edges", data)
-        partial = describe_session(str(self.session), sections=["summary"])
+        partial = describe_session(str(self.session), sections=["summary"], as_text=False)
         self.assertEqual(list(partial), ["summary"])
-        only = describe_session(str(self.session), sections=["edges"], only=["b1"])
+        only = describe_session(
+            str(self.session), sections=["edges"], only=["b1"], as_text=False
+        )
         self.assertTrue(all("b1" in edge["blocks"] for edge in only["edges"]))
-        text = describe_session(str(self.session), as_text=True)["text"]
+        # Text is the default, and a small session is listed in full.
+        text = describe_session(str(self.session))["text"]
         self.assertIn("Topology: 2 block(s)", text)
+        self.assertIn("Blocks (", text)
         with self.assertRaisesRegex(ToolFailure, "Unknown section"):
             describe_session(str(self.session), sections=["nope"])
         json.dumps(data)
+
+    def test_describe_is_compact_for_a_large_session_and_answers_queries(self) -> None:
+        commands = ["add_boundary wall", "set_edge_boundary v0-v1 wall"]
+        commands += ["add_block v1-v2"]
+        commands += [f"add_block v{2 * k + 2}-v{2 * k + 3}" for k in range(1, 60)]
+        edit_session(str(self.session), commands, in_place=True)
+        text = describe_session(str(self.session))["text"]
+        self.assertIn("Topology: 61 block(s)", text)
+        self.assertNotIn("Blocks (", text)
+        self.assertIn("bbox=", text)
+        self.assertLess(len(text), 3000)
+        full = describe_session(str(self.session), sections=["blocks"])["text"]
+        self.assertIn("b60:", full)
+        boxed = describe_session(str(self.session), bbox=[-0.1, -0.1, 1.1, 0.5])["text"]
+        self.assertIn("b0:", boxed)
+        self.assertNotIn("b5:", boxed)
+        self.assertIn("wall patch: v0-v1", boxed)
+        component = describe_session(
+            str(self.session), component="v0-v1", as_text=False
+        )["component"]
+        self.assertEqual(component["cells"], 10)
+        self.assertIn("v0-v1", component["edges"])
+        chains = describe_session(
+            str(self.session), unassigned=True, as_text=False
+        )["unassigned_chains"]
+        # Every exterior edge but the wall's: one open chain from v0 round to v1.
+        self.assertEqual(len(chains), 1)
+        self.assertFalse(chains[0]["closed"])
+        self.assertEqual({chains[0]["vertices"][0], chains[0]["vertices"][-1]}, {"v0", "v1"})
+        self.assertEqual(len(chains[0]["edges"]), 2 * 61 + 2 - 1)
+        with self.assertRaisesRegex(ToolFailure, "four numbers"):
+            describe_session(str(self.session), bbox=[0, 1])
 
     def test_describe_missing_file_raises_session_error(self) -> None:
         with self.assertRaises(SessionError):
@@ -97,8 +133,18 @@ class ToolFunctionTests(unittest.TestCase):
         )
         self.assertTrue(data["saved"])
         self.assertEqual(data["applied"], 2)
-        self.assertEqual(data["results"][1]["result"]["block"], "b1")
-        self.assertEqual(len(data["log"]), 2)
+        # Quiet by default: counts, created IDs, no per-command results.
+        self.assertNotIn("results", data)
+        self.assertEqual(data["operations"], {"set_edge_cells": 1, "add_block": 1})
+        self.assertEqual(data["created"]["blocks"], ["b1"])
+        self.assertEqual(data["created_counts"]["vertices"], 2)
+        detailed = edit_session(
+            str(self.session),
+            ["set_edge_cells v0-v1 6", {"op": "add_block", "edge": ["v1", "v2"]}],
+            detail=True,
+        )
+        self.assertEqual(detailed["results"][1]["result"]["block"], "b1")
+        self.assertEqual(len(detailed["log"]), 2)
         self.assertEqual(len(load_session(output).blocks), 2)
         self.assertEqual(len(load_session(self.session).blocks), 1)
 
@@ -144,7 +190,7 @@ class ToolFunctionTests(unittest.TestCase):
             dry_run=True,
         )
         self.assertEqual(both["applied"], 3)
-        self.assertIn("set_edge_cells", both["log"][-1])
+        self.assertEqual(both["operations"]["set_edge_cells"], 2)
         self.assertFalse(both["saved"])
         with self.assertRaisesRegex(ToolFailure, "does not exist"):
             edit_session(str(self.session), commands_file=str(self.root / "missing.jsonl"))
@@ -155,14 +201,16 @@ class ToolFunctionTests(unittest.TestCase):
 
     def test_quality_report_summary_and_worst(self) -> None:
         edit_session(str(self.session), ["add_block v1-v2", "add_block v2-v5"], in_place=True)
-        full = quality_report(str(self.session))
+        full = quality_report(str(self.session), as_text=False)
         self.assertEqual(len(full["blocks"]), 3)
-        brief = quality_report(str(self.session), summary_only=True)
+        self.assertIn("interior", full["blocks"][0])
+        self.assertTrue(full["verdict"]["untangled"])
+        brief = quality_report(str(self.session), summary_only=True, as_text=False)
         self.assertNotIn("blocks", brief)
         self.assertNotIn("interfaces", brief)
         self.assertEqual(brief["summary"], full["summary"])
         self.assertIn("thresholds", brief)
-        worst = quality_report(str(self.session), worst=1)
+        worst = quality_report(str(self.session), worst=1, as_text=False)
         self.assertEqual(len(worst["blocks"]), 1)
         self.assertLessEqual(len(worst["interfaces"]), 1)
         self.assertEqual(worst["summary"], full["summary"])
@@ -183,14 +231,21 @@ class ToolFunctionTests(unittest.TestCase):
         edit_session(
             str(self.session), ["set_edge_grading v0-v1 total_ratio 20"], in_place=True,
         )
-        data = quality_report(str(self.session))
+        data = quality_report(str(self.session), as_text=False)
         self.assertEqual(data["summary"]["blocks"], 1)
         self.assertGreater(data["summary"]["warning_count"], 0)
-        lenient = quality_report(str(self.session), cell_growth_ratio=5.0)
+        lenient = quality_report(str(self.session), cell_growth_ratio=5.0, as_text=False)
         self.assertEqual(lenient["thresholds"]["cell_growth_ratio"], 5.0)
         self.assertEqual(lenient["summary"]["warning_count"], 0)
-        text = quality_report(str(self.session), as_text=True)["text"]
+        text = quality_report(str(self.session))["text"]
         self.assertIn("Quality: 1 block(s)", text)
+        self.assertIn("Verdict: valid and exports; untangled (real counts)", text)
+        corners = quality_report(str(self.session), interior_cells=0, as_text=False)
+        self.assertNotIn("interior", corners["summary"])
+        self.assertIsNone(corners["verdict"]["untangled"])
+        capped = quality_report(str(self.session), max_warnings=0, as_text=False)
+        self.assertEqual(capped["warnings"], [])
+        self.assertEqual(capped["warnings_omitted"], data["summary"]["warning_count"])
 
     def test_export_validate(self) -> None:
         text = export_block_mesh_dict(str(self.session))["text"]
@@ -318,7 +373,7 @@ class ServerTests(unittest.TestCase):
                     "in_place": True,
                 })
                 described = await client.call_tool("describe_session", {
-                    "path": str(self.session), "sections": ["summary"],
+                    "path": str(self.session), "sections": ["summary"], "as_text": False,
                 })
                 failed = await client.call_tool("edit_session", {
                     "path": str(self.session), "commands": ["set_edge_cells v0-v1 0"],

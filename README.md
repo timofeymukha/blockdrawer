@@ -451,7 +451,10 @@ blockdrawer-cli new case.json
 blockdrawer-cli new layout.json --box -5 0 0 1   # first block where the layout wants it
 blockdrawer-cli describe case.json                 # blocks, edges, vertices, patches, curves, links
 blockdrawer-cli describe case.json --json --section edges --only b1
-blockdrawer-cli quality case.json                  # angles, aspect, growth, size jumps, warnings
+blockdrawer-cli describe case.json --bbox 0.6 -0.1 0.8 0.05   # just the blocks in a region
+blockdrawer-cli describe case.json --component v0-v1           # edges sharing v0-v1's cell count
+blockdrawer-cli describe case.json --unassigned --section summary   # exterior edges with no patch
+blockdrawer-cli quality case.json                  # verdict, interior sampling, corner screen, warnings
 blockdrawer-cli render case.json -o case.png --preview --highlight b1 v0-v1
 blockdrawer-cli render case.json -o zoom.svg --zoom v4 --margin 0.5
 blockdrawer-cli export case.json --case /path/to/openfoam/case
@@ -464,7 +467,11 @@ JSON objects; edges are written `first-second` in either order, a grading
 value or split fraction is read along the edge in the order you wrote it
 (`set_edge_grading v9-v2 start_width 0.01` puts the small cell at `v9`), and
 several commands may be given at once, read from a file with `-f`, or piped through
-`--stdin`. If any command fails nothing is written.
+`--stdin`. If any command fails nothing is written. `--quiet` reports a
+generated batch of thousands of commands in a few lines: the commands
+counted by name, the vertex, block, curve and patch IDs created and removed
+(runs written `v4..v93`) and the results worth reading - repairs, splits,
+merges, fits and spacing links left out of sync.
 
 ```bash
 blockdrawer-cli apply case.json --in-place \
@@ -476,22 +483,42 @@ blockdrawer-cli apply case.json --in-place \
   '{"op": "split_edge", "edge": ["v1", "v2"], "fraction": 0.5}'
 ```
 
-`describe` lists every entity with the IDs the commands accept. `quality`
-reports per-block corner angles measured from the first mesh cell,
+`describe` lists every entity with the IDs the commands accept; `--only`
+(a named edge lists all its control points), `--bbox`, `--component` and
+`--unassigned` narrow it to the part of a large topology being worked on.
+`quality` starts with a verdict: the session validates and exports, no
+cell folds, the worst non-orthogonality and where it is, and how many faces
+exceed 70 degrees. Those numbers come from every block interior sampled at
+its real cell counts and grading (`--interior-cells`, default 256 a side;
+`--no-interior` skips it) with blockMesh's interpolation, and each face is
+measured as `checkMesh` measures it - between the two cell centres and the
+face normal; on the 30P30N sessions and three engine outputs the sampled
+maximum and severe-face count equalled checkMesh's. Beside it, the corner
+screen reports per-block corner angles measured from the first mesh cell,
 non-orthogonality, equiangle skewness, corner cell aspect ratios, cell-to-cell
 growth, and the cell size jump across every internal edge, with warnings at
-adjustable thresholds; these are screening heuristics, not a substitute for
-`checkMesh`. `render` draws the topology with vertex IDs, block IDs, cell
+adjustable thresholds; the text lists the 20 worst warnings (folded cells,
+then angles by their distance from 90 degrees, then size defects by how far
+past their limit; `--max-warnings N`, `--all-warnings`). These remain
+screening measures; `checkMesh` is the authority. `render` draws the topology with vertex IDs, block IDs, cell
 counts, patch colors, reference curves, and spacing links to SVG (standard
 library) or PNG (requires Pillow, `pip install blockdrawer[png]`); `--zoom`
 frames named entities and `--highlight` emphasizes them. Without `--height`
 the canvas follows the shown region's aspect ratio, between a quarter and
 twice the width, so a long channel comes out as a wide strip.
 
-`check` closes the loop with OpenFOAM. It writes a minimal case, runs
+`check` closes the loop with OpenFOAM. It writes a minimal ASCII case, runs
 `blockMesh` and `checkMesh`, and summarizes cell counts, patch sizes,
-non-orthogonality, skewness, aspect ratio, volumes, and every `***` problem
-line. Set `BLOCKMESH_COMMAND` to any prefix that accepts `-case PATH`; the
+non-orthogonality, skewness, aspect ratio, volumes, every `***` problem
+line, and the single-star warnings - above all the number of severely
+non-orthogonal faces, which `Mesh OK` does not stop. It then reads the sets
+`checkMesh` wrote (`nonOrthoFaces`, `skewFaces`, `wrongOrientedFaces`,
+`highAspectRatioCells`, ...) back from the case before a temporary case is
+deleted and maps each face to its owner cell's block - blockMesh numbers
+cells block by block - listing per set the blocks worst first with their
+count, the worst face's non-orthogonality, and the centroid and bounds of
+the offending faces to pass to `render --bounds` (`--worst N` blocks per
+set, `--no-sets` to skip). Set `BLOCKMESH_COMMAND` to any prefix that accepts `-case PATH`; the
 `checkMesh` prefix is derived from it unless `CHECKMESH_COMMAND` is set. With
 the supplied container:
 
@@ -527,6 +554,18 @@ batches, inline or from a `commands_file` in the same format as
 lines, `worst=N` for the worst blocks and interfaces), `render_session`
 (returns the picture inline unless `return_image=false` writes it only),
 `validate_session`, `export_block_mesh_dict`, `check_mesh`, and `new_session`.
+The read tools answer compactly by default, since an agent pays for every
+byte: `describe_session` returns text and, for a large session, only the
+summary and patches with a note on how to narrow it (`only`, `bbox`,
+`component`, `unassigned`, `sections`); `quality_report` returns the verdict,
+the 10 worst blocks and edges and the 20 worst warnings as text;
+`edit_session` returns the counted operations, created and removed IDs and
+noteworthy results (`detail=true` for every command's result); `as_text=false`
+gives the full JSON. On the 203-block 30P30N session this took
+`describe_session` from 266 kB to 1.5 kB, `quality_report` from 302 kB to
+4.2 kB, and the 3946-command A-airfoil build through `edit_session` from
+18 MB to 1 kB. `check_mesh` carries the severe-face count and the sets
+mapped to blocks.
 Among the commands, `repair_block ID` tries the local moves an agent would
 make by hand on one block - moving its interior vertices with their curved
 edges carried along, merging it across an internal edge, splitting an edge,

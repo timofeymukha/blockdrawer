@@ -3,6 +3,7 @@ import math
 import unittest
 
 from blockdrawer.commands import apply_commands
+from blockdrawer.domain import EdgeGeometry
 from blockdrawer.model import MeshModel, edge_key
 from blockdrawer.quality import (
     QualityThresholds,
@@ -146,3 +147,91 @@ class QualityReportTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class InteriorSamplingTests(unittest.TestCase):
+    def test_off_by_default_in_the_library(self) -> None:
+        report = assess_quality(MeshModel())
+        self.assertIsNone(report.interior)
+        self.assertNotIn("interior", report.summary())
+        verdict = report.to_data()["verdict"]
+        self.assertIsNone(verdict["valid"])  # export is tried with the sampling
+        self.assertFalse(verdict["sampled"])
+        self.assertIsNone(verdict["untangled"])
+        self.assertIn("corner screen only", format_quality(report))
+
+    def test_sampled_fields_and_verdict(self) -> None:
+        model = MeshModel()
+        model.move_vertex("v2", 4.0, 1.0)
+        model.move_vertex("v3", 3.0, 1.0)
+        report = assess_quality(model, interior_cells=256)
+        data = report.to_data()
+        json.dumps(data)
+        interior = data["blocks"][0]["interior"]
+        self.assertEqual(interior["sampled_cells"], [10, 10])
+        self.assertAlmostEqual(interior["max_non_orthogonality"], 90.0 - math.degrees(math.atan(1 / 3)))
+        self.assertGreater(interior["severe_faces"], 0)
+        verdict = data["verdict"]
+        self.assertTrue(verdict["valid"])
+        self.assertTrue(verdict["untangled"])
+        self.assertTrue(verdict["real_counts"])
+        self.assertEqual(verdict["worst_block"], "b0")
+        self.assertEqual(verdict["severe_faces"], interior["severe_faces"])
+        self.assertEqual(data["summary"]["interior"]["severe_faces"], interior["severe_faces"])
+        self.assertTrue(any("sampled interior non-orthogonality" in w for w in report.warnings))
+        text = format_quality(report)
+        self.assertIn("Verdict: valid and exports; untangled (real counts)", text)
+        self.assertIn("interior non-orth, severe faces, folded", text)
+
+    def test_a_fold_between_sound_corners_is_the_worst_warning(self) -> None:
+        model = apply_commands(MeshModel(), [
+            "add_block v1-v2", "set_edge_grading v1-v4 total_ratio 30",
+        ]).model
+        model.edge_geometry[edge_key("v0", "v1")] = EdgeGeometry("arc", ((0.5, 1.4),))
+        model.validate()
+        corners = assess_quality(model)
+        self.assertFalse(any("fold" in warning for warning in corners.warnings))
+        report = assess_quality(model, interior_cells=64)
+        self.assertFalse(report.verdict()["untangled"])
+        self.assertGreater(report.verdict()["folded_cells"], 0)
+        ranked, omitted = report.ranked_warnings(1)
+        self.assertIn("fold between the corners", ranked[0])
+        self.assertEqual(omitted, len(report.warnings) - 1)
+        self.assertEqual(report.worst_blocks(1)[0].block_id, "b0")
+        data = report.to_data(max_warnings=1)
+        self.assertEqual(len(data["warnings"]), 1)
+        self.assertEqual(data["warnings_omitted"], len(report.warnings) - 1)
+        self.assertIn("TANGLED", format_quality(report))
+
+    def test_text_caps_warnings_worst_first(self) -> None:
+        model = apply_commands(MeshModel(), [
+            "add_block v1-v2",
+            "set_edge_grading v0-v1 total_ratio 20",
+            "set_edge_grading v1-v4 total_ratio 50",
+        ]).model
+        report = assess_quality(model)
+        self.assertEqual(len(report.warnings), 3)
+        self.assertIn("Block b0", report.warnings[0])  # model order, unranked
+        # Size defects rank by how far past their limit: the 41x jump across
+        # v1-v2, then b1's 1.54 growth, then b0's 1.40.
+        ranked, omitted = report.ranked_warnings()
+        self.assertEqual(omitted, 0)
+        self.assertTrue(ranked[0].startswith("Edge v1-v2"))
+        self.assertIn("v1-v4", ranked[1])
+        self.assertIn("v0-v1", ranked[2])
+        text = format_quality(report, max_warnings=1)
+        self.assertIn("Warnings, the 1 worst of 3:", text)
+        self.assertIn("2 more", text)
+        self.assertIn("Warnings:", format_quality(report, max_warnings=None))
+
+
+class VerdictExportTests(unittest.TestCase):
+    def test_an_export_failure_makes_the_verdict_invalid(self) -> None:
+        from unittest import mock
+
+        with mock.patch("blockdrawer.foam.block_mesh_dict", side_effect=ValueError("no pair")):
+            report = assess_quality(MeshModel(), interior_cells=16)
+        verdict = report.verdict()
+        self.assertFalse(verdict["valid"])
+        self.assertEqual(verdict["export_error"], "no pair")
+        self.assertIn("does NOT export: no pair", format_quality(report))

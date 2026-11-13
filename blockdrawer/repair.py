@@ -27,14 +27,15 @@ from typing import Any
 
 from .domain import EdgeKey, TopologyError, edge_key
 from .model import MeshModel
-from .preview import _block_mesh_point, _directed_edge_samples, _sample_indices
 from .quality import QualityThresholds, block_quality
+from .sampling import SEVERE_ANGLE, block_grid, cell_angles
 from .session import from_data, to_data
 
 MOVES = ("move", "combine", "split", "grade")
 # The interior of every judged block is sampled at its real cell counts, up
 # to this many a side, with blockMesh's transfinite interpolation (the
-# preview's), so a candidate that folds or shears a block between its
+# preview's, through :mod:`blockdrawer.sampling`, which the quality report
+# shares), so a candidate that folds or shears a block between its
 # corners is seen: the corner screen alone passed a merge across a curved
 # cove edge that checkMesh read as 180 degrees of non-orthogonality, and a
 # sampling of eight cells a side passed a vertex move that folded one real
@@ -48,13 +49,12 @@ NEIGHBOURHOOD_PADDING = 0.2
 # many degrees; a chain of hundredth-degree gains is a structural defect
 # asking for a different topology, and the agent should hear that.
 MIN_GAIN = 0.5
-# A sampled cell is severe when a corner is within this many degrees of 0 or
-# 180: for a sheared cell that is checkMesh's 70 degrees of non-orthogonality.
-# A move that does not raise the worst cell may still be applied when it
-# removes at least this fraction of the severe cells - crossed gradings on
-# the two spokes of a seam wedge put five thousand such cells into the wedge
-# on 30P30N while its 12-degree apex stayed what it was.
-SEVERE_ANGLE = 20.0
+# A sampled cell is severe when a corner is within ``SEVERE_ANGLE`` (20)
+# degrees of 0 or 180: for a sheared cell that is checkMesh's 70 degrees of
+# non-orthogonality. A move that does not raise the worst cell may still be
+# applied when it removes at least this fraction of the severe cells -
+# crossed gradings on the two spokes of a seam wedge put five thousand such
+# cells into the wedge on 30P30N while its 12-degree apex stayed what it was.
 SEVERE_GAIN = 0.1
 # A neighbourhood with no severe cell whose worst cell is this far from
 # degenerate (every angle between 45 and 135 degrees) has nothing for a
@@ -145,57 +145,12 @@ def _blocks_in(model: MeshModel, box: tuple[float, float, float, float]) -> tupl
     return tuple(found)
 
 
-def _block_grid(model: MeshModel, block) -> list[list[tuple[float, float]]]:
-    """The block's mesh nodes at its real counts, coarsened only above ``INTERIOR_CELLS`` a side."""
-    directed = [block.directed_edge(index) for index in range(4)]
-    edges = [edge_key(*item) for item in directed]
-    x_cells = model.edge_cells[edges[0]]
-    y_cells = model.edge_cells[edges[1]]
-    x_indices = _sample_indices(x_cells, max(1, math.ceil(x_cells / INTERIOR_CELLS)))
-    y_indices = _sample_indices(y_cells, max(1, math.ceil(y_cells / INTERIOR_CELLS)))
-    bottom = _directed_edge_samples(model, directed[0], x_indices)
-    right = _directed_edge_samples(model, directed[1], y_indices)
-    top = _directed_edge_samples(model, (directed[2][1], directed[2][0]), x_indices)
-    left = _directed_edge_samples(model, (directed[3][1], directed[3][0]), y_indices)
-    corners = tuple((model.vertices[identifier].x, model.vertices[identifier].y) for identifier in block.vertices)
-    return [
-        [_block_mesh_point(bottom[a], right[b], top[a], left[b], corners) for a in range(len(x_indices))]
-        for b in range(len(y_indices))
-    ]
-
-
-def _grid_worst(grid: list[list[tuple[float, float]]]) -> tuple[float, int]:
-    """The worst corner, as distance from 0 or 180 degrees, over the grid's cells, and the severe count.
-
-    The worst is ``-inf`` when a cell folds.
-    """
-    worst = 180.0
-    severe = 0
-    for row, upper in zip(grid, grid[1:]):
-        for a in range(len(row) - 1):
-            quad = (row[a], row[a + 1], upper[a + 1], upper[a])
-            area = 0.0
-            for (x0, y0), (x1, y1) in zip(quad, quad[1:] + quad[:1]):
-                area += x0 * y1 - x1 * y0
-            if area <= 0.0:
-                return -math.inf, severe
-            cell_worst = 180.0
-            for index in range(4):
-                here = quad[index]
-                before = quad[index - 1]
-                after = quad[(index + 1) % 4]
-                ax, ay = before[0] - here[0], before[1] - here[1]
-                bx, by = after[0] - here[0], after[1] - here[1]
-                norms = math.hypot(ax, ay) * math.hypot(bx, by)
-                if norms <= 0.0:
-                    return -math.inf, severe
-                cosine = max(-1.0, min(1.0, (ax * bx + ay * by) / norms))
-                angle = math.degrees(math.acos(cosine))
-                cell_worst = min(cell_worst, angle, 180.0 - angle)
-            worst = min(worst, cell_worst)
-            if cell_worst < SEVERE_ANGLE:
-                severe += 1
-    return worst, severe
+def _grid_worst(model: MeshModel, block) -> tuple[float, int]:
+    """The worst corner, as distance from 0 or 180 degrees, over the block's
+    sampled cells, and the severe count; ``-inf`` when a cell folds."""
+    nodes = block_grid(model, block, INTERIOR_CELLS).nodes
+    measured = cell_angles(nodes, severe_angle=SEVERE_ANGLE, stop_at_fold=True)
+    return measured.worst, measured.severe
 
 
 def _score(model: MeshModel, box: tuple[float, float, float, float], limits: QualityThresholds) -> RepairScore:
@@ -208,7 +163,7 @@ def _score(model: MeshModel, box: tuple[float, float, float, float], limits: Qua
         quality = block_quality(model, identifier, limits)
         angles_min.append(quality.min_angle)
         angles_max.append(quality.max_angle)
-        block_worst, block_severe = _grid_worst(_block_grid(model, blocks[identifier]))
+        block_worst, block_severe = _grid_worst(model, blocks[identifier])
         interior = min(interior, block_worst)
         severe += block_severe
     if not angles_min:

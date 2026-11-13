@@ -4,14 +4,20 @@ The JSON form is stable, complete, and diffable; the text form is a compact
 listing that reads well in a terminal. Both refer to entities by the same IDs
 the command registry accepts, so a reader can go straight from a description
 to an edit.
+
+A large topology is read in pieces: :func:`query_description` keeps only the
+entities inside a box, the opposite-edge count component of an edge, or a
+list of IDs, and reports the exterior edges that still have no patch as
+chains, so an agent asks for the region it is working on instead of the
+whole session.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Sequence
 
-from .commands import edge_text, export_settings_data
-from .domain import Block, EdgeKey, edge_key
+from .commands import CommandError, edge_text, export_settings_data, parse_edge
+from .domain import Block, EdgeKey, TopologyError, edge_key
 from .model import MeshModel
 
 
@@ -26,6 +32,8 @@ SECTIONS = (
     "curves",
     "spacing_links",
 )
+# Sections a query adds; they are listed only when asked for.
+QUERY_SECTIONS = ("component", "unassigned_chains")
 
 
 def describe_model(model: MeshModel) -> dict[str, Any]:
@@ -157,6 +165,11 @@ def format_description(
         )
         for edge in data["edges"]:
             lines.append("  " + _format_edge_line(edge))
+            if data.get("filtered") and edge.get("control_points"):
+                # A narrowed listing shows the points it carries.
+                lines.append("    points: " + " ".join(
+                    f"({_num(x)}, {_num(y)})" for x, y in edge["control_points"]
+                ))
     if "vertices" in wanted:
         lines.append("")
         lines.append("Vertices (id (x, y) blocks):")
@@ -175,9 +188,14 @@ def format_description(
                     if boundary["neighbour_patch"] else ""
                 )
                 edges = ", ".join(boundary["edges"]) or "no edges"
+                total = boundary.get("total_edges")
+                if total is not None and total != len(boundary["edges"]):
+                    edges += f" ({len(boundary['edges'])} of its {total} edges shown)"
                 lines.append(
                     f"  {boundary['name']} {boundary['type']}{neighbour}: {edges}"
                 )
+        elif data.get("filtered"):
+            lines.append("Boundaries: none on the listed edges")
         else:
             lines.append("Boundaries: none defined")
         settings = data["settings"]
@@ -212,24 +230,90 @@ def format_description(
                 )
         else:
             lines.append("Spacing links: none")
+    # Query sections are printed whenever a query asked for them.
+    if "component" in data:
+        component = data["component"]
+        lines.append("")
+        lines.append(
+            f"Count component of {component['edge']}: {component['cells']} cells on "
+            f"{len(component['edges'])} edge(s) across {len(component['blocks'])} block(s)"
+        )
+        lines.append(f"  edges: {', '.join(component['edges'])}")
+        lines.append(f"  blocks: {', '.join(component['blocks'])}")
+    if "unassigned_chains" in data:
+        chains = data["unassigned_chains"]
+        lines.append("")
+        if chains:
+            lines.append(
+                f"Exterior edges without a patch: {sum(len(c['edges']) for c in chains)} "
+                f"in {len(chains)} chain(s) (vertices in order | edges | length):"
+            )
+            for chain in chains:
+                path = " ".join(chain["vertices"])
+                closed = " (closed)" if chain["closed"] else ""
+                lines.append(
+                    f"  {path}{closed} | {len(chain['edges'])} | {_num(chain['length'])}"
+                )
+        else:
+            lines.append("Exterior edges without a patch: none")
     return "\n".join(lines).strip("\n") + "\n"
 
 
-def filter_description(data: dict[str, Any], wanted: set[str]) -> dict[str, Any]:
-    """Keep only entities named in ``wanted`` plus what touches those blocks."""
+def filter_description(
+    data: dict[str, Any], wanted: set[str], model: MeshModel | None = None
+) -> dict[str, Any]:
+    """Keep only entities named in ``wanted`` plus what touches those blocks.
+
+    A patch is kept when it is named or owns one of the kept edges; its edge
+    list is then restricted to the kept edges and ``total_edges`` gives the
+    patch's full count. With ``model`` an edge may be named in either vertex
+    order, and every named edge lists all its control points, however many.
+    """
+    wanted = set(wanted)
+    named_edges: set[str] = set()
+    if model is not None:
+        for item in list(wanted):
+            if "-" not in item or item in model.vertices:
+                continue
+            try:
+                current = parse_edge(model, item)
+            except (CommandError, TopologyError):
+                continue
+            named_edges.add(edge_text(current))
+        wanted |= named_edges
     filtered = dict(data)
+    filtered["filtered"] = True
     filtered["blocks"] = [item for item in data["blocks"] if item["id"] in wanted]
     filtered["edges"] = [
         item for item in data["edges"]
         if item["id"] in wanted or any(block in wanted for block in item["blocks"])
     ]
+    if model is not None and named_edges:
+        expanded = []
+        for item in filtered["edges"]:
+            if item["id"] in named_edges and item["control_point_count"]:
+                item = dict(item)
+                current = parse_edge(model, item["id"])
+                item["control_points"] = [
+                    list(point) for point in model.edge_control_points(current)
+                ]
+            expanded.append(item)
+        filtered["edges"] = expanded
     filtered["vertices"] = [
         item for item in data["vertices"]
         if item["id"] in wanted or any(block in wanted for block in item["blocks"])
     ]
-    filtered["boundaries"] = [
-        item for item in data["boundaries"] if item["name"] in wanted
-    ]
+    kept_edges = {item["id"] for item in filtered["edges"]}
+    filtered["boundaries"] = []
+    for item in data["boundaries"]:
+        if item["name"] in wanted:
+            filtered["boundaries"].append(item)
+            continue
+        touching = [edge for edge in item["edges"] if edge in kept_edges]
+        if touching:
+            filtered["boundaries"].append(
+                {**item, "edges": touching, "total_edges": len(item["edges"])}
+            )
     filtered["curves"] = [
         item for item in data["curves"]
         if item["id"] in wanted or item["name"] in wanted
@@ -406,3 +490,185 @@ def _num(value: float) -> str:
         return str(value)
     text = format(value, ".6g")
     return text
+
+
+# ---------------------------------------------------------------------------
+# Queries
+# ---------------------------------------------------------------------------
+
+
+def blocks_in_box(
+    model: MeshModel, box: Sequence[float]
+) -> tuple[list[str], list[str]]:
+    """Blocks whose extent overlaps ``box`` and vertices inside it.
+
+    A block's extent is the box round its corners and its edges' sampled
+    paths, so a block whose curved edge bulges into the box is found.
+    ``box`` is ``[xmin, ymin, xmax, ymax]``.
+    """
+    if len(box) != 4:
+        raise ValueError("a box needs four numbers: xmin, ymin, xmax, ymax")
+    xmin, ymin, xmax, ymax = (float(value) for value in box)
+    if xmin > xmax or ymin > ymax:
+        raise ValueError("a box needs xmin <= xmax and ymin <= ymax")
+    vertices = [
+        vertex.id for vertex in model.vertices.values()
+        if xmin <= vertex.x <= xmax and ymin <= vertex.y <= ymax
+    ]
+    extents: dict[EdgeKey, tuple[float, float, float, float]] = {}
+    blocks = []
+    for block in model.blocks:
+        low_x = low_y = float("inf")
+        high_x = high_y = float("-inf")
+        for index in range(4):
+            current = edge_key(*block.directed_edge(index))
+            extent = extents.get(current)
+            if extent is None:
+                points = [
+                    (model.vertices[current[0]].x, model.vertices[current[0]].y),
+                    (model.vertices[current[1]].x, model.vertices[current[1]].y),
+                ]
+                if current in model.edge_geometry:
+                    points.extend(model.edge_points(
+                        current, tuple(step / 16.0 for step in range(1, 16))
+                    ))
+                    points.extend(model.edge_control_points(current))
+                extent = (
+                    min(point[0] for point in points), min(point[1] for point in points),
+                    max(point[0] for point in points), max(point[1] for point in points),
+                )
+                extents[current] = extent
+            low_x = min(low_x, extent[0])
+            low_y = min(low_y, extent[1])
+            high_x = max(high_x, extent[2])
+            high_y = max(high_y, extent[3])
+        if low_x <= xmax and high_x >= xmin and low_y <= ymax and high_y >= ymin:
+            blocks.append(block.id)
+    return blocks, vertices
+
+
+def count_component(model: MeshModel, edge: Any) -> dict[str, Any]:
+    """The edges whose cell count must equal ``edge``'s, and the blocks they span."""
+    current = parse_edge(model, edge)
+    component = model.edge_constraint_component(current)
+    occurrences = model.edge_occurrences()
+    blocks: list[str] = []
+    for member in component:
+        for block, _index, _directed in occurrences.get(member, ()):
+            blocks.append(block.id)
+    order = {block.id: index for index, block in enumerate(model.blocks)}
+    return {
+        "edge": edge_text(current),
+        "cells": model.edge_cells[current],
+        "edges": sorted(edge_text(member) for member in component),
+        "blocks": sorted(set(blocks), key=lambda identifier: order[identifier]),
+    }
+
+
+def unassigned_chains(model: MeshModel) -> list[dict[str, Any]]:
+    """Exterior edges without a patch, joined into vertex chains.
+
+    Each chain is a maximal path through vertices where exactly two such
+    edges meet; ``closed`` chains are loops. Chains are ordered by their
+    first edge in the model's edge order.
+    """
+    occurrences = model.edge_occurrences()
+    loose = [
+        current for current in model.edges()
+        if len(occurrences[current]) == 1 and current not in model.edge_boundaries
+    ]
+    neighbours: dict[str, list[EdgeKey]] = {}
+    for current in loose:
+        for vertex_id in current:
+            neighbours.setdefault(vertex_id, []).append(current)
+    used: set[EdgeKey] = set()
+    chains: list[dict[str, Any]] = []
+
+    def walk(start: str, first: EdgeKey) -> None:
+        path = [start]
+        edges: list[EdgeKey] = []
+        here: str = start
+        current: EdgeKey | None = first
+        while current is not None:
+            used.add(current)
+            edges.append(current)
+            here = current[1] if current[0] == here else current[0]
+            path.append(here)
+            touching = neighbours[here]
+            current = None
+            if len(touching) == 2:
+                current = next((item for item in touching if item not in used), None)
+        chains.append({
+            "vertices": path,
+            "edges": [edge_text(item) for item in edges],
+            "closed": len(edges) > 1 and path[0] == path[-1],
+            "length": sum(model.edge_length(item) for item in edges),
+        })
+
+    # Open chains run between vertices where other than two such edges meet;
+    # whatever is left over forms closed loops.
+    for current in loose:
+        for vertex_id in current:
+            if len(neighbours[vertex_id]) == 2:
+                continue
+            for item in neighbours[vertex_id]:
+                if item not in used:
+                    walk(vertex_id, item)
+    for current in loose:
+        if current not in used:
+            walk(current[0], current)
+    return chains
+
+
+def query_description(
+    model: MeshModel,
+    data: dict[str, Any] | None = None,
+    *,
+    only: Sequence[str] | None = None,
+    bbox: Sequence[float] | None = None,
+    component: Any = None,
+    unassigned: bool = False,
+) -> dict[str, Any]:
+    """Describe ``model`` restricted to the union of the given selections.
+
+    ``only`` names blocks, edges, vertices, patches or curves; ``bbox``
+    selects the blocks overlapping ``[xmin, ymin, xmax, ymax]`` and the
+    vertices inside it; ``component`` selects the opposite-edge count
+    component of one edge (and adds a ``component`` section); ``unassigned``
+    adds the ``unassigned_chains`` section and, when it is the only query,
+    lists the edges of those chains. Without any selection the whole
+    description is returned.
+    """
+    if data is None:
+        data = describe_model(model)
+    wanted: set[str] = set(only or ())
+    selected = bool(only) or bbox is not None or component is not None
+    if bbox is not None:
+        blocks, vertices = blocks_in_box(model, bbox)
+        wanted.update(blocks)
+        wanted.update(vertices)
+    extra: dict[str, Any] = {}
+    if component is not None:
+        extra["component"] = count_component(model, component)
+        wanted.update(extra["component"]["edges"])
+        wanted.update(extra["component"]["blocks"])
+    if unassigned:
+        extra["unassigned_chains"] = unassigned_chains(model)
+        if not selected:
+            wanted.update(
+                edge for chain in extra["unassigned_chains"] for edge in chain["edges"]
+            )
+            selected = True
+    result = filter_description(data, wanted, model) if selected else dict(data)
+    if selected and component is not None:
+        # The component is about edges: list its edges, not every edge of
+        # every block it crosses.
+        members = set(extra["component"]["edges"])
+        named = set(only or ())
+        result["edges"] = [
+            item for item in result["edges"]
+            if item["id"] in members or item["id"] in named
+            or bbox is not None and any(block in wanted for block in item["blocks"])
+        ]
+    result.update(extra)
+    return result

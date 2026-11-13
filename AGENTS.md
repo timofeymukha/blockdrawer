@@ -98,17 +98,58 @@ them in the canvas widgets.
   `apply_commands()` works on a copy and is atomic for the whole batch. This is
   the single vocabulary shared by the CLI, batch files, and any future MCP
   server; add new model operations here as well as to the model.
+  `batch_digest()` is the quiet account of a batch the MCP `edit_session`
+  returns by default and `apply --quiet` prints: commands counted by name,
+  vertex/block/curve/patch IDs created and removed (a before/after diff of
+  the models, consecutive runs written `v4..v93` by `compress_ids`), and
+  per-command notes for the results worth reading (`_note`: repairs,
+  splits, merges, fits, spacing links left out of sync), capped at
+  `MAX_NOTES`. A new command whose result an agent must read adds a case to
+  `_note`.
 - `blockdrawer/command_line.py`: shared shell-like tokenization for textual
   commands and OpenFOAM command prefixes. POSIX hosts use normal shell escaping;
   Windows preserves path backslashes while retaining POSIX quote grouping for
   WSL, container, and SSH wrappers around the Linux OpenFOAM tools.
 - `blockdrawer/describe.py`: complete JSON description of a model plus a compact
   text rendering. Entities carry the same IDs the command registry accepts.
+  `query_description()` restricts it to the union of `only` IDs, the blocks
+  overlapping a `bbox` (sampled curved edges included) and the vertices in
+  it, and an edge's opposite-edge count `component` (adding a `component`
+  section), and adds `unassigned_chains` (exterior edges without a patch
+  joined into open or closed chains). A filtered view keeps every patch that
+  owns a kept edge, with its edge list restricted and `total_edges` given,
+  and a named edge (either vertex order) lists all its control points.
 - `blockdrawer/quality.py`: mesher-style heuristics computed from the stored
   topology, curves, and grading: first-cell corner angles, non-orthogonality,
   equiangle skewness, corner cell aspect ratios, cell-to-cell growth, and cell
   size jumps across internal edges. Thresholds are a dataclass so callers can
-  tune them; `checkMesh` remains the authority.
+  tune them; `checkMesh` remains the authority. With `interior_cells` (the
+  CLI and MCP default `DEFAULT_INTERIOR_CELLS` = 256; the library default 0
+  keeps the corner screen alone for existing callers such as the research
+  pipeline) every block carries an `interior` record from
+  `blockdrawer.sampling`, the summary an `interior` block, and `verdict()`
+  the numbers a hand-built session is judged by: valid (validates and
+  exports), untangled, real counts (no block coarsened), worst sampled
+  non-orthogonality with block and location, severe faces. Folded cells and
+  interior non-orthogonality above the threshold become warnings. Every
+  warning carries a rank (folded first, then angle defects by degrees from
+  90, then size defects by ratio to their limit); `ranked_warnings(N)` and
+  `max_warnings` list the worst N, and `worst_blocks` ranks by folded cells
+  then sampled non-orthogonality when sampled.
+- `blockdrawer/sampling.py`: the shared interior sampler. `block_grid()`
+  builds a block's nodes at its real counts and grading with the preview's
+  transfinite interpolation, coarsened above `max_cells` a side by keeping
+  every n-th node from both ends (a coarsened side has from about half
+  to twice the cap); `cell_angles()` measures corner angles, folds and severe cells
+  (a corner within `SEVERE_ANGLE` = 20 degrees of 0 or 180);
+  `sample_model()` adds checkMesh's face non-orthogonality - the angle
+  between the two cell centroids' vector and the face normal - over faces
+  inside blocks and on shared edges, a shared-edge face counted for the
+  earlier block as blockMesh's owner, so per-block severe faces line up with
+  the `nonOrthoFaces` set mapped to blocks. At the real counts it reproduced
+  checkMesh's maximum and severe count on the 30P30N and engine sessions.
+  `repair.py` judges its candidates with `block_grid`/`cell_angles`; item
+  2's smoother is meant to use the same code. Pure Python, standard library.
 - `blockdrawer/repair.py`: `repair_block`, the local repair an agent would
   make by hand: for one block it tries moving its interior vertices (eight
   directions and the corner bisector, three step sizes, incident curved
@@ -118,7 +159,8 @@ them in the canvas widgets.
   cell between them whatever the corners say), each on a copy of the model,
   and applies the candidate that most improves the block and its
   neighbours - judged by the corner screen and by the preview's transfinite
-  interior sampled at the real cell counts (up to 64 a side), since the
+  interior sampled at the real cell counts (up to 64 a side, through
+  `blockdrawer.sampling`), since the
   corner screen alone passed a merge that folded between the corners and a
   coarser sampling passed a fold of one real cell. A move must raise the
   worst cell by half a degree, or keep it and remove a tenth of the
@@ -137,9 +179,25 @@ them in the canvas widgets.
   are on by default; bounds, zoom-to-entity, and highlights select a region.
 - `blockdrawer/checkmesh.py`: writes a minimal case, runs `blockMesh` and
   `checkMesh` through the `BLOCKMESH_COMMAND` prefix convention, and parses the
-  logs into counts, geometry statistics, `***` problem lines, and FOAM FATAL
-  errors. A `checkMesh` prefix is derived by substituting the word `blockMesh`
-  unless `CHECKMESH_COMMAND` or an explicit prefix overrides it.
+  logs into counts, geometry statistics, `***` problem lines, single-star
+  `warnings` (the severely non-orthogonal face count is also parsed into
+  `geometry["severe_non_orthogonal_faces"]`; it never changes `ok`), and FOAM
+  FATAL errors. A `checkMesh` prefix is derived by substituting the word `blockMesh`
+  unless `CHECKMESH_COMMAND` or an explicit prefix overrides it. The case's
+  `controlDict` asks for ASCII, and while the case exists the sets the log
+  says checkMesh wrote (`<<Writing ... to set NAME`) are mapped to blocks by
+  `blockdrawer/polymesh.py`; a mapping failure is `set_error`, never a
+  verdict change.
+- `blockdrawer/polymesh.py`: standard-library reader of ASCII polyMesh lists
+  (`points`, `faces` or `faceCompactList`, `owner`, `neighbour`, sets; `.gz`
+  accepted; binary refused with a message) that keeps big lists as text lines
+  and parses entries on demand. `locate_sets()` maps faces to their owner
+  cell's block and cells to theirs by cumulative block cell counts in model
+  order (blockMesh's numbering), points through a face using them, and gives
+  per set the blocks worst first with count, centroid and x-y bounds; for
+  `nonOrthoFaces` it recomputes each face's non-orthogonality with
+  OpenFOAM's face-centre and pyramid cell-centre formulas. A case whose cell
+  count differs from the session's is refused.
 - `blockdrawer/cli.py`: argparse front end over the modules above. Every
   subcommand supports `--json`; failures exit 1 with `error: ...` on stderr or
   a JSON object carrying an `error` key.
@@ -147,7 +205,13 @@ them in the canvas widgets.
   stdio by default) exposing the same operations as typed tools:
   `describe_session`, `list_commands`, `edit_session`, `quality_report`,
   `render_session` (returns the PNG inline), `validate_session`,
-  `export_block_mesh_dict`, `check_mesh`, and `new_session`. Tools are plain,
+  `export_block_mesh_dict`, `check_mesh`, and `new_session`. Read tools are
+  compact by default because an agent pays per byte: `describe_session` and
+  `quality_report` return text (`as_text=false` for full JSON), an
+  unfiltered description longer than `COMPACT_DESCRIPTION_CHARACTERS` is cut
+  to summary and patches with a note on narrowing it, text quality reports
+  list `DEFAULT_WORST` blocks and edges and the 20 worst warnings, and
+  `edit_session` returns `batch_digest()` unless `detail=true`. Tools are plain,
   path-based functions so the server is stateless and testable without `mcp`;
   only `build_server()` imports the optional `mcp>=2` package and translates
   BlockDrawer errors into `ToolError` so agents see the real message. The
@@ -470,10 +534,13 @@ them in the canvas widgets.
 - `apply` is atomic: commands run in order against a copy of the loaded
   session, and nothing is written when any step fails. The error names the
   failing step and repeats the offending command. Without `-o` or `--in-place`
-  the result is reported but not saved.
+  the result is reported but not saved. `--quiet` (the MCP default) reports
+  the batch digest instead of every command's result.
 - Describe and quality JSON is meant to be diffed between edits. Keep field
   names stable, keep floats unrounded, and add fields rather than renaming them.
-  Text output rounds to six significant digits.
+  Text output rounds to six significant digits. JSON warning lists keep
+  model order unless a cap (`max_warnings`) is asked for, which lists them
+  worst first and counts the rest in `warnings_omitted`.
 - Quality thresholds are screening heuristics, not OpenFOAM's checks. Corner
   angles are measured between the first mesh cell's edges at each block corner
   so curved edges and grading count; interface ratios compare the transverse
@@ -488,7 +555,11 @@ them in the canvas widgets.
 - `check` exports to a temporary or named case with a minimal `controlDict`,
   `fvSchemes`, and `fvSolution`, then runs `blockMesh` and `checkMesh`. The
   result is ok only when blockMesh succeeds and checkMesh prints `Mesh OK.`;
-  every `***` line is surfaced as a problem. Logs are always kept in the case
+  every `***` line is surfaced as a problem and every single-star line as a
+  warning; `Mesh OK` with 596 faces above 70 degrees is still ok, so the
+  severe count is printed on its own line. The face, cell and point sets
+  checkMesh wrote are mapped to blocks before a temporary case is deleted
+  (`--worst N` blocks per set, `--no-sets`). Logs are always kept in the case
   as `log.blockMesh` and `log.checkMesh` when the case is kept.
   On Windows, the configured Linux-tool wrapper owns any host-to-guest case-path
   translation or mount and must still accept the appended `-case PATH` pair.

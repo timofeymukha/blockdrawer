@@ -7,6 +7,12 @@ corner, cell aspect ratios, cell-to-cell growth, and cell size jumps across
 shared edges. They are heuristics that point an operator or agent at the
 block to fix; OpenFOAM's ``checkMesh`` remains the authority (see
 ``blockdrawer.checkmesh``).
+
+With ``interior_cells`` the report also samples every block interior at its
+real cell counts (:mod:`blockdrawer.sampling`, capped at that many cells a
+side) and adds what the corners cannot see: folded cells, severe cells and
+checkMesh's face non-orthogonality, with a short verdict a hand-built
+session can be judged by.
 """
 
 from __future__ import annotations
@@ -18,6 +24,20 @@ from typing import Any
 from .commands import edge_text
 from .domain import Block, EdgeKey, TopologyError, edge_key
 from .model import MeshModel
+from .sampling import SEVERE_NON_ORTHOGONALITY, BlockSample, ModelSample, sample_model
+
+
+# The interior sampling cap the CLI and the MCP server use by default: at
+# 256 cells a side the 475k-cell 30P30N session is sampled in about a
+# second and reproduces checkMesh's maximum non-orthogonality and severe
+# face count exactly. The library default stays off for existing callers.
+DEFAULT_INTERIOR_CELLS = 256
+# Text output lists at most this many warnings unless asked for more.
+DEFAULT_MAX_WARNINGS = 20
+
+# Warning ranks: folded cells first, then angle defects by their distance
+# from 90 degrees, then size defects by how far past the limit they are.
+_FOLD, _ANGLE, _SIZE = 0, 1, 2
 
 
 @dataclass(frozen=True)
@@ -68,6 +88,9 @@ class BlockQuality:
     min_cell_size: float
     max_cell_size: float
     warnings: tuple[str, ...] = ()
+    interior: BlockSample | None = None
+    # One (tier, magnitude) rank per warning, for the worst-first listing.
+    warning_ranks: tuple[tuple[int, float], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -79,6 +102,7 @@ class InterfaceQuality:
     size_ratios: tuple[float, float]
     max_size_ratio: float
     warnings: tuple[str, ...] = ()
+    warning_ranks: tuple[tuple[int, float], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -88,11 +112,14 @@ class QualityReport:
     thresholds: QualityThresholds
     total_cells: int
     warnings: tuple[str, ...] = field(default=())
+    interior: ModelSample | None = None
+    export_error: str | None = None
+    warning_ranks: tuple[tuple[int, float], ...] = ()
 
     def summary(self) -> dict[str, Any]:
         if not self.blocks:
             return {"blocks": 0, "total_cells": 0, "warning_count": 0}
-        return {
+        data = {
             "blocks": len(self.blocks),
             "total_cells": self.total_cells,
             "min_angle": min(block.min_angle for block in self.blocks),
@@ -117,14 +144,81 @@ class QualityReport:
             ),
             "warning_count": len(self.warnings),
         }
+        if self.interior is not None:
+            data["interior"] = self.interior.summary()
+        return data
+
+    def verdict(self) -> dict[str, Any]:
+        """The few numbers a hand-built session is judged by.
+
+        ``valid`` means the topology validated and the dictionary exports
+        (``None`` when the report was made without interior sampling, which
+        is when the export is tried);
+        ``untangled`` that no sampled cell folds, at the real counts when
+        ``real_counts`` (no block was coarsened by the sampling cap). The
+        non-orthogonality and the severe face count are checkMesh's
+        measures on the sampled cells. Without interior sampling those
+        entries are ``None``: the corner screen cannot decide them.
+        """
+        data: dict[str, Any] = {
+            # The topology always validated (the report raises otherwise);
+            # export is checked with the interior sampling.
+            "valid": (self.export_error is None) if self.interior is not None else None,
+            "export_error": self.export_error,
+            "sampled": self.interior is not None,
+            "untangled": None,
+            "real_counts": None,
+            "max_non_orthogonality": None,
+            "worst_block": None,
+            "worst_face": None,
+            "severe_faces": None,
+            "severe_threshold": SEVERE_NON_ORTHOGONALITY,
+            "folded_cells": None,
+        }
+        if self.interior is not None and self.blocks:
+            summary = self.interior.summary()
+            data.update({
+                "untangled": summary["folded_cells"] == 0,
+                "real_counts": summary["coarsened_blocks"] == 0,
+                "max_non_orthogonality": summary["max_non_orthogonality"],
+                "worst_block": summary["worst_block"],
+                "worst_face": summary["worst_face"],
+                "severe_faces": summary["severe_faces"],
+                "folded_cells": summary["folded_cells"],
+            })
+        return data
 
     def worst_blocks(self, count: int) -> tuple[BlockQuality, ...]:
-        """The ``count`` blocks with the highest non-orthogonality, worst first."""
-        ordered = sorted(
-            self.blocks,
-            key=lambda block: (-block.non_orthogonality, -block.equiangle_skewness, block.block_id),
-        )
+        """The ``count`` worst blocks, worst first.
+
+        With interior sampling a block ranks by its folded cells, then its
+        sampled face non-orthogonality; otherwise by the corner screen's
+        non-orthogonality.
+        """
+        def key(block: BlockQuality) -> tuple:
+            if block.interior is not None:
+                return (
+                    -block.interior.folded_cells,
+                    -block.interior.max_non_orthogonality,
+                    -block.non_orthogonality,
+                    block.block_id,
+                )
+            return (-block.non_orthogonality, -block.equiangle_skewness, block.block_id)
+
+        ordered = sorted(self.blocks, key=key)
         return tuple(ordered[: max(0, count)])
+
+    def ranked_warnings(self, count: int | None = None) -> tuple[list[str], int]:
+        """Warnings worst first - folded cells, then angle defects by their
+        distance from 90 degrees, then size defects by how far past their
+        limit - capped at ``count``, and how many were left out."""
+        ranks = self.warning_ranks or tuple((_SIZE, 0.0) for _ in self.warnings)
+        order = sorted(
+            range(len(self.warnings)), key=lambda index: (ranks[index][0], -ranks[index][1], index)
+        )
+        if count is not None:
+            order = order[: max(0, count)]
+        return [self.warnings[index] for index in order], len(self.warnings) - len(order)
 
     def worst_interfaces(self, count: int) -> tuple[InterfaceQuality, ...]:
         """The ``count`` internal edges with the largest size jump, worst first."""
@@ -134,24 +228,36 @@ class QualityReport:
         return tuple(ordered[: max(0, count)])
 
     def to_data(
-        self, *, summary_only: bool = False, worst: int | None = None
+        self,
+        *,
+        summary_only: bool = False,
+        worst: int | None = None,
+        max_warnings: int | None = None,
     ) -> dict[str, Any]:
         """Structured report; ``summary_only`` drops the tables, ``worst`` keeps
-        only the N worst blocks and internal edges (the summary stays whole)."""
+        only the N worst blocks and internal edges (the summary stays whole),
+        ``max_warnings`` lists only the N worst warnings, worst first, and
+        counts the rest in ``warnings_omitted``."""
         blocks = self.blocks if worst is None else self.worst_blocks(worst)
         interfaces = self.interfaces if worst is None else self.worst_interfaces(worst)
+        if max_warnings is None:
+            warnings, omitted = list(self.warnings), 0
+        else:
+            warnings, omitted = self.ranked_warnings(max_warnings)
         data: dict[str, Any] = {
             "summary": self.summary(),
+            "verdict": self.verdict(),
             "thresholds": asdict(self.thresholds),
-            "warnings": list(self.warnings),
+            "warnings": warnings,
         }
+        if max_warnings is not None:
+            data["warnings_omitted"] = omitted
         if summary_only:
             return data
         data["blocks"] = [
                 {
                     **{
-                        key: value for key, value in asdict(block).items()
-                        if key != "corners"
+                        key: getattr(block, key) for key in _BLOCK_FIELDS
                     },
                     "cells": list(block.cells),
                     "warnings": list(block.warnings),
@@ -159,6 +265,10 @@ class QualityReport:
                         {**asdict(corner), "aspect_ratio": corner.aspect_ratio}
                         for corner in block.corners
                     ],
+                    **(
+                        {"interior": block.interior.to_data()}
+                        if block.interior is not None else {}
+                    ),
                 }
                 for block in blocks
             ]
@@ -177,29 +287,61 @@ class QualityReport:
         return data
 
 
+_BLOCK_FIELDS = (
+    "block_id", "cells", "area", "min_angle", "max_angle", "non_orthogonality",
+    "equiangle_skewness", "max_cell_aspect_ratio", "max_cell_growth_ratio",
+    "min_cell_size", "max_cell_size", "warnings",
+)
+
+
 def assess_quality(
     model: MeshModel,
     thresholds: QualityThresholds | None = None,
+    *,
+    interior_cells: int = 0,
 ) -> QualityReport:
-    """Compute block and interface quality metrics for the whole model."""
+    """Compute block and interface quality metrics for the whole model.
+
+    ``interior_cells`` samples every block's interior at its real counts,
+    coarsened above that many cells a side, adds the sampled measures and
+    their warnings, and checks that the dictionary exports; 0 (the default)
+    keeps the corner screen alone.
+    """
     limits = thresholds or QualityThresholds()
     model.validate()
-    blocks = tuple(_block_quality(model, block, limits) for block in model.blocks)
+    interior: ModelSample | None = None
+    samples: dict[str, BlockSample] = {}
+    export_error: str | None = None
+    if interior_cells and interior_cells > 0:
+        interior = sample_model(model, interior_cells)
+        samples = {sample.block_id: sample for sample in interior.blocks}
+        from .foam import block_mesh_dict
+
+        try:
+            block_mesh_dict(model)
+        except (TopologyError, ValueError) as exc:
+            export_error = str(exc)
+    blocks = tuple(
+        _block_quality(model, block, limits, samples.get(block.id)) for block in model.blocks
+    )
     interfaces = tuple(
         _interface_quality(model, current, occurrences, limits)
         for current, occurrences in model.edge_occurrences().items()
         if len(occurrences) == 2
     )
     warnings: list[str] = []
-    for block in blocks:
-        warnings.extend(block.warnings)
-    for interface in interfaces:
-        warnings.extend(interface.warnings)
+    ranks: list[tuple[int, float]] = []
+    for item in (*blocks, *interfaces):
+        warnings.extend(item.warnings)
+        ranks.extend(item.warning_ranks)
     total_cells = sum(
         nx * ny * nz
         for nx, ny, nz in (model.block_cell_counts(block) for block in model.blocks)
     )
-    return QualityReport(blocks, interfaces, limits, total_cells, tuple(warnings))
+    return QualityReport(
+        blocks, interfaces, limits, total_cells, tuple(warnings),
+        interior, export_error, tuple(ranks),
+    )
 
 
 def block_quality(
@@ -213,13 +355,19 @@ def block_quality(
 
 
 def format_quality(
-    report: QualityReport, *, summary_only: bool = False, worst: int | None = None
+    report: QualityReport,
+    *,
+    summary_only: bool = False,
+    worst: int | None = None,
+    max_warnings: int | None = DEFAULT_MAX_WARNINGS,
 ) -> str:
     """Render a quality report as compact terminal text.
 
     ``summary_only`` prints the headline lines, warnings and thresholds without
     the per-block and per-edge tables; ``worst`` limits the tables to the N
-    worst blocks (by non-orthogonality) and internal edges (by size jump).
+    worst blocks (by sampled, else corner, non-orthogonality) and internal
+    edges (by size jump); ``max_warnings`` lists only the N worst warnings
+    (``None`` lists them all).
     """
     summary = report.summary()
     blocks = report.blocks if worst is None else report.worst_blocks(worst)
@@ -231,6 +379,40 @@ def format_quality(
         f"Quality: {summary['blocks']} block(s), {summary['total_cells']} cells, "
         f"{summary['warning_count']} warning(s)",
     ]
+    verdict = report.verdict()
+    if verdict["sampled"] and report.blocks:
+        interior = summary["interior"]
+        state = (
+            "valid and exports" if verdict["valid"]
+            else f"does NOT export: {verdict['export_error']}"
+        )
+        tangle = (
+            "untangled" if verdict["untangled"]
+            else f"TANGLED ({verdict['folded_cells']} folded cell(s))"
+        )
+        where = (
+            "real counts" if verdict["real_counts"]
+            else f"at most {interior['max_cells_per_side']} cells a side, "
+            f"{interior['coarsened_blocks']} block(s) coarsened"
+        )
+        worst_face = verdict["worst_face"]
+        lines.append(
+            f"Verdict: {state}; {tangle} ({where}); max non-orthogonality "
+            f"{_num(verdict['max_non_orthogonality'])}° in {verdict['worst_block']}"
+            + (f" at ({_num(worst_face[0])}, {_num(worst_face[1])})" if worst_face else "")
+            + f"; {verdict['severe_faces']} face(s) above "
+            f"{_num(verdict['severe_threshold'])}°"
+        )
+        lines.append(
+            f"  interior (sampled, checkMesh's face measure): cell angles "
+            f"{_num(interior['min_angle'])}° .. {_num(interior['max_angle'])}°, "
+            f"{interior['severe_cells']} severe cell(s), {interior['folded_cells']} "
+            f"folded cell(s) in {interior['folded_blocks']} block(s)"
+        )
+    elif report.blocks:
+        lines.append(
+            "Verdict: corner screen only (interior not sampled); checkMesh decides"
+        )
     if report.blocks:
         lines.append(
             f"  corner angles {_num(summary['min_angle'])}° .. "
@@ -246,15 +428,24 @@ def format_quality(
             f"internal edges {_num(summary['max_interface_size_ratio'])}"
         )
     if blocks:
+        sampled = verdict["sampled"]
         lines.append("")
         lines.append(
             "Blocks (id | cells | angles min/max | non-orth | skew | "
-            "aspect | growth | cell size min..max)"
+            "aspect | growth | cell size min..max"
+            + (" | interior non-orth, severe faces, folded" if sampled else "")
+            + ")"
             + (f", the {len(blocks)} worst of {len(report.blocks)}:" if worst is not None else ":")
         )
         for block in blocks:
             nx, ny, nz = block.cells
             flag = " !" if block.warnings else ""
+            extra = ""
+            if block.interior is not None:
+                extra = (
+                    f" | {_num(block.interior.max_non_orthogonality)}, "
+                    f"{block.interior.severe_faces}, {block.interior.folded_cells}"
+                )
             lines.append(
                 f"  {block.block_id} | {nx} {ny} {nz} | "
                 f"{_num(block.min_angle)}/{_num(block.max_angle)} | "
@@ -262,7 +453,7 @@ def format_quality(
                 f"{_num(block.equiangle_skewness)} | "
                 f"{_num(block.max_cell_aspect_ratio)} | "
                 f"{_num(block.max_cell_growth_ratio)} | "
-                f"{_num(block.min_cell_size)}..{_num(block.max_cell_size)}{flag}"
+                f"{_num(block.min_cell_size)}..{_num(block.max_cell_size)}{extra}{flag}"
             )
     if interfaces:
         lines.append("")
@@ -279,8 +470,18 @@ def format_quality(
             )
     lines.append("")
     if report.warnings:
-        lines.append("Warnings:")
-        lines.extend(f"  - {warning}" for warning in report.warnings)
+        if max_warnings is None:
+            shown, omitted = list(report.warnings), 0
+            lines.append("Warnings:")
+        else:
+            shown, omitted = report.ranked_warnings(max_warnings)
+            lines.append(
+                "Warnings:" if not omitted
+                else f"Warnings, the {len(shown)} worst of {len(report.warnings)}:"
+            )
+        lines.extend(f"  - {warning}" for warning in shown)
+        if omitted:
+            lines.append(f"  ... {omitted} more (pass a larger warning limit to list them)")
     else:
         lines.append("No warnings at the current thresholds.")
     limits = report.thresholds
@@ -299,7 +500,10 @@ def format_quality(
 
 
 def _block_quality(
-    model: MeshModel, block: Block, limits: QualityThresholds
+    model: MeshModel,
+    block: Block,
+    limits: QualityThresholds,
+    interior: BlockSample | None = None,
 ) -> BlockQuality:
     edges = [edge_key(*block.directed_edge(index)) for index in range(4)]
     nx, ny, nz = model.block_cell_counts(block)
@@ -343,6 +547,7 @@ def _block_quality(
     area = _polygon_area(corner_points)
 
     warnings: list[str] = []
+    ranks: list[tuple[int, float]] = []
     for corner in corners:
         if corner.angle < limits.min_angle or corner.angle > limits.max_angle:
             warnings.append(
@@ -350,6 +555,7 @@ def _block_quality(
                 f"{corner.vertex} is outside {_num(limits.min_angle)}..."
                 f"{_num(limits.max_angle)}°"
             )
+            ranks.append((_ANGLE, abs(90.0 - corner.angle)))
     if non_orthogonality > limits.non_orthogonality and not any(
         "corner angle" in warning for warning in warnings
     ):
@@ -357,8 +563,10 @@ def _block_quality(
             f"Block {block.id}: non-orthogonality {_num(non_orthogonality)}° "
             f"exceeds {_num(limits.non_orthogonality)}°"
         )
+        ranks.append((_ANGLE, non_orthogonality))
     worst_corner = max(corners, key=lambda corner: corner.aspect_ratio)
     if worst_corner.aspect_ratio > limits.cell_aspect_ratio:
+        ranks.append((_SIZE, worst_corner.aspect_ratio / limits.cell_aspect_ratio))
         warnings.append(
             f"Block {block.id}: cell aspect ratio {_num(worst_corner.aspect_ratio)} "
             f"at {worst_corner.vertex} exceeds {_num(limits.cell_aspect_ratio)} "
@@ -377,6 +585,26 @@ def _block_quality(
             f"Block {block.id}: cell-to-cell growth {_num(growth)} on edge "
             f"{edge_text(worst_edge)} exceeds {_num(limits.cell_growth_ratio)}"
         )
+        ranks.append((_SIZE, growth / limits.cell_growth_ratio))
+    if interior is not None:
+        if interior.folded_cells:
+            at = interior.folded_at
+            warnings.append(
+                f"Block {block.id}: {interior.folded_cells} sampled interior cell(s) "
+                "fold between the corners"
+                + (f", the first at ({_num(at[0])}, {_num(at[1])})" if at else "")
+            )
+            ranks.append((_FOLD, float(interior.folded_cells)))
+        if interior.max_non_orthogonality > limits.non_orthogonality:
+            at = interior.worst_face
+            warnings.append(
+                f"Block {block.id}: sampled interior non-orthogonality "
+                f"{_num(interior.max_non_orthogonality)}° exceeds "
+                f"{_num(limits.non_orthogonality)}° ({interior.severe_faces} face(s) "
+                f"above {_num(SEVERE_NON_ORTHOGONALITY)}°)"
+                + (f" at ({_num(at[0])}, {_num(at[1])})" if at else "")
+            )
+            ranks.append((_ANGLE, interior.max_non_orthogonality))
 
     return BlockQuality(
         block.id,
@@ -392,6 +620,8 @@ def _block_quality(
         min(sizes),
         max(sizes),
         tuple(warnings),
+        interior,
+        tuple(ranks),
     )
 
 
@@ -447,6 +677,7 @@ def _interface_quality(
         ratios.append(math.inf if low <= 0.0 else high / low)
     max_ratio = max(ratios)
     warnings: tuple[str, ...] = ()
+    ranks: tuple[tuple[int, float], ...] = ()
     if max_ratio > limits.interface_size_ratio:
         worst = current[ratios.index(max_ratio)]
         warnings = (
@@ -454,12 +685,14 @@ def _interface_quality(
             f"between {first_block.id} and {second_block.id} at {worst} "
             f"(threshold {_num(limits.interface_size_ratio)})",
         )
+        ranks = ((_SIZE, max_ratio / limits.interface_size_ratio),)
     return InterfaceQuality(
         current,
         (first_block.id, second_block.id),
         (ratios[0], ratios[1]),
         max_ratio,
         warnings,
+        ranks,
     )
 
 

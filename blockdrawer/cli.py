@@ -27,22 +27,31 @@ from .commands import (
     COMMANDS,
     CommandError,
     apply_commands,
+    batch_digest,
     command_specs,
+    format_digest,
     format_result,
     read_command_lines,
     spec_help_text,
 )
 from .describe import (
+    QUERY_SECTIONS,
     SECTIONS,
     describe_model,
-    filter_description,
     format_description,
+    query_description,
 )
 from .domain import TopologyError
 from .foam import block_mesh_dict, write_block_mesh_dict
 from .geometry import GeometryImportError
 from .model import MeshModel
-from .quality import QualityThresholds, assess_quality, format_quality
+from .quality import (
+    DEFAULT_INTERIOR_CELLS,
+    DEFAULT_MAX_WARNINGS,
+    QualityThresholds,
+    assess_quality,
+    format_quality,
+)
 from .render import (
     RenderError,
     RenderOptions,
@@ -149,7 +158,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     describe.add_argument(
         "--only", nargs="+", metavar="ID",
-        help="restrict blocks/edges/vertices/patches/curves to these IDs",
+        help="restrict blocks/edges/vertices/patches/curves to these IDs; a named "
+        "edge lists all its control points",
+    )
+    describe.add_argument(
+        "--bbox", type=float, nargs=4, metavar=("XMIN", "YMIN", "XMAX", "YMAX"),
+        help="restrict to the blocks overlapping this box and the vertices inside it",
+    )
+    describe.add_argument(
+        "--component", metavar="EDGE",
+        help="the opposite-edge count component of EDGE: its edges and blocks",
+    )
+    describe.add_argument(
+        "--unassigned", action="store_true",
+        help="exterior edges without a patch, joined into chains",
     )
     describe.set_defaults(handler=_cmd_describe)
 
@@ -165,6 +187,23 @@ def build_parser() -> argparse.ArgumentParser:
     quality.add_argument(
         "--worst", type=int, metavar="N",
         help="list only the N worst blocks and internal edges",
+    )
+    quality.add_argument(
+        "--interior-cells", type=int, default=DEFAULT_INTERIOR_CELLS, metavar="N",
+        help="sample block interiors at their real counts, up to N cells a side "
+        f"(default {DEFAULT_INTERIOR_CELLS}); 0 keeps the corner screen alone",
+    )
+    quality.add_argument(
+        "--no-interior", action="store_true",
+        help="do not sample block interiors (same as --interior-cells 0)",
+    )
+    quality.add_argument(
+        "--max-warnings", type=int, metavar="N",
+        help=f"list the N worst warnings (text default {DEFAULT_MAX_WARNINGS}; "
+        "JSON lists all unless given)",
+    )
+    quality.add_argument(
+        "--all-warnings", action="store_true", help="list every warning in the text",
     )
     quality.add_argument("--min-angle", type=float, help="warn below this corner angle")
     quality.add_argument("--max-angle", type=float, help="warn above this corner angle")
@@ -267,6 +306,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="seconds per application",
     )
     check.add_argument("--log", action="store_true", help="print the complete logs")
+    check.add_argument(
+        "--worst", type=int, metavar="N",
+        help="blocks listed per checkMesh set (text default 5; JSON lists all unless given)",
+    )
+    check.add_argument(
+        "--no-sets", action="store_true",
+        help="do not map checkMesh's face and cell sets to blocks",
+    )
     check.add_argument("--json", action="store_true")
     check.set_defaults(handler=_cmd_check)
 
@@ -294,6 +341,11 @@ def build_parser() -> argparse.ArgumentParser:
     apply.add_argument("--in-place", action="store_true", help="overwrite the input")
     apply.add_argument(
         "--dry-run", action="store_true", help="apply and report without saving",
+    )
+    apply.add_argument(
+        "--quiet", action="store_true",
+        help="report counts, created and removed IDs and noteworthy results "
+        "instead of every command's result",
     )
     apply.add_argument("--json", action="store_true")
     apply.set_defaults(handler=_cmd_apply)
@@ -332,13 +384,19 @@ def _cmd_new(args: argparse.Namespace) -> int:
 
 def _cmd_describe(args: argparse.Namespace) -> int:
     model = _load(args.session)
-    data = describe_model(model)
-    if args.only:
-        data = filter_description(data, set(args.only))
+    data = query_description(
+        model,
+        only=args.only,
+        bbox=args.bbox,
+        component=args.component,
+        unassigned=args.unassigned,
+    )
     sections = tuple(args.section) if args.section else None
     text = format_description(data, sections=sections)
     if sections:
-        data = {key: data[key] for key in sections if key in data}
+        data = {
+            key: data[key] for key in (*sections, *QUERY_SECTIONS) if key in data
+        }
     _emit(data, text, args.json)
     return 0
 
@@ -353,12 +411,26 @@ def _cmd_quality(args: argparse.Namespace) -> int:
         cell_growth_ratio=args.growth_ratio,
         interface_size_ratio=args.interface_ratio,
     )
-    report = assess_quality(model, thresholds)
     if args.worst is not None and args.worst < 0:
         raise CliError("--worst takes a non-negative count")
+    if args.max_warnings is not None and args.max_warnings < 0:
+        raise CliError("--max-warnings takes a non-negative count")
+    if args.interior_cells < 0:
+        raise CliError("--interior-cells takes a non-negative count")
+    interior = 0 if args.no_interior else args.interior_cells
+    report = assess_quality(model, thresholds, interior_cells=interior)
+    text_warnings = (
+        None if args.all_warnings else
+        args.max_warnings if args.max_warnings is not None else DEFAULT_MAX_WARNINGS
+    )
     _emit(
-        report.to_data(summary_only=args.summary_only, worst=args.worst),
-        format_quality(report, summary_only=args.summary_only, worst=args.worst),
+        report.to_data(
+            summary_only=args.summary_only, worst=args.worst, max_warnings=args.max_warnings
+        ),
+        format_quality(
+            report, summary_only=args.summary_only, worst=args.worst,
+            max_warnings=text_warnings,
+        ),
         args.json,
     )
     return 0
@@ -450,6 +522,8 @@ def _cmd_validate(args: argparse.Namespace) -> int:
 
 
 def _cmd_check(args: argparse.Namespace) -> int:
+    if args.worst is not None and args.worst < 0:
+        raise CliError("--worst takes a non-negative count")
     model = _load(args.session)
     result = run_mesh_check(
         model,
@@ -465,13 +539,14 @@ def _cmd_check(args: argparse.Namespace) -> int:
         keep=args.keep,
         run_checkmesh=not args.no_checkmesh,
         timeout=args.timeout,
+        locate=not args.no_sets,
     )
-    text = format_mesh_check(result)
+    text = format_mesh_check(result, worst=5 if args.worst is None else args.worst)
     if args.log:
         text += "\n--- log.blockMesh ---\n" + result.block_mesh.log
         if result.check_mesh is not None:
             text += "\n--- log.checkMesh ---\n" + result.check_mesh.log
-    data = result.to_data()
+    data = result.to_data(worst=args.worst)
     if args.log:
         data["block_mesh"]["log"] = result.block_mesh.log
         if result.check_mesh is not None:
@@ -511,10 +586,15 @@ def _cmd_apply(args: argparse.Namespace) -> int:
         "applied": len(batch.results),
         "saved": saved,
         "output": str(destination) if saved else None,
-        "results": [result.to_data() for result in batch.results],
         "summary": summary,
     }
-    lines = [format_result(result) for result in batch.results]
+    if args.quiet:
+        digest = batch_digest(model, batch)
+        data.update(digest)
+        lines = format_digest(len(batch.results), digest)
+    else:
+        data["results"] = [result.to_data() for result in batch.results]
+        lines = [format_result(result) for result in batch.results]
     if saved:
         lines.append(f"Saved {destination}")
     else:

@@ -420,7 +420,8 @@ rectangle as its four named sides: merge what the case wants as one patch
 with `set_edge_boundary` onto one of them and `rename_boundary` it, rather
 than rebuilding the assignments. When the result is admissible but not
 resolved, do not stop at the report: `quality_report worst=5` names the
-blocks that miss, `render_session` zoomed on them shows why, and the
+blocks that miss (and `check_mesh`'s `sets` the blocks owning checkMesh's
+bad faces, with bounds to render), `render_session` zoomed on them shows why, and the
 remedies are the ones in section 6 - a sharp or rounded corner that is not
 a block corner wants a split there, a wake or far-field block with a
 170-degree corner wants its ring vertex moved (`move_vertex`) or the strip
@@ -487,7 +488,8 @@ $$
   propagates through the opposite-edge constraint component when asked
   (`propagate=true`).
 - **Counts are shared** along every constraint component (opposite edges of
-  every block through the chain). `describe` lists the components. A
+  every block through the chain). `describe_session component=EDGE` lists
+  the component of an edge. A
   component that holds a wall-tangent edge and a band-normal spoke ties
   streamwise resolution to boundary-layer resolution: that is a topology
   defect - fix the blocks, not the grading. A component whose long edge is a
@@ -515,14 +517,22 @@ $$
 ## 6. Validate - the ladder
 
 1. `validate_session`: loads, topologically valid, exports.
-2. `quality_report` (`summary_only=true` for the headline lines, `worst=N` for
-   the N worst blocks and interfaces): corner angles 30 to 150 degrees,
-   non-orthogonality at most 65 degrees, corner-cell aspect at most 100,
-   growth at most 1.3, interface size jump at most 2.5. **These are measured
-   at the block corners from the first mesh cell.** A block with curved
-   spokes hides its interior distortion from them entirely: the A-airfoil
-   read 18 degrees here and 68 in checkMesh. Only `check_mesh`, or the
-   engine's sampled shape grid, sees the interior.
+2. `quality_report`: its **verdict** line first - valid and exports,
+   untangled, the worst non-orthogonality and where, the faces above 70
+   degrees. These come from every block interior sampled at its real cell
+   counts and grading (up to 256 cells a side, `interior_cells`) with each
+   face measured as checkMesh measures it; on the 30P30N sessions and three
+   engine outputs they equalled checkMesh's maximum and severe-face count,
+   so a hand-built session is judged here before `check_mesh`. Then the
+   10 worst blocks (by folded cells, then interior non-orthogonality) and
+   edges, and the 20 worst warnings (`worst=N`, `max_warnings=N`,
+   `summary_only=true`, `as_text=false` for all of it as JSON). The corner
+   screen beside it - corner angles 30 to 150 degrees, non-orthogonality at
+   most 65, corner-cell aspect at most 100, growth at most 1.3, interface
+   size jump at most 2.5 - **is measured at the block corners from the first
+   mesh cell** and hides interior distortion: the A-airfoil read 18 degrees
+   there and 68 in checkMesh, and the engine's 30P30N block b136 25 there and 74
+   inside. Size jumps and aspect ratios are only on the corner screen.
 3. For a hand-built layout, check it **before** it becomes a session: the
    layout module should assert every block strictly convex from its true
    corner points, no two edges crossing (ray tests on the sampled curves), and
@@ -534,7 +544,13 @@ $$
    at). Look for folded or sliver blocks and for spline overshoot.
 5. `check_mesh`: `blockMesh` then `checkMesh` must print `Mesh OK`. Read
    maximum non-orthogonality, skewness, aspect ratio and every negative-volume
-   or `***` line. This is the authority. **With `patch` z faces checkMesh's
+   or `***` line. This is the authority. `Mesh OK` passes with any number of
+   faces above 70 degrees: read `severe_non_orthogonal_faces` and the
+   single-star `warnings` too. `sets` maps each set checkMesh wrote
+   (`nonOrthoFaces`, `skewFaces`, `wrongOrientedFaces`, ...) to the blocks
+   owning its faces or cells, worst first, with the worst face's angle and
+   the faces' bounds - pad those for `render_session bounds=...`, and give
+   those blocks to `repair_block`. **With `patch` z faces checkMesh's
    aspect ratio includes the spanwise direction** (a unit-depth slab of the
    engine's `skimming_tail` read 58,379; the same mesh with `empty` z patches
    20), so set both to `empty` for a pseudo-2D case; where the $z$ faces stay
@@ -553,7 +569,7 @@ $$
    and wake-landing exemptions waive. These acceptance terms
    (`admissible`, `untangled`, `within_shape_targets`, `resolved`) exist only
    for engine output; a hand-built session is judged by `validate_session`,
-   the quality screen and `Mesh OK`.
+   the quality verdict and `Mesh OK` with its severe-face count.
 
 Failure signatures and their fixes:
 

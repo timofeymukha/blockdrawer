@@ -2,7 +2,14 @@ import json
 import unittest
 
 from blockdrawer.commands import apply_commands
-from blockdrawer.describe import SECTIONS, describe_model, format_description
+from blockdrawer.describe import (
+    SECTIONS,
+    count_component,
+    describe_model,
+    format_description,
+    query_description,
+    unassigned_chains,
+)
 from blockdrawer.model import MeshModel
 
 
@@ -127,3 +134,80 @@ class FormatDescriptionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class QueryTests(unittest.TestCase):
+    def test_only_a_block_shows_the_patch_on_its_edge(self) -> None:
+        model = _sample_model()
+        data = query_description(model, only=["b0"])
+        (inlet,) = data["boundaries"]
+        self.assertEqual(inlet["edges"], ["v0-v3"])
+        self.assertEqual(inlet["total_edges"], 1)
+        text = format_description(data)
+        self.assertNotIn("Boundaries: none defined", text)
+        self.assertIn("inlet patch: v0-v3", text)
+        # b1 has no patched edge, and says so rather than "none defined".
+        other = format_description(query_description(model, only=["b1"]))
+        self.assertIn("Boundaries: none on the listed edges", other)
+
+    def test_a_named_edge_lists_every_control_point_in_either_order(self) -> None:
+        model = apply_commands(MeshModel(), [
+            "set_edge_type v0-v1 spline", "set_control_point_count v0-v1 12",
+        ]).model
+        whole = describe_model(model)
+        edge = next(item for item in whole["edges"] if item["id"] == "v0-v1")
+        self.assertNotIn("control_points", edge)  # more than the listing shows
+        data = query_description(model, only=["v1-v0"])
+        (edge,) = [item for item in data["edges"] if item["id"] == "v0-v1"]
+        self.assertEqual(len(edge["control_points"]), 12)
+        points_line = next(
+            line for line in format_description(data).splitlines()
+            if line.strip().startswith("points:")
+        )
+        self.assertEqual(points_line.count("("), 12)
+
+    def test_bounding_box(self) -> None:
+        model = apply_commands(MeshModel(), [
+            "add_block v1-v2", "add_block v4-v5",
+        ]).model
+        data = query_description(model, bbox=[1.2, 0.2, 1.4, 0.4])
+        self.assertEqual([block["id"] for block in data["blocks"]], ["b1"])
+        self.assertEqual(data["vertices"] and {v["id"] for v in data["vertices"]},
+                         {"v1", "v2", "v4", "v5"})
+        touching = query_description(model, bbox=[0.9, 0.0, 1.1, 1.0])
+        self.assertEqual({block["id"] for block in touching["blocks"]}, {"b0", "b1"})
+        empty = query_description(model, bbox=[10, 10, 11, 11])
+        self.assertEqual(empty["blocks"], [])
+        with self.assertRaises(ValueError):
+            query_description(model, bbox=[1, 1, 0, 0])
+
+    def test_count_component(self) -> None:
+        model = apply_commands(MeshModel(), [
+            "add_block v1-v2", "add_block v4-v5",
+        ]).model
+        component = count_component(model, "v1-v2")
+        self.assertEqual(component["edges"], ["v0-v3", "v1-v2", "v4-v5", "v6-v7"])
+        self.assertEqual(component["blocks"], ["b0", "b1", "b2"])
+        data = query_description(model, component="v2-v1")
+        self.assertEqual(sorted(edge["id"] for edge in data["edges"]), component["edges"])
+        text = format_description(data)
+        self.assertIn("Count component of v1-v2: 10 cells on 4 edge(s) across 3 block(s)", text)
+
+    def test_unassigned_chains(self) -> None:
+        model = MeshModel()
+        (loop,) = unassigned_chains(model)
+        self.assertTrue(loop["closed"])
+        self.assertEqual(len(loop["edges"]), 4)
+        self.assertAlmostEqual(loop["length"], 4.0)
+        model = apply_commands(model, [
+            "add_boundary wall", "set_edge_boundary v0-v1 wall",
+            "set_edge_boundary v2-v3 wall",
+        ]).model
+        chains = unassigned_chains(model)
+        self.assertEqual(len(chains), 2)
+        self.assertEqual({tuple(sorted(chain["edges"])) for chain in chains},
+                         {("v1-v2",), ("v0-v3",)})
+        self.assertFalse(any(chain["closed"] for chain in chains))
+        data = query_description(model, unassigned=True)
+        self.assertEqual(sorted(edge["id"] for edge in data["edges"]), ["v0-v3", "v1-v2"])
+        self.assertIn("Exterior edges without a patch: 2 in 2 chain(s)", format_description(data))

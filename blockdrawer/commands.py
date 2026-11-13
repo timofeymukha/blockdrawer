@@ -1473,6 +1473,168 @@ def _summarize(data: Any, *, depth: int = 0) -> str:
     return str(data)
 
 
+# ---------------------------------------------------------------------------
+# Compact batch reports
+# ---------------------------------------------------------------------------
+
+# A quiet report lists at most this many per-command notes.
+MAX_NOTES = 40
+
+
+def compress_ids(identifiers: Sequence[str]) -> list[str]:
+    """Collapse runs of consecutive IDs sharing a prefix into ``first..last``.
+
+    ``["v3", "v4", "v5", "b1", "x"]`` becomes ``["v3..v5", "b1", "x"]``; the
+    order of the input is kept.
+    """
+    result: list[str] = []
+    run: list[tuple[str, int, str]] = []
+
+    def flush() -> None:
+        if not run:
+            return
+        if len(run) >= 3:
+            result.append(f"{run[0][2]}..{run[-1][2]}")
+        else:
+            result.extend(item[2] for item in run)
+        run.clear()
+
+    for identifier in identifiers:
+        digits = len(identifier) - len(identifier.rstrip("0123456789"))
+        prefix = identifier[: len(identifier) - digits]
+        text = identifier[len(prefix):]
+        # Zero-padded numbers are left alone: "v007..v009" would read oddly.
+        number = int(text) if text and (text == "0" or not text.startswith("0")) else None
+        if run and number is not None and prefix == run[-1][0] and number == run[-1][1] + 1:
+            run.append((prefix, number, identifier))
+            continue
+        flush()
+        if number is None:
+            result.append(identifier)
+        else:
+            run.append((prefix, number, identifier))
+    flush()
+    return result
+
+
+def _note(result: CommandResult) -> dict[str, Any] | None:
+    """What one command reported that an agent should read, if anything."""
+    data = result.result
+    base = {"index": result.index + 1, "op": result.name}
+    if result.name == "repair_block":
+        return {
+            **base,
+            "block": data.get("block_id"),
+            "applied": data.get("operation") is not None,
+            "operation": data.get("operation"),
+            "arguments": data.get("arguments"),
+            "reason": data.get("reason"),
+        }
+    if result.name == "split_edge":
+        return {
+            **base,
+            "edge": data.get("source_edge"),
+            "cells": [data.get("first_cells"), data.get("second_cells")],
+            "vertices": data.get("split_vertex_ids"),
+            "cut_edges": data.get("cut_edges"),
+        }
+    if result.name == "combine_blocks":
+        return {
+            **base,
+            "merged_blocks": data.get("merged_block_ids"),
+            "removed_blocks": data.get("removed_block_ids"),
+        }
+    if result.name == "project" and data.get("fitted_edges"):
+        return {
+            **base,
+            "fitted_edges": len(data.get("fitted_edges") or ()),
+            "max_fit_error": data.get("max_fit_error"),
+            "fit_tolerance": data.get("fit_tolerance"),
+            "fit_tolerance_met": data.get("fit_tolerance_met"),
+        }
+    if result.name == "project" and data.get("converted_arcs"):
+        return {**base, "converted_arcs": data.get("converted_arcs")}
+    links = data.get("spacing_links") if isinstance(data, dict) else None
+    if links and any(link.get("synchronized") is False for link in links):
+        return {
+            **base,
+            "edge": data.get("edge"),
+            "unsynchronized_links": [
+                link for link in links if link.get("synchronized") is False
+            ],
+        }
+    return None
+
+
+def batch_digest(
+    before: MeshModel, batch: BatchResult, *, max_notes: int = MAX_NOTES
+) -> dict[str, Any]:
+    """A compact account of a batch: what it did, created and removed.
+
+    ``operations`` counts the commands by name; ``created`` and ``removed``
+    list the vertex, block, curve and patch IDs that appeared or vanished
+    (runs of consecutive IDs collapsed to ``first..last``); ``notes`` keeps
+    the results worth reading - repairs, splits and merges, fits, spacing
+    links left out of sync - at most ``max_notes`` of them, the rest counted
+    in ``notes_omitted``.
+    """
+    after = batch.model
+    operations: dict[str, int] = {}
+    for result in batch.results:
+        operations[result.name] = operations.get(result.name, 0) + 1
+
+    def appeared(old: Iterable[str], new: Iterable[str]) -> list[str]:
+        known = set(old)
+        return [identifier for identifier in new if identifier not in known]
+
+    created = {
+        "vertices": appeared(before.vertices, after.vertices),
+        "blocks": appeared((b.id for b in before.blocks), (b.id for b in after.blocks)),
+        "curves": appeared(before.geometry_curves, after.geometry_curves),
+        "boundaries": appeared(before.boundaries, after.boundaries),
+    }
+    removed = {
+        "vertices": appeared(after.vertices, before.vertices),
+        "blocks": appeared((b.id for b in after.blocks), (b.id for b in before.blocks)),
+        "curves": appeared(after.geometry_curves, before.geometry_curves),
+        "boundaries": appeared(after.boundaries, before.boundaries),
+    }
+    notes = [note for note in (_note(result) for result in batch.results) if note]
+    shown = notes[: max(0, max_notes)]
+    return {
+        "operations": operations,
+        "created": {key: compress_ids(value) for key, value in created.items() if value},
+        "created_counts": {key: len(value) for key, value in created.items() if value},
+        "removed": {key: compress_ids(value) for key, value in removed.items() if value},
+        "removed_counts": {key: len(value) for key, value in removed.items() if value},
+        "notes": shown,
+        "notes_omitted": len(notes) - len(shown),
+    }
+
+
+def format_digest(applied: int, digest: dict[str, Any]) -> list[str]:
+    """Text lines for :func:`batch_digest`."""
+    operations = ", ".join(
+        f"{name} {count}" for name, count in sorted(
+            digest["operations"].items(), key=lambda item: (-item[1], item[0])
+        )
+    )
+    lines = [f"Applied {applied} command(s)" + (f": {operations}" if operations else "")]
+    for label, key in (("Created", "created"), ("Removed", "removed")):
+        parts = [
+            f"{digest[key + '_counts'][kind]} {kind} ({', '.join(identifiers)})"
+            for kind, identifiers in digest[key].items()
+        ]
+        if parts:
+            lines.append(f"{label}: " + "; ".join(parts))
+    for note in digest["notes"]:
+        detail = {key: value for key, value in note.items() if key not in ("index", "op")}
+        lines.append(f"  {note['index']}. {note['op']}: {_summarize(detail)}")
+    if digest["notes_omitted"]:
+        lines.append(f"  ... {digest['notes_omitted']} more note(s)")
+    return lines
+
+
 def spec_help_text(specs: Sequence[CommandSpec] | None = None) -> str:
     """Return a human-readable listing of all commands and parameters."""
     lines: list[str] = []

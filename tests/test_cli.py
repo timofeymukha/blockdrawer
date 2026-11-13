@@ -257,6 +257,92 @@ class CliTests(unittest.TestCase):
         self.assertIsNone(data["check_mesh"])
         self.assertFalse(data["kept"])
 
+    def test_check_lists_the_worst_blocks_of_each_set(self) -> None:
+        from tests.polymesh_fixture import extruded_mesh, write_polymesh, write_set
+        from tests.test_checkmesh import SEVERE_LOG
+        from tests.test_polymesh import CELLS, POINTS, two_block_model
+
+        save_session(two_block_model(), self.session)
+        fixture = self.root / "fixture"
+        write_polymesh(fixture, extruded_mesh(POINTS, CELLS))
+        write_set(fixture, "nonOrthoFaces", "faceSet", [1, 2])
+        stub = self.root / "meshstub.py"
+        stub.write_text(
+            "import shutil, sys\n"
+            "case = sys.argv[sys.argv.index('-case') + 1]\n"
+            "if 'blockMesh' in sys.argv:\n"
+            f"    shutil.copytree({str(fixture / 'constant')!r}, case + '/constant', dirs_exist_ok=True)\n"
+            "    print('  nCells: 4')\n"
+            "else:\n"
+            f"    print({SEVERE_LOG.replace('596', '2')!r})\n",
+            encoding="utf-8",
+        )
+        command = f"{sys.executable} {stub} blockMesh"
+        code, out, _ = run_cli("check", str(self.session), "--blockmesh-command", command, "--worst", "1")
+        self.assertEqual(code, 0)
+        self.assertIn("severely non-orthogonal faces (> 70 degrees): 2", out)
+        self.assertIn("nonOrthoFaces: 2 faces in 2 block(s)", out)
+        self.assertIn("... 1 more block(s)", out)
+        code, out, _ = run_cli("check", str(self.session), "--blockmesh-command", command, "--json")
+        data = json.loads(out)
+        self.assertEqual(len(data["sets"][0]["blocks"]), 2)
+        self.assertEqual(data["severe_non_orthogonal_faces"], 2)
+        code, out, _ = run_cli(
+            "check", str(self.session), "--blockmesh-command", command, "--json", "--no-sets",
+        )
+        self.assertEqual(json.loads(out)["sets"], [])
+
+    def test_describe_queries(self) -> None:
+        run_cli("apply", str(self.session), "add_block v1-v2", "add_block v4-v5", "--in-place")
+        code, out, _ = run_cli("describe", str(self.session), "--bbox", "1.2", "0.2", "1.4", "0.4")
+        self.assertEqual(code, 0)
+        self.assertIn("b1:", out)
+        self.assertNotIn("b0:", out)
+        code, out, _ = run_cli("describe", str(self.session), "--component", "v1-v2", "--json")
+        self.assertEqual(json.loads(out)["component"]["blocks"], ["b0", "b1", "b2"])
+        code, out, _ = run_cli(
+            "describe", str(self.session), "--unassigned", "--section", "summary",
+        )
+        self.assertIn("Exterior edges without a patch: 8 in 1 chain(s)", out)
+
+    def test_quality_interior_and_warning_cap(self) -> None:
+        run_cli(
+            "apply", str(self.session), "add_block v1-v2",
+            "set_edge_grading v0-v1 total_ratio 20", "set_edge_grading v1-v4 total_ratio 50",
+            "--in-place",
+        )
+        code, out, _ = run_cli("quality", str(self.session), "--max-warnings", "1")
+        self.assertEqual(code, 0)
+        self.assertIn("Verdict: valid and exports; untangled (real counts)", out)
+        self.assertIn("Warnings, the 1 worst of 3:", out)
+        code, out, _ = run_cli("quality", str(self.session), "--all-warnings")
+        self.assertIn("Warnings:", out)
+        code, out, _ = run_cli("quality", str(self.session), "--json", "--no-interior")
+        data = json.loads(out)
+        self.assertFalse(data["verdict"]["sampled"])
+        self.assertNotIn("interior", data["blocks"][0])
+        code, out, _ = run_cli("quality", str(self.session), "--json", "--max-warnings", "2")
+        data = json.loads(out)
+        self.assertEqual((len(data["warnings"]), data["warnings_omitted"]), (2, 1))
+        code, _, err = run_cli("quality", str(self.session), "--interior-cells", "-1")
+        self.assertEqual(code, 1)
+
+    def test_apply_quiet(self) -> None:
+        code, out, _ = run_cli(
+            "apply", str(self.session), "add_block v1-v2", "split_edge v0-v1 0.5",
+            "--quiet", "--dry-run",
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("Applied 2 command(s)", out)
+        self.assertIn("Created:", out)
+        self.assertIn("2. split_edge:", out)
+        code, out, _ = run_cli(
+            "apply", str(self.session), "add_block v1-v2", "--quiet", "--json",
+        )
+        data = json.loads(out)
+        self.assertNotIn("results", data)
+        self.assertEqual(data["created"]["blocks"], ["b1"])
+
 
 if __name__ == "__main__":
     unittest.main()
