@@ -66,18 +66,50 @@ class BlockGrid:
         return self.sampled_cells != (self.x_cells, self.y_cells)
 
 
+def _uniform_samples(model: MeshModel, directed: tuple[str, str], cells: int):
+    """Edge samples at ``cells`` even parameter fractions, ignoring counts and grading."""
+    current = edge_key(*directed)
+    fractions = tuple(index / cells for index in range(cells + 1))
+    canonical = fractions if directed == current else tuple(1.0 - value for value in fractions)
+    points = model.edge_points(current, canonical)
+    return tuple(zip(fractions, points))
+
+
 def block_grid(
-    model: MeshModel, block: Block, max_cells: int | None = DEFAULT_MAX_CELLS
+    model: MeshModel,
+    block: Block,
+    max_cells: int | None = DEFAULT_MAX_CELLS,
+    *,
+    uniform: int | None = None,
 ) -> BlockGrid:
     """The block's mesh nodes at its real counts, coarsened only above ``max_cells`` a side.
 
     Coarsening keeps every n-th node counted from both ends of an edge, so
     two blocks sharing an edge sample the same nodes on it; a coarsened side
     then has from about half to twice ``max_cells`` cells. ``None`` (or 0)
-    samples every real node.
+    samples every real node. With ``uniform`` the block is sampled at that
+    many even parameter fractions a side instead, independent of every
+    count and grading: the block's *shape* grid.
     """
     directed = [block.directed_edge(index) for index in range(4)]
     edges = [edge_key(*item) for item in directed]
+    corners = tuple(
+        (model.vertices[identifier].x, model.vertices[identifier].y)
+        for identifier in block.vertices
+    )
+    if uniform:
+        bottom = _uniform_samples(model, directed[0], uniform)
+        right = _uniform_samples(model, directed[1], uniform)
+        top = _uniform_samples(model, (directed[2][1], directed[2][0]), uniform)
+        left = _uniform_samples(model, (directed[3][1], directed[3][0]), uniform)
+        nodes = tuple(
+            tuple(
+                _block_mesh_point(bottom[a], right[b], top[a], left[b], corners)  # type: ignore[arg-type]
+                for a in range(uniform + 1)
+            )
+            for b in range(uniform + 1)
+        )
+        return BlockGrid(block.id, nodes, uniform, uniform)
     x_cells = model.edge_cells[edges[0]]
     y_cells = model.edge_cells[edges[1]]
     limit = max_cells if max_cells else None
@@ -89,10 +121,6 @@ def block_grid(
     right = _directed_edge_samples(model, directed[1], y_indices)
     top = _directed_edge_samples(model, (directed[2][1], directed[2][0]), x_indices)
     left = _directed_edge_samples(model, (directed[3][1], directed[3][0]), y_indices)
-    corners = tuple(
-        (model.vertices[identifier].x, model.vertices[identifier].y)
-        for identifier in block.vertices
-    )
     nodes = tuple(
         tuple(
             _block_mesh_point(bottom[a], right[b], top[a], left[b], corners)  # type: ignore[arg-type]
@@ -361,14 +389,23 @@ class ModelSample:
         }
 
 
-def sample_model(model: MeshModel, max_cells: int | None = DEFAULT_MAX_CELLS) -> ModelSample:
-    """Sample every block and measure its cells and faces, shared edges included."""
+def sample_model(
+    model: MeshModel,
+    max_cells: int | None = DEFAULT_MAX_CELLS,
+    *,
+    uniform: int | None = None,
+) -> ModelSample:
+    """Sample every block and measure its cells and faces, shared edges included.
+
+    ``uniform`` samples every block at that many even parameter fractions a
+    side instead of its real nodes: the count-free shape of the layout.
+    """
     tallies: list[_FaceTally] = []
     angles: list[CellAngles] = []
     grids: list[BlockGrid] = []
     shared: dict[EdgeKey, list[tuple[int, bool, list[Point], list[Point]]]] = {}
     for position, block in enumerate(model.blocks):
-        grid = block_grid(model, block, max_cells)
+        grid = block_grid(model, block, max_cells, uniform=uniform)
         measured, centres = _measure_cells(grid.nodes, SEVERE_ANGLE, False, centroids=True)
         tally = _FaceTally()
         _interior_faces(grid.nodes, centres, tally)

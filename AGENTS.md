@@ -202,6 +202,12 @@ them in the canvas widgets.
   higher maximum, else scaled back by halves; one `MeshModel.move_vertices`
   call (atomic, curves carried by the chord similarity), so one history
   entry. Measured trade-offs are in the README. Boundary vertices never move.
+  `mode="shape"` (`smooth mode=shape`) runs the same optimiser on the
+  count-free block map (`shape_cells` even parameter fractions a side, all
+  faces real, untangled at `fold_cells`; `sampling.sample_model(uniform=N)`)
+  without the length and size limits, keeps the band rule, and reports the
+  stale real-count verdict as `real_before`/`real_after`; a stale fold is
+  refused unless `allow_stale_fold`.
 - `blockdrawer/render.py`: headless SVG/PNG rendering through one layout routine
   and two painters. Labels (vertex IDs, block IDs, cell counts, patch legend)
   are on by default; bounds, zoom-to-entity, and highlights select a region.

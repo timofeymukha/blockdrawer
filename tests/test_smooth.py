@@ -165,3 +165,63 @@ class SmoothTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ShapeModeTests(unittest.TestCase):
+    def test_shape_mode_reports_the_stale_mesh_and_ignores_size_limits(self) -> None:
+        model = two_by_two((0.7, 0.65))
+        lengths = {current: model.edge_length(current) for current in model.edges()}
+        result = smooth_model(
+            model, options=SmoothOptions(mode="shape", length_tolerance=0.01)
+        )
+        self.assertTrue(result.applied, result.reason)
+        self.assertEqual(result.mode, "shape")
+        self.assertIn("run size next", result.reason)
+        data = result.to_data()
+        self.assertIn("real_before", data)
+        self.assertLess(data["real_after"]["max_non_orthogonality"],
+                        data["real_before"]["max_non_orthogonality"])
+        # No length limit in shape mode: an edge changed by more than 1 percent.
+        self.assertTrue(any(
+            abs(model.edge_length(current) / length - 1.0) > 0.01
+            for current, length in lengths.items()
+        ))
+        self.assertNotIn("real_before", smooth_model(two_by_two()).to_data())
+
+    def test_a_shape_that_folds_the_stale_mesh_is_refused_unless_allowed(self) -> None:
+        real = smooth_module.sample_model
+        calls = []
+
+        class Folded:
+            def __init__(self, sample):
+                self.sample = sample
+
+            def summary(self):
+                return {**self.sample.summary(), "folded_cells": 3}
+
+        def folding(model, max_cells=None, *, uniform=None):
+            sample = real(model, max_cells, uniform=uniform)
+            if uniform is None:
+                calls.append(1)
+                if len(calls) > 1:  # every real check after the first
+                    return Folded(sample)
+            return sample
+
+        with mock.patch.object(smooth_module, "sample_model", folding):
+            model = two_by_two()
+            before = positions(model)
+            refused = smooth_model(model, options=SmoothOptions(mode="shape"))
+            self.assertFalse(refused.applied)
+            self.assertIn("allow_stale_fold", refused.reason)
+            self.assertEqual(positions(model), before)
+            calls.clear()
+            allowed = smooth_model(
+                model, options=SmoothOptions(mode="shape", allow_stale_fold=True)
+            )
+            self.assertTrue(allowed.applied)
+            self.assertEqual(allowed.real_after["folded_cells"], 3)
+
+    def test_the_command_takes_the_mode(self) -> None:
+        result = apply_commands(two_by_two(), ["smooth mode=shape"]).results[0].result
+        self.assertEqual(result["mode"], "shape")
+        self.assertTrue(result["applied"])

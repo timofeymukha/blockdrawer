@@ -599,6 +599,18 @@ verdicts, the vertices moved and the largest band-edge change, or says there
 was nothing to gain. On the engine's 30P30N it took checkMesh from 60 faces
 above 70 degrees (max 77.9) to none (max 68.7) in 10 s, and the 475k-cell
 version from 8725 to 4716 in 68 s.
+
+`smooth mode=shape` optimises the layout before its cells exist: every block
+is judged at eight even parameter fractions a side (untangled at 32),
+ignoring the stored counts and grading, with no length or size limits and
+the wall-band rule kept. It is applied when that count-free verdict is no
+worse, and reports the mesh the stored counts and grading now give, before
+and after - they were chosen for the old shape, so `size` should follow. A
+shape whose stale counts would fold a real cell is refused unless
+`allow_stale_fold=true` (what the shape-size-polish sequence passes), so a
+session is never left tangled by a command that did not say so. On the
+engine's square cylinder it took the count-free maximum from 87.6 to 51.1
+degrees, where the real-count smoother is held at 86.7 by the cell sizes.
 A running server keeps the tool schemas it started with; restart it after
 upgrading BlockDrawer. Every tool takes the session path, so agents and the GUI
 can share one file: save in the editor, let the agent edit and check, then

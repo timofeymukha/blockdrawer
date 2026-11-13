@@ -87,6 +87,18 @@ class SmoothOptions:
     # thin strip such as a wake band is not widened tenfold.
     length_tolerance: float = 0.5
     verify_cells: int = VERIFY_CELLS
+    # ``real`` judges the mesh the stored counts and grading define;
+    # ``shape`` judges the count-free block map - every block at
+    # ``shape_cells`` even parameter fractions a side, untangled at
+    # ``fold_cells`` - with no length or size limits (there are no cells to
+    # keep), the wall-band rule kept. Its result leaves the counts and
+    # grading stale: sizing has to follow.
+    mode: str = "real"
+    shape_cells: int = 8
+    fold_cells: int = 32
+    # A shape result whose stored counts and grading would fold a real cell
+    # is refused unless this is set (because ``size`` will follow).
+    allow_stale_fold: bool = False
 
 
 @dataclass(frozen=True)
@@ -108,9 +120,18 @@ class SmoothResult:
     minmax_rounds: int
     held: tuple[str, ...] = field(default_factory=tuple)
     positions: dict[str, tuple[float, float]] = field(default_factory=dict, repr=False)
+    mode: str = "real"
+    # In shape mode: the mesh the stored counts and grading define, before and after.
+    real_before: dict[str, Any] | None = None
+    real_after: dict[str, Any] | None = None
 
     def to_data(self) -> dict[str, Any]:
+        extra: dict[str, Any] = {}
+        if self.mode != "real":
+            extra = {"real_before": self.real_before, "real_after": self.real_after}
         return {
+            "mode": self.mode,
+            **extra,
             "applied": self.applied,
             "reason": self.reason,
             "before": self.before,
@@ -201,12 +222,17 @@ class _State:
             for vertex_id in block.vertices:
                 self.vertex_blocks.setdefault(vertex_id, []).append(position)
         for current in self.edge_blocks:
-            cells = model.edge_cells[current]
-            indices = _indices(cells, options.samples)
-            self.edge_real[current] = [
-                second - first == 1 for first, second in zip(indices, indices[1:])
-            ]
-            fractions = model.edge_node_fractions(current, indices)
+            if options.mode == "shape":
+                count = options.shape_cells
+                fractions = tuple(index / count for index in range(count + 1))
+                self.edge_real[current] = [True] * count
+            else:
+                cells = model.edge_cells[current]
+                indices = _indices(cells, options.samples)
+                self.edge_real[current] = [
+                    second - first == 1 for first, second in zip(indices, indices[1:])
+                ]
+                fractions = model.edge_node_fractions(current, indices)
             points = model.edge_points(current, fractions)
             self.edge_samples[current] = [
                 (fraction, complex(x, y)) for fraction, (x, y) in zip(fractions, points)
@@ -811,6 +837,8 @@ def _optimise(
                 )
 
     def keeps_lengths(vertex_id: str, target: complex) -> bool:
+        if options.mode == "shape":
+            return True  # no cells yet: sizing follows the shape
         incident = state.vertex_edges.get(vertex_id, ())
         if options.length_tolerance > 0.0:
             for current in incident:
@@ -940,10 +968,25 @@ def smooth_model(
     options = options or SmoothOptions()
     if options.samples < 1 or options.power <= 0.0 or options.band_tolerance < 0.0:
         raise TopologyError("smooth needs samples >= 1, power > 0 and band_tolerance >= 0")
+    if options.mode not in ("real", "shape"):
+        raise TopologyError(f"smooth mode must be real or shape, got {options.mode!r}")
     model.validate()
     free = select_free(model, blocks=blocks, bbox=bbox, hold=hold)
     spokes = band_spokes(model, free)
-    before = _verdict(sample_model(model, options.verify_cells))
+    shape = options.mode == "shape"
+
+    def judge(candidate: MeshModel) -> dict[str, Any]:
+        if not shape:
+            return _verdict(sample_model(candidate, options.verify_cells))
+        verdict = _verdict(sample_model(candidate, uniform=options.shape_cells))
+        # Untangled is judged finer than the shape grid, as the engine does.
+        verdict["folded_cells"] = _verdict(
+            sample_model(candidate, uniform=options.fold_cells)
+        )["folded_cells"]
+        return verdict
+
+    before = judge(model)
+    real_before = _verdict(sample_model(model, options.verify_cells)) if shape else None
 
     def result(applied, reason, after=None, positions=None, scale=0.0, sweeps=0, rounds=0,
                working=None):
@@ -971,7 +1014,10 @@ def smooth_model(
             applied, reason, before, after or before, len(free), len(positions),
             displacement, sum(len(items) for items in spokes.values()), band,
             edges_change, scale, sweeps, rounds, tuple(hold), positions,
+            options.mode, real_before, real_after if applied else real_before,
         )
+
+    real_after: dict[str, Any] | None = None
 
     model_before = {vertex_id: (vertex.x, vertex.y) for vertex_id, vertex in model.vertices.items()}
     lengths_before = {current: model.edge_length(current) for current in model.edges()}
@@ -991,6 +1037,7 @@ def smooth_model(
             "face non-orthogonality",
             sweeps=sweeps, rounds=rounds,
         )
+    stale_refusals: list[float] = []
     for scale in (1.0, *FALLBACK_SCALES):
         scaled = {
             vertex_id: (
@@ -1004,9 +1051,15 @@ def smooth_model(
             working.move_vertices(scaled, carry_curves=True)
         except (TopologyError, ValueError):
             continue
-        after = _verdict(sample_model(working, options.verify_cells))
+        after = judge(working)
         if not _no_worse(after, before):
             continue
+        if shape:
+            real_after = _verdict(sample_model(working, options.verify_cells))
+            if real_after["folded_cells"] and not real_before["folded_cells"] \
+                    and not options.allow_stale_fold:
+                stale_refusals.append(scale)
+                continue
         gained = (
             after["max_non_orthogonality"] < before["max_non_orthogonality"] - 1.0e-6
             or after["severe_faces"] < before["severe_faces"]
@@ -1024,7 +1077,23 @@ def smooth_model(
             f"faces above {SEVERE_NON_ORTHOGONALITY:g} degrees {before['severe_faces']} -> "
             f"{after['severe_faces']}"
         )
+        if shape:
+            reason = (
+                "shape " + reason + " on the count-free block map; the stored counts and "
+                "grading now give max non-orthogonality "
+                f"{real_before['max_non_orthogonality']:.2f} -> {real_after['max_non_orthogonality']:.2f}, "
+                f"{real_before['severe_faces']} -> {real_after['severe_faces']} faces above "
+                f"{SEVERE_NON_ORTHOGONALITY:g} degrees, {real_after['folded_cells']} folded cells: they "
+                "were chosen for the old shape - run size next"
+            )
         return result(True, reason, after, scaled, scale, sweeps, rounds, working)
+    if stale_refusals:
+        return result(
+            False,
+            "not applied: the smoothed shape would fold real cells under the stored counts "
+            "and grading; pass allow_stale_fold=true when size follows",
+            sweeps=sweeps, rounds=rounds,
+        )
     return result(
         False,
         "nothing to gain: the optimised positions did not pass the full sampled check "

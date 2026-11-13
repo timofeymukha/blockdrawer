@@ -675,6 +675,8 @@ def _run_smooth(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
         band_tolerance=args["band_tolerance"],
         size_cap=args["size_cap"],
         length_tolerance=args["length_tolerance"],
+        mode=args["mode"],
+        allow_stale_fold=args["allow_stale_fold"],
     )
     result = smooth_model(
         model,
@@ -1095,7 +1097,8 @@ _register(CommandSpec(
         "(band_tolerance), no edge changes length by more than "
         "length_tolerance, and no interface size jump crosses size_cap. The "
         "result is applied only when the full sampled check stays untangled "
-        "with no more severe faces and no higher maximum."
+        "with no more severe faces and no higher maximum. mode=shape optimises "
+        "the count-free block shape instead, before size sets counts and grading."
     ),
     (
         Parameter(
@@ -1124,6 +1127,19 @@ _register(CommandSpec(
             "a first-cell size jump across an internal edge below this may not "
             "cross it; one above may grow by a tenth",
             required=False, default=2.5,
+        ),
+        Parameter(
+            "mode", "choice",
+            "real judges the mesh the stored counts and grading define; shape the "
+            "count-free block map, without length or size limits, leaving the counts "
+            "and grading stale for size to set",
+            required=False, default="real", choices=("real", "shape"),
+        ),
+        Parameter(
+            "allow_stale_fold", "bool",
+            "in shape mode, apply even when the stored counts and grading would fold "
+            "a real cell (size follows)",
+            required=False, default=False,
         ),
     ),
     _run_smooth,
