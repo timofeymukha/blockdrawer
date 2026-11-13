@@ -518,6 +518,12 @@ The order is shape, sizing, polish, then hand corrections:
    the field's own are yours to fix), interface jumps above 2.5/5/20 and
    the worst, splits, refusals, `guard`, links left out of sync. A `size refused` error means the counts would take checkMesh's
    skewness past 4 in a tapered block: split it or keep the counts.
+   If `verification.field` shows faces above 70 degrees, size again from
+   the same input with `method=distance` (item 3's wall-distance sizing)
+   and keep the mesh `check` finds fewer faces above 70 in, then the better
+   jump histogram. This rests on one session (fine 30P30N: distance 0 faces
+   at 68.8 degrees, directional 6 at 85.8; directional better on every
+   other case measured).
 3. `smooth` - the real-count polish.
 4. Hand corrections where the report or `quality_report` point.
 

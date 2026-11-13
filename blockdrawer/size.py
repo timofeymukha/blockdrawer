@@ -135,6 +135,9 @@ class SizeOptions:
     # Keep every count and recompute the gradings from the current
     # geometry - after a smoothing changed the edge lengths.
     keep_counts: bool = False
+    # "directional" (this module) or "distance" (item 3's wall-distance
+    # sizing, size_distance.py).
+    method: str = "directional"
 
     def check(self, model: MeshModel) -> None:
         if not (self.first_width > 0.0 and self.core_size >= self.first_width):
@@ -147,6 +150,10 @@ class SizeOptions:
             raise TopologyError("size needs wall_aspect >= 1")
         if self.count_rule not in ("max", "mean"):
             raise TopologyError("count_rule must be max or mean")
+        if self.method not in ("directional", "distance"):
+            raise TopologyError("method must be directional or distance")
+        if self.method == "distance" and self.keep_counts:
+            raise TopologyError("keep_counts applies to method=directional only")
         for name, width in self.patch_first_widths:
             if name not in model.boundaries:
                 raise TopologyError(f"Unknown patch {name!r} in a first-width override")
@@ -496,6 +503,8 @@ def size_model(
     """Size ``model`` in place; see the module docstring."""
     options.check(model)
     model.validate()
+    if options.method == "distance":
+        return _size_by_distance(model, options, blocks, bbox)
     cells_before = _total_cells(model)
     working = from_data(to_data(model))
     field_ = SizeField(working, options)
@@ -557,6 +566,65 @@ def size_model(
     result.moves = moves
     result.guard = guard
     result.verification = state.get("verification", {})
+    field_faces = result.verification.get("field", {}).get("severe_faces", 0)
+    if field_faces:
+        result.note = " ".join(filter(None, [result.note, (
+            f"the field's own state has {field_faces} face(s) above 70 degrees "
+            "(verification.field) that spending does not remove; size again with "
+            "method=distance and keep the mesh check finds fewer such faces in"
+        )]))
+    _replace(model, working)
+    return result
+
+
+def _neighbours(model: MeshModel) -> dict[str, set[str]]:
+    users: dict[EdgeKey, list[str]] = {}
+    for block in model.blocks:
+        for k in range(4):
+            users.setdefault(edge_key(*block.directed_edge(k)), []).append(block.id)
+    neighbours: dict[str, set[str]] = {}
+    for ids in users.values():
+        for block in ids:
+            neighbours.setdefault(block, set()).update(ids)
+    return neighbours
+
+
+def _size_by_distance(model, options, blocks, bbox) -> SizeResult:
+    """Item 3's sizing (``size_distance``), verified and reported like the
+    default: no spending, so the field's state is the result."""
+    from . import size_distance
+
+    cells_before = _total_cells(model)
+    skew_floor = _max_skewness(model)
+    working = from_data(to_data(model))
+    old = size_distance.size_model(working, size_distance.SizeOptions(
+        first_width=options.first_width,
+        core_size=options.core_size,
+        growth=options.growth,
+        wall_aspect=options.wall_aspect,
+        interface_growth=options.interface_growth,
+        count_rule=options.count_rule,
+        budget=options.budget,
+        patch_first_widths=options.patch_first_widths,
+        split=options.split,
+        minimum_cells=options.minimum_cells,
+        maximum_cells=options.maximum_cells,
+    ), blocks=blocks, bbox=bbox)
+    skewness = _max_skewness(working)
+    if skewness > SKEWNESS_LIMIT >= skew_floor:
+        raise TopologyError(
+            f"size refused: the sized mesh's sampled face skewness {skewness:.3g} exceeds "
+            f"checkMesh's limit of {SKEWNESS_LIMIT:g} where the input's was {skew_floor:.3g}"
+        )
+    verdict = _verify(working, _neighbours(working))[1]
+    brief = {key: verdict[key] for key in ("severe_faces", "max_non_orthogonality", "max_skewness", "folded_cells")}
+    result = _report(working, cells_before, old.components, old.splits, old.refused, old.budget_factor, old.note)
+    result.budget = options.budget
+    result.field_cells = result.total_cells
+    result.verification = {
+        "cells_per_side": VERIFY_CELLS, "field": brief, "result": dict(brief), "undone_moves": 0,
+        "method": "distance",
+    }
     _replace(model, working)
     return result
 

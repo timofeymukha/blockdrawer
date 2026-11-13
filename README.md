@@ -676,6 +676,20 @@ repair's moves do not lower; after the polish checkMesh counts 6 at 85.8
 degrees (12 at the default budget), where the previous fixed sizing gave 0
 at 68.8. Check fine sessions and correct those blocks by hand.
 
+`method=distance` keeps item 3's sizing reachable (`size_distance.py`, as
+of commit 9a84f29): counts from the wall distance alone, wall-normal edges
+graded, tangential ones uniform, no budget spending, `interface_growth`
+unmatched unless given. It is verified and reported the same way
+(`verification.field` equals `verification.result`). The decision point,
+which rests on one session so far: run `size`; if `verification.field`
+shows faces above 70 degrees, run it again with `method=distance` and keep
+the mesh `check` finds fewer such faces in, then the better jump
+histogram. On the fine 30P30N (`smooth mode=shape allow_stale_fold=true`,
+`size 5e-5 1.0 growth=1.08 wall_aspect=25 count_rule=max method=distance`,
+`smooth`) it gives 452,791 cells, Mesh OK, 0 faces above 70, max 68.83
+degrees, where the default gives 6 at 85.8; everywhere else the default was
+better.
+
 Known limit - counts are never lowered: spending only adds cells, so a
 count the field sets too high stays. On the coarse 30P30N the 0.0019-long
 sliver v12-v13 gets 9 cells from its component c25, whose wall-side edge

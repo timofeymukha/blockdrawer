@@ -707,12 +707,16 @@ def _run_size(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
         core_size=args["core_size"],
         growth=args["growth"],
         wall_aspect=args["wall_aspect"] or None,
-        interface_growth=args["interface_growth"] or None,
+        interface_growth=(
+            (1.25 if args["method"] == "directional" else None)
+            if args["interface_growth"] < 0 else (args["interface_growth"] or None)
+        ),
         count_rule=args["count_rule"],
         budget=args["budget"] or None,
         patch_first_widths=tuple(overrides),
         split=args["split"],
         keep_counts=args["keep_counts"],
+        method=args["method"],
     )
     result = size_model(model, options, blocks=args.get("blocks") or None, bbox=bbox)
     return result.to_data()
@@ -1212,8 +1216,9 @@ _register(CommandSpec(
                   "wall-parallel spacing at a wall in first widths (0: first width)",
                   required=False, default=0.0),
         Parameter("interface_growth", "float",
-                  "largest cell-size ratio across a block interface (0: unmatched)",
-                  required=False, default=1.25),
+                  "largest cell-size ratio across a block interface (0: unmatched; "
+                  "default 1.25 with method=directional, unmatched with distance)",
+                  required=False, default=-1.0),
         Parameter("count_rule", "choice", "count of a component from its edges' demands",
                   required=False, default="max", choices=("max", "mean")),
         Parameter("budget", "int",
@@ -1225,6 +1230,11 @@ _register(CommandSpec(
                   required=False, default=None),
         Parameter("split", "bool", "split two-ended strips where their size peaks",
                   required=False, default=True),
+        Parameter("method", "choice",
+                  "directional (default) or distance: item 3's wall-distance sizing, "
+                  "no budget spending; compare the two by check when the directional "
+                  "field's verification shows faces above 70 degrees",
+                  required=False, default="directional", choices=("directional", "distance")),
         Parameter("keep_counts", "bool",
                   "keep every count and recompute only the gradings (after a smoothing)",
                   required=False, default=False),

@@ -352,6 +352,31 @@ class ContinuityTests(unittest.TestCase):
         self.assertEqual(len(model.blocks), 2)
 
 
+class DistanceMethodTests(unittest.TestCase):
+    def test_item_3_sizing_is_reachable_and_deterministic(self) -> None:
+        first, second, default = fan(), fan(), fan()
+        options = dict(first_width=0.01, core_size=0.2, interface_growth=None, split=False)
+        one = size_model(first, SizeOptions(**options, method="distance"))
+        size_model(second, SizeOptions(**options, method="distance"))
+        self.assertEqual(to_data(first), to_data(second))
+        size_model(default, SizeOptions(first_width=0.01, core_size=0.2, split=False))
+        # The tapered fan is where the two differ: the wall-distance field
+        # leaves the narrow side's neighbours to the field alone.
+        self.assertNotEqual(to_data(first)["edgeCells"], to_data(default)["edgeCells"])
+        self.assertEqual(one.verification["method"], "distance")
+        self.assertEqual(one.verification["field"], one.verification["result"])
+        self.assertEqual(one.moves, [])
+        with self.assertRaises(TopologyError):
+            size_model(fan(), SizeOptions(**options, method="distance", keep_counts=True))
+
+    def test_the_command_takes_the_method(self) -> None:
+        batch = apply_commands(fan(), ["size 0.01 0.2 split=false method=distance"])
+        data = batch.results[0].result
+        self.assertEqual(data["verification"]["method"], "distance")
+        with self.assertRaises(Exception):
+            apply_commands(fan(), ["size 0.01 0.2 method=nope"])
+
+
 def fan() -> MeshModel:
     """A fan b0 from the wall a-d narrowing to the 0.1 side b-c, which a
     thin strip b1 continues to x = 3, between b2 and b3."""

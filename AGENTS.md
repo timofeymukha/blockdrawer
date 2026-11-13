@@ -278,6 +278,14 @@ them in the canvas widgets.
   field state (`CONTINUITY_SPLIT_ROUNDS`). Counts and total
   ratios are written directly (links kept and reported); one validated edit.
   `quality` reports `interface_jumps` (above 2.5, 5, 20) in its summary.
+- `blockdrawer/size_distance.py`: item 3's sizing (commit 9a84f29),
+  unchanged, behind `size method=distance`: the scalar wall-distance field,
+  wall-normal edges graded from their finer end, tangential edges uniform,
+  optional interface matching (unmatched by default from the command), no
+  budget spending. `size._size_by_distance` runs it on a copy, applies the
+  same skewness refusal and reports `verification` with field == result.
+  Kept because it is the only path to the fine 30P30N's 0 faces above 70
+  (452,791 cells, 68.83 degrees after the polish); do not develop it.
 - `blockdrawer/render.py`: headless SVG/PNG rendering through one layout routine
   and two painters. Labels (vertex IDs, block IDs, cell counts, patch legend)
   are on by default; bounds, zoom-to-entity, and highlights select a region.
