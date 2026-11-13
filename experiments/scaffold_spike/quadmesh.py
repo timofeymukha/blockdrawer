@@ -616,12 +616,12 @@ def analyse(case_name, mesher, n, workdir, out=None, sizing="curvature", kernel=
     # irregular vertices within a band height (5% of the body size... the
     # wall distance below) of a wall
     walls = [np.array(nodes[a]) for a, b, name in segs if name.startswith("wall")]
-    band = 0.05 * (min(float(max(loop.max(0) - loop.min(0))) for loop in loops[1:]) if len(loops) > 1 else 1.0)
+    near_wall = 0.05 * (min(float(max(loop.max(0) - loop.min(0))) for loop in loops[1:]) if len(loops) > 1 else 1.0)
     near = 0
     if walls:
         W = np.array(walls)
         for v, info in irr.items():
-            if info[0] == "interior" and np.min(np.linalg.norm(W - np.array(nodes[v]), axis=1)) < band:
+            if info[0] == "interior" and np.min(np.linalg.norm(W - np.array(nodes[v]), axis=1)) < near_wall:
                 near += 1
     row.update({
         "irregular_interior": sum(1 for i in irr.values() if i[0] == "interior"),
