@@ -1,4 +1,3 @@
-import math
 import unittest
 
 from blockdrawer.commands import apply_commands, batch_digest
