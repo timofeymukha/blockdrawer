@@ -611,6 +611,27 @@ shape whose stale counts would fold a real cell is refused unless
 session is never left tangled by a command that did not say so. On the
 engine's square cylinder it took the count-free maximum from 87.6 to 51.1
 degrees, where the real-count smoother is held at 86.7 by the cell sizes.
+
+`size` sets every cell count and grading from a few physical inputs
+(`first_width`, `core_size`, `growth`, optional `wall_aspect`,
+`interface_growth`, `count_rule`, `budget`, per-patch `first_widths`,
+`blocks`/`bbox` scope), using only what a session has. The size field is the
+wall-normal series from the patches of type `wall`, capped at the core size.
+An edge along which the wall distance changes by half its length is
+wall-normal and carries one geometric series from its wall; every other edge
+is tangential and uniform, floored at `wall_aspect` first widths. Each
+opposite-edge component takes the max (or length-weighted mean) of its
+edges' demands, the integral of ds/size. A strip that wants fine cells at
+both ends (wall to wall across a channel) is cut with `split_edge` where the
+wanted size peaks, since one series cannot serve both ends and multi-section
+grading is out of scope. The opposite wall-normal sides of a block take one
+series (two long wake lines graded from a thousandth and a tenth sheared their
+block to 88 degrees). Counts and gradings are written directly; spacing links
+are kept and reported when left out of sync. The report gives the cells, the
+cells per wall band, the worst interface jump and aspect, the splits, the
+components raised and the refusals. The sequence for a finished topology is
+`smooth mode=shape allow_stale_fold=true`, `size ...`, `smooth`; measured
+results are in the commit that added it and the skill.
 A running server keeps the tool schemas it started with; restart it after
 upgrading BlockDrawer. Every tool takes the session path, so agents and the GUI
 can share one file: save in the editor, let the agent edit and check, then

@@ -688,6 +688,35 @@ def _run_smooth(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
     return result.to_data()
 
 
+def _run_size(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
+    from .size import SizeOptions, size_model
+
+    overrides = []
+    for item in (args.get("first_widths") or "").replace(";", ",").split(","):
+        if not item.strip():
+            continue
+        name, separator, value = item.partition("=")
+        if not separator:
+            raise CommandError("first_widths takes PATCH=WIDTH pairs, comma separated")
+        overrides.append((name.strip(), _coerce_float(value, "first_widths")))
+    bbox = args.get("bbox") or None
+    if bbox is not None and len(bbox) != 4:
+        raise CommandError("bbox needs four numbers: xmin, ymin, xmax, ymax")
+    options = SizeOptions(
+        first_width=args["first_width"],
+        core_size=args["core_size"],
+        growth=args["growth"],
+        wall_aspect=args["wall_aspect"] or None,
+        interface_growth=args["interface_growth"] or None,
+        count_rule=args["count_rule"],
+        budget=args["budget"] or None,
+        patch_first_widths=tuple(overrides),
+        split=args["split"],
+    )
+    result = size_model(model, options, blocks=args.get("blocks") or None, bbox=bbox)
+    return result.to_data()
+
+
 def _run_add_boundary(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
     boundary = model.add_boundary(args["name"])
     return to_json_value(boundary)
@@ -1143,6 +1172,47 @@ _register(CommandSpec(
         ),
     ),
     _run_smooth,
+))
+_register(CommandSpec(
+    "size",
+    (
+        "Set every cell count and grading from a size field: first_width at "
+        "patches of type wall, growing by growth away from them up to core_size. "
+        "Wall-normal edges (the wall distance changes along them) carry one "
+        "geometric series from their finer end; tangential edges stay uniform, "
+        "floored at wall_aspect first widths; each opposite-edge component takes "
+        "the max (or length-weighted mean) of its edges' demands. A strip that "
+        "wants fine cells at both ends is cut where its size peaks (split). With "
+        "interface_growth the widths are matched across block interfaces and "
+        "counts raised where a series would exceed it. Counts and gradings are "
+        "written directly: spacing links are kept and reported when out of sync."
+    ),
+    (
+        Parameter("first_width", "float", "first cell width at a wall"),
+        Parameter("core_size", "float", "largest cell, away from walls"),
+        Parameter("growth", "float", "cell-to-cell growth away from walls",
+                  required=False, default=1.2),
+        Parameter("wall_aspect", "float",
+                  "wall-parallel spacing at a wall in first widths (0: first width)",
+                  required=False, default=0.0),
+        Parameter("interface_growth", "float",
+                  "largest cell-size ratio across an interface and along an edge (0: none)",
+                  required=False, default=0.0),
+        Parameter("count_rule", "choice", "count of a component from its edges' demands",
+                  required=False, default="max", choices=("max", "mean")),
+        Parameter("budget", "int", "largest total cell count (0: none)",
+                  required=False, default=0),
+        Parameter("first_widths", "optional_str",
+                  "per-patch first widths, PATCH=WIDTH comma separated",
+                  required=False, default=None),
+        Parameter("split", "bool", "split two-ended strips where their size peaks",
+                  required=False, default=True),
+        Parameter("blocks", "blocks", "only these blocks' edges are graded (default: all)",
+                  required=False, default=()),
+        Parameter("bbox", "numbers", "only blocks with a corner inside xmin,ymin,xmax,ymax",
+                  required=False, default=()),
+    ),
+    _run_size,
 ))
 _register(CommandSpec(
     "add_boundary",
@@ -1631,6 +1701,17 @@ def _note(result: CommandResult) -> dict[str, Any] | None:
             "moved": data.get("moved"),
             "max_band_change": data.get("max_band_change"),
             "reason": data.get("reason"),
+        }
+    if result.name == "size":
+        return {
+            **base,
+            "total_cells": data.get("total_cells"),
+            "splits": [item.get("edge") for item in data.get("splits", [])],
+            "raised": len(data.get("raised", [])),
+            "mismatches": data.get("mismatch_count"),
+            "worst_interface_size_ratio": data.get("worst_interface_size_ratio"),
+            "refused": data.get("refused"),
+            "note": data.get("note"),
         }
     if result.name == "split_edge":
         return {

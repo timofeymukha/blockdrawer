@@ -91,10 +91,12 @@ JSON); ask for the part you need rather than the whole session.
    saved when any command fails. The answer counts the commands and lists
    the IDs created and removed and the results worth reading (repairs,
    smoothing, splits, fits); detail=true returns every command's result.
-   To improve a finished topology run "smooth" first (moves every interior
-   vertex, keeps wall bands, cell sizes and the worst face; applied only
-   when checkMesh's measure gets no worse), then "repair_block" on the
-   blocks that remain bad.
+   To size and improve a finished topology: "smooth mode=shape
+   allow_stale_fold=true" (the count-free block shapes), "size
+   first_width=... core_size=... growth=..." (every count and grading from
+   the wall distance; wall-to-wall strips split), then "smooth" (the
+   real-count polish, keeps wall bands, cell sizes and the worst face), then
+   "repair_block" on the blocks that remain bad.
 3. quality_report: a verdict (valid, untangled, worst non-orthogonality and
    faces above 70 degrees, measured as checkMesh does on the block
    interiors sampled at the real counts), the worst blocks and edges, and

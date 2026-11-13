@@ -489,6 +489,31 @@ near-180-degree corner that wants a `split_edge` and a centre vertex.
 
 ## 5. Size and grade - after the topology is right
 
+The order is shape, sizing, polish, then hand corrections:
+
+1. `smooth mode=shape allow_stale_fold=true` - optimise the count-free
+   block shapes while nothing ties them to cell sizes yet (wall-band spokes
+   keep their length and do not turn away from the wall normal). On the
+   engine's square cylinder this alone took checkMesh from 87.7 to 54.6
+   degrees with 1344 -> 0 faces above 70.
+2. `size first_width=... core_size=... growth=... [wall_aspect=25]
+   [count_rule=max|mean]` - every count and grading from the wall distance:
+   wall-normal edges graded from their wall, opposite wall-normal sides of a
+   block sharing one series, tangential edges uniform at `wall_aspect` first
+   widths, two-ended strips (wall to wall) split where the wanted size
+   peaks. Read its report: cells per wall band, the worst interface jump and
+   aspect, splits, refusals, links left out of sync.
+3. `smooth` - the real-count polish.
+4. Hand corrections where the report or `quality_report` point: an
+   interface jump `size` cannot see (a corner where one wall's normal runs
+   along another wall - the backward step's lip, size jump 10; a thin strip
+   beside a far-field block), a shear layer that is not a wall, the
+   per-edge rules below. `interface_growth` matches widths across interfaces
+   by propagation but on 30P30N it raised the counts and the jumps; measure
+   before keeping it.
+
+The physical inputs, and what the hand corrections should respect:
+
 - **First cell** from the target $y^+$ with a screening friction coefficient
   $C_f \approx 0.003$:
 

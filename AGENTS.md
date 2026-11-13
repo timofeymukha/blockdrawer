@@ -208,6 +208,27 @@ them in the canvas widgets.
   without the length and size limits, keeps the band rule, and reports the
   stale real-count verdict as `real_before`/`real_after`; a stale fold is
   refused unless `allow_stale_fold`.
+- `blockdrawer/size.py`: `size_model`, behind the `size` registry command.
+  `SizeField` gives the wall-normal series from the `wall` patches' sampled
+  paths (bucket grid; per-patch first widths) capped at `core_size`.
+  `_measure_edge` integrates ds/size along each edge (exact for a linear
+  size per piece), floors tangential sizes at `wall_aspect` first widths
+  (capped so a cell turns at most 15 degrees) and calls an edge wall-normal
+  when the wall distance varies along its part within the field's reach by
+  at least half that length - roles are not available in a session.
+  `_split_two_ended` cuts a strip whose wanted size peaks `SPLIT_RATIO`
+  above both ends (wall to wall) with `split_edge` at the peak. Counts per
+  component by the `max`/`mean` rule and an optional budget factor.
+  `_propagate` ports the engine's finest-first width propagation: seeds are
+  the wall-normal edges leaving a wall vertex at its first width (`SEEDS`;
+  seeding every wall-normal edge at the field's size sheared the backward
+  step's rectangles to 61 degrees), a series wanting a ratio below one is
+  uniform (a shrinking series put 6e-6 beside 0.003), and with
+  `interface_growth` links across interfaces carry widths and raise counts.
+  `_unify_opposite` then gives the opposite wall-normal sides of a block one
+  series (wake strip: 88 degrees otherwise) without feeding counts back.
+  Counts and gradings are written directly to the model (links kept and
+  reported); one validated edit.
 - `blockdrawer/render.py`: headless SVG/PNG rendering through one layout routine
   and two painters. Labels (vertex IDs, block IDs, cell counts, patch legend)
   are on by default; bounds, zoom-to-entity, and highlights select a region.
