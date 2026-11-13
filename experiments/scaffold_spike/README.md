@@ -333,7 +333,8 @@ What it shows:
   a band of two separatrices from the tail pair to the outlet: a wake
   line, not a fan.
 - **The trailing edge is where it fails, at both resolutions.**
-  - The two tail singularities sit about $1.7H$ from the round join.
+  - The two tail singularities sit about $0.7H$ outside the round join
+      ($1.7H$ from the trailing edge).
   - Their separatrices, the round-join midpoint's extension and the
     merge-snapped landings cut faces with two, three and five corners
     there.
