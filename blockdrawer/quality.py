@@ -182,6 +182,8 @@ class QualityReport:
             "severe_faces": None,
             "severe_threshold": SEVERE_NON_ORTHOGONALITY,
             "folded_cells": None,
+            # checkMesh's face skewness; it fails a mesh above 4.
+            "max_skewness": None,
         }
         if self.interior is not None and self.blocks:
             summary = self.interior.summary()
@@ -193,6 +195,7 @@ class QualityReport:
                 "worst_face": summary["worst_face"],
                 "severe_faces": summary["severe_faces"],
                 "folded_cells": summary["folded_cells"],
+                "max_skewness": summary["max_skewness"],
             })
         return data
 
@@ -409,7 +412,8 @@ def format_quality(
             f"{_num(verdict['max_non_orthogonality'])}° in {verdict['worst_block']}"
             + (f" at ({_num(worst_face[0])}, {_num(worst_face[1])})" if worst_face else "")
             + f"; {verdict['severe_faces']} face(s) above "
-            f"{_num(verdict['severe_threshold'])}°"
+            f"{_num(verdict['severe_threshold'])}°; max skewness {_num(verdict['max_skewness'])}"
+            + (" (checkMesh fails above 4)" if verdict["max_skewness"] > 4.0 else "")
         )
         lines.append(
             f"  interior (sampled, checkMesh's face measure): cell angles "

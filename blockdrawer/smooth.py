@@ -156,7 +156,12 @@ def _verdict(sample: ModelSample) -> dict[str, Any]:
         "severe_faces": summary.get("severe_faces", 0),
         "folded_cells": summary.get("folded_cells", 0),
         "worst_block": summary.get("worst_block"),
+        "max_skewness": summary.get("max_skewness", 0.0),
     }
+
+
+# checkMesh fails a mesh whose face skewness exceeds this.
+SKEWNESS_LIMIT = 4.0
 
 
 def _no_worse(after: dict[str, Any], before: dict[str, Any]) -> bool:
@@ -164,6 +169,10 @@ def _no_worse(after: dict[str, Any], before: dict[str, Any]) -> bool:
         after["folded_cells"] == 0
         and after["severe_faces"] <= before["severe_faces"]
         and after["max_non_orthogonality"] <= before["max_non_orthogonality"] + 1.0e-9
+        and not (
+            after.get("max_skewness", 0.0) > SKEWNESS_LIMIT
+            and before.get("max_skewness", 0.0) <= SKEWNESS_LIMIT
+        )
     )
 
 

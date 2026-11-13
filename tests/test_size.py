@@ -185,74 +185,169 @@ class ContinuityTests(unittest.TestCase):
 
     def test_a_strip_beside_a_fine_strip_is_graded_from_it(self) -> None:
         # A fan block b0 from a wall (1 long, 100 cells along it at the first
-        # width) narrows to a 0.02 side that keeps those 100 cells: a strip
-        # of forced-fine cells. The blocks beside it see only the field
-        # until a continuity round feeds those widths back.
-        from blockdrawer.session import from_data
-
-        data = to_data(MeshModel())
-        points = {"a": (0, 0), "b": (1, 0.49), "c": (1, 0.51), "d": (0, 1),
-                  "e": (3, 0.49), "f": (3, 0.51), "g": (3, 0.0), "h": (3, 1.0)}
-        data["vertices"] = [{"id": key, "x": x, "y": y} for key, (x, y) in points.items()]
-        quads = [("a", "b", "c", "d"), ("b", "e", "f", "c"), ("a", "g", "e", "b"), ("c", "f", "h", "d")]
-        data["blocks"] = [{"id": f"b{index}", "vertices": list(quad)} for index, quad in enumerate(quads)]
-        edges = set()
-        for quad in quads:
-            for k in range(4):
-                edges.add(tuple(sorted((quad[k], quad[(k + 1) % 4]))))
-        data["edgeCells"] = [{"vertices": list(edge), "cells": 10} for edge in sorted(edges)]
-        base = apply_commands(from_data(data), WALL + ["set_edge_boundary a-d wall"]).model
+        # width) narrows to a 0.1 side that keeps those 100 cells: a strip
+        # of forced-fine cells. The field alone does not see it; the budget
+        # is spent grading the blocks beside it from it.
         options = dict(first_width=0.01, core_size=0.2, growth=1.2, split=False)
-        plain = from_data(to_data(base))
-        before = size_model(plain, SizeOptions(**options))
-        fed = from_data(to_data(base))
-        after = size_model(fed, SizeOptions(**options, continuity_rounds=2))
-        forced = 0.02 / fed.edge_cells[edge_key("b", "c")]
-        self.assertLess(fed.edge_width_at_vertex(edge_key("b", "e"), "b"), 2.0 * forced)
-        self.assertGreater(plain.edge_width_at_vertex(edge_key("b", "e"), "b"), 10.0 * forced)
-        self.assertLess(after.worst_interface, before.worst_interface / 10.0)
-        self.assertGreater(after.total_cells, before.total_cells)
+        model = fan()
+        result = size_model(model, SizeOptions(**options))
+        self.assertLess(result.jump_cost, 0.6 * result.field_jump_cost)
+        self.assertLessEqual(result.total_cells, result.budget)
+        self.assertEqual(result.budget, round(1.5 * result.field_cells))
+        self.assertTrue(any(move["kind"] == "raise" for move in result.moves))
+        rich = fan()
+        size_model(rich, SizeOptions(**options, budget=4 * result.field_cells))
+        forced = 0.1 / rich.edge_cells[edge_key("b", "c")]
+        at_b = rich.edge_width_at_vertex(edge_key("b", "e"), "b")
+        self.assertLess(at_b, model.edge_width_at_vertex(edge_key("b", "e"), "b"))
+        self.assertLess(at_b, 5.0 * forced)
+
+    def test_more_budget_never_raises_the_jump_cost(self) -> None:
+        # From the field's own state a smaller budget's moves are a prefix
+        # of a larger one's: the greedy stops at the first move it cannot
+        # afford.
+        field_cells = size_model(fan(), SizeOptions(
+            first_width=0.01, core_size=0.2, split=False)).field_cells
+        costs = []
+        # Below 1.5 times the field's own cells the field itself is
+        # coarsened, a different start, so the claim is made from there up.
+        for multiple in (1.5, 1.8, 2.5, 4.0):
+            result = size_model(fan(), SizeOptions(
+                first_width=0.01, core_size=0.2, split=False,
+                budget=int(multiple * field_cells),
+            ))
+            self.assertLessEqual(result.total_cells, int(multiple * field_cells))
+            costs.append(result.jump_cost)
+        for smaller, larger in zip(costs, costs[1:]):
+            self.assertLessEqual(larger, smaller + 1.0e-12)
+        self.assertLess(costs[-1], costs[0])
+
+    def test_a_move_the_sampled_check_refuses_is_not_taken(self) -> None:
+        from unittest import mock
+
+        import blockdrawer.quality  # noqa: F401 - bound to the real sampler first
+        import blockdrawer.sampling as sampling
+
+        real = sampling.sample_model
+        calls = []
+
+        def folding(model, *args, **kwargs):
+            # Every sampling reports one more fold than the one before, so
+            # every move looks like it folds a cell.
+            sample = real(model, *args, **kwargs)
+            calls.append(1)
+            summary = {**sample.summary(), "folded_cells": len(calls)}
+            return mock.Mock(summary=lambda: summary)
+
+        options = SizeOptions(first_width=0.01, core_size=0.2, split=False)
+        with mock.patch.object(sampling, "sample_model", folding):
+            refused = size_model(fan(), options)
+        self.assertEqual(refused.moves, [])
+        self.assertIn("refused by the sampled check", refused.guard)
+        self.assertEqual(refused.total_cells, refused.field_cells)
+        self.assertEqual(refused.jump_cost, refused.field_jump_cost)
 
     def test_a_ring_terminates(self) -> None:
         # A closed chain of interfaces (the O-grid's four blocks round the
-        # body) with continuity rounds must stop, and deterministically.
+        # body) spends its budget and stops, deterministically.
         first, second = o_grid(), o_grid()
-        options = SizeOptions(first_width=0.01, core_size=0.4, continuity_rounds=6)
+        options = SizeOptions(first_width=0.01, core_size=0.4)
         one = size_model(first, options)
         size_model(second, options)
         self.assertEqual(to_data(first), to_data(second))
-        self.assertLessEqual(one.rounds, 6)
-        self.assertLess(one.total_cells, 10 ** 6)
+        self.assertLessEqual(one.total_cells, one.budget)
 
-    def test_an_edge_reached_fine_from_both_ends_is_split(self) -> None:
-        # The middle row of a three-row channel touches no wall, but the two
-        # fine wall rows reach it from both sides: its strip is two-ended
-        # once the widths are fed back, and is split.
+    def test_a_split_does_not_leave_a_sliver(self) -> None:
+        # A channel narrowing to a 0.004 throat between walls: its inlet
+        # side wants fine cells at both walls, but cutting the strip would
+        # cut the throat into pieces shorter than one first cell.
         from blockdrawer.session import from_data
 
         data = to_data(MeshModel())
-        ys = [0.0, 0.05, 0.95, 1.0]
-        points = {}
-        for row, y in enumerate(ys):
-            points[f"l{row}"] = (0.0, y)
-            points[f"r{row}"] = (3.0, y)
+        points = {"a": (0.0, 0.0), "b": (4.0, 0.498), "c": (4.0, 0.502), "d": (0.0, 1.0)}
         data["vertices"] = [{"id": key, "x": x, "y": y} for key, (x, y) in points.items()]
-        quads = [(f"l{k}", f"r{k}", f"r{k + 1}", f"l{k + 1}") for k in range(3)]
-        data["blocks"] = [{"id": f"b{index}", "vertices": list(quad)} for index, quad in enumerate(quads)]
-        edges = set()
-        for quad in quads:
-            for k in range(4):
-                edges.add(tuple(sorted((quad[k], quad[(k + 1) % 4]))))
-        data["edgeCells"] = [{"vertices": list(edge), "cells": 10} for edge in sorted(edges)]
+        data["blocks"] = [{"id": "b0", "vertices": ["a", "b", "c", "d"]}]
+        data["edgeCells"] = [
+            {"vertices": list(edge), "cells": 10}
+            for edge in (("a", "b"), ("b", "c"), ("c", "d"), ("a", "d"))
+        ]
         model = apply_commands(from_data(data), WALL + [
-            "set_edge_boundary l0-r0 wall", "set_edge_boundary l3-r3 wall",
+            "set_edge_boundary a-b wall", "set_edge_boundary c-d wall",
         ]).model
-        result = size_model(model, SizeOptions(
-            first_width=0.002, core_size=0.2, growth=1.2, continuity_rounds=1,
-        ))
+        result = size_model(model, SizeOptions(first_width=0.005, core_size=0.2))
+        self.assertEqual(result.splits, [])
+        self.assertEqual(len(model.blocks), 1)
+        self.assertTrue(any("would be" in text and "are wanted" in text for text in result.refused),
+                        result.refused)
+
+    def test_an_edge_reached_fine_from_both_ends_is_split(self) -> None:
+        # A channel 3 long whose walls are 1 apart: every transverse edge
+        # wants a first cell at both walls, so its strip is cut where the
+        # size peaks and each half is graded from its own wall.
+        model = apply_commands(MeshModel(box=(0, 0, 3, 1)), WALL + [
+            "set_edge_boundary v0-v1 wall", "set_edge_boundary v2-v3 wall",
+        ]).model
+        result = size_model(model, SizeOptions(first_width=0.002, core_size=0.2, growth=1.2))
         self.assertGreaterEqual(len(result.splits), 1)
-        # The middle row's strip is cut in two: one more block.
-        self.assertEqual(len(model.blocks), 4)
+        self.assertEqual(len(model.blocks), 2)
+
+
+def fan() -> MeshModel:
+    """A fan b0 from the wall a-d narrowing to the 0.1 side b-c, which a
+    thin strip b1 continues to x = 3, between b2 and b3."""
+    from blockdrawer.session import from_data
+
+    data = to_data(MeshModel())
+    points = {"a": (0, 0), "b": (1, 0.45), "c": (1, 0.55), "d": (0, 1),
+              "e": (3, 0.45), "f": (3, 0.55), "g": (3, 0.0), "h": (3, 1.0)}
+    data["vertices"] = [{"id": key, "x": x, "y": y} for key, (x, y) in points.items()]
+    quads = [("a", "b", "c", "d"), ("b", "e", "f", "c"), ("a", "g", "e", "b"), ("c", "f", "h", "d")]
+    data["blocks"] = [{"id": f"b{index}", "vertices": list(quad)} for index, quad in enumerate(quads)]
+    edges = set()
+    for quad in quads:
+        for k in range(4):
+            edges.add(tuple(sorted((quad[k], quad[(k + 1) % 4]))))
+    data["edgeCells"] = [{"vertices": list(edge), "cells": 10} for edge in sorted(edges)]
+    return apply_commands(from_data(data), WALL + ["set_edge_boundary a-d wall"]).model
+
+
+class SkewnessTests(unittest.TestCase):
+    def test_the_face_skewness_is_checkmeshs(self) -> None:
+        from blockdrawer.sampling import _skewness
+
+        # The line between the cell centres crosses the face 0.5 from its
+        # centre; the face's half-length 1 is the larger reference.
+        self.assertAlmostEqual(_skewness((0.0, 0.0), (2.0, 1.0), (1.0, -1.0), (1.0, 1.0)), 0.5)
+        # Centres in line with the face centre: no skewness.
+        self.assertAlmostEqual(_skewness((0.0, 0.0), (2.0, 0.0), (1.0, -1.0), (1.0, 1.0)), 0.0)
+        # A boundary face: the owner's centre projected along the face
+        # normal lands 0.5 from the face centre.
+        self.assertAlmostEqual(_skewness((0.0, 0.5), None, (1.0, -1.0), (1.0, 1.0)), 0.5)
+        # A short face: 0.2 of the centre distance is the reference.
+        self.assertAlmostEqual(
+            _skewness((0.0, 0.0), (10.0, 1.0), (5.0, -0.1), (5.0, 0.1)), 0.5 / (0.2 * 101 ** 0.5)
+        )
+
+    def test_a_rectangle_has_none_and_the_verdict_reports_it(self) -> None:
+        from blockdrawer.quality import assess_quality
+        from blockdrawer.sampling import sample_model
+
+        model = MeshModel(box=(0, 0, 2, 1))
+        self.assertLess(sample_model(model).summary()["max_skewness"], 1.0e-9)
+        apply = apply_commands(model, ["move_vertex v2 3.5 1.2"]).model
+        skew = sample_model(apply).summary()["max_skewness"]
+        self.assertGreater(skew, 0.0)
+        verdict = assess_quality(apply, interior_cells=64).verdict()
+        self.assertAlmostEqual(verdict["max_skewness"], skew)
+
+    def test_smooth_refuses_a_result_above_checkmeshs_skewness_limit(self) -> None:
+        from blockdrawer.smooth import _no_worse
+
+        before = {"folded_cells": 0, "severe_faces": 0, "max_non_orthogonality": 60.0,
+                  "max_skewness": 3.5}
+        worse = {**before, "max_non_orthogonality": 50.0, "max_skewness": 4.2}
+        self.assertFalse(_no_worse(worse, before))
+        self.assertTrue(_no_worse(worse, {**before, "max_skewness": 4.5}))
 
 
 if __name__ == "__main__":

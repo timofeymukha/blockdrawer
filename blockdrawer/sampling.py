@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from typing import Any, Sequence
+from typing import Any, Collection, Sequence
 
 from .domain import Block, EdgeKey, edge_key
 from .model import MeshModel
@@ -259,6 +259,13 @@ class _FaceTally:
     worst: float = 0.0
     worst_at: Point | None = None
     total: float = 0.0
+    skewness: float = 0.0
+    skew_at: Point | None = None
+
+    def skew(self, value: float, start: Point, end: Point) -> None:
+        if value > self.skewness or self.skew_at is None:
+            self.skewness = max(self.skewness, value)
+            self.skew_at = (0.5 * (start[0] + end[0]), 0.5 * (start[1] + end[1]))
 
     def add(self, value: float, start: Point, end: Point) -> None:
         self.faces += 1
@@ -269,6 +276,41 @@ class _FaceTally:
         if value > self.worst or self.worst_at is None:
             self.worst = max(self.worst, value)
             self.worst_at = (0.5 * (start[0] + end[0]), 0.5 * (start[1] + end[1]))
+
+
+def _skewness(owner: Point, neighbour: Point | None, start: Point, end: Point) -> float:
+    """checkMesh's face skewness (primitiveMeshTools::faceSkewness) on the
+    extruded face over the segment start-end: how far the line between the
+    two cell centres passes from the face centre, over the face's extent in
+    that direction. ``neighbour`` None is a boundary face, measured as
+    checkMesh's boundaryFaceSkewness does."""
+    cx, cy = 0.5 * (start[0] + end[0]), 0.5 * (start[1] + end[1])
+    px, py = cx - owner[0], cy - owner[1]
+    ex, ey = end[0] - start[0], end[1] - start[1]
+    length = math.hypot(ex, ey)
+    if length <= 0.0:
+        return 0.0
+    nx, ny = ey / length, -ex / length
+    if neighbour is None:
+        along = nx * px + ny * py
+        dx, dy = nx * along, ny * along
+        floor = 0.4
+    else:
+        dx, dy = neighbour[0] - owner[0], neighbour[1] - owner[1]
+        floor = 0.2
+    denominator = nx * dx + ny * dy
+    factor = (nx * px + ny * py) / denominator if denominator != 0.0 else 0.0
+    sx, sy = px - factor * dx, py - factor * dy
+    size = math.hypot(sx, sy)
+    if size <= 0.0:
+        return 0.0
+    hx, hy = sx / size, sy / size
+    extent = max(
+        floor * math.hypot(dx, dy),
+        abs(hx * (start[0] - cx) + hy * (start[1] - cy)),
+        abs(hx * (end[0] - cx) + hy * (end[1] - cy)),
+    )
+    return size / extent if extent > 0.0 else 0.0
 
 
 def _interior_faces(nodes: Grid, centres: list[list[Point]], tally: _FaceTally) -> None:
@@ -283,6 +325,7 @@ def _interior_faces(nodes: Grid, centres: list[list[Point]], tally: _FaceTally) 
             # its right-hand normal points to +x, from the first cell.
             start, end = lower[i + 1], upper[i + 1]
             tally.add(_non_orthogonality(centre_row[i], centre_row[i + 1], start, end, True), start, end)
+            tally.skew(_skewness(centre_row[i], centre_row[i + 1], start, end), start, end)
     for j in range(rows - 1):
         line = nodes[j + 1]
         here = centres[j]
@@ -292,6 +335,7 @@ def _interior_faces(nodes: Grid, centres: list[list[Point]], tally: _FaceTally) 
             # its left-hand normal points to +y.
             start, end = line[i], line[i + 1]
             tally.add(_non_orthogonality(here[i], above[i], start, end, False), start, end)
+            tally.skew(_skewness(here[i], above[i], start, end), start, end)
 
 
 def _sides(
@@ -335,6 +379,8 @@ class BlockSample:
     folded_at: Point | None = None
     faces: int = 0
     sum_cosines: float = 0.0
+    max_skewness: float = 0.0
+    worst_skew_face: Point | None = None
 
     def to_data(self) -> dict[str, Any]:
         return {
@@ -349,6 +395,8 @@ class BlockSample:
             "worst_face": list(self.worst_face) if self.worst_face else None,
             "folded_at": list(self.folded_at) if self.folded_at else None,
             "faces": self.faces,
+            "max_skewness": self.max_skewness,
+            "worst_skew_face": list(self.worst_skew_face) if self.worst_skew_face else None,
             "mean_non_orthogonality": (
                 math.degrees(math.acos(max(-1.0, min(1.0, self.sum_cosines / self.faces))))
                 if self.faces else 0.0
@@ -382,6 +430,8 @@ class ModelSample:
             "severe_faces": sum(item.severe_faces for item in self.blocks),
             "severe_threshold": SEVERE_NON_ORTHOGONALITY,
             "faces": sum(item.faces for item in self.blocks),
+            "max_skewness": max(item.max_skewness for item in self.blocks),
+            "worst_skew_block": max(self.blocks, key=lambda item: item.max_skewness).block_id,
             "average_non_orthogonality": math.degrees(math.acos(max(-1.0, min(1.0, (
                 sum(item.sum_cosines for item in self.blocks)
                 / max(1, sum(item.faces for item in self.blocks))
@@ -394,29 +444,50 @@ def sample_model(
     max_cells: int | None = DEFAULT_MAX_CELLS,
     *,
     uniform: int | None = None,
+    blocks: Collection[str] | None = None,
 ) -> ModelSample:
     """Sample every block and measure its cells and faces, shared edges included.
 
     ``uniform`` samples every block at that many even parameter fractions a
     side instead of its real nodes: the count-free shape of the layout.
+    ``blocks`` samples only those blocks; the faces they share with a block
+    left out are not measured.
     """
     tallies: list[_FaceTally] = []
     angles: list[CellAngles] = []
     grids: list[BlockGrid] = []
     shared: dict[EdgeKey, list[tuple[int, bool, list[Point], list[Point]]]] = {}
-    for position, block in enumerate(model.blocks):
+    users: dict[EdgeKey, int] = {}
+    if blocks is not None:
+        wanted = set(blocks)
+        for block in model.blocks:
+            for index in range(4):
+                current = edge_key(*block.directed_edge(index))
+                users[current] = users.get(current, 0) + 1
+    for block in model.blocks:
+        if blocks is not None and block.id not in wanted:
+            continue
         grid = block_grid(model, block, max_cells, uniform=uniform)
         measured, centres = _measure_cells(grid.nodes, SEVERE_ANGLE, False, centroids=True)
         tally = _FaceTally()
         _interior_faces(grid.nodes, centres, tally)
         for current, canonical, side_nodes, side_cells in _sides(block, grid.nodes, centres):
-            shared.setdefault(current, []).append((position, canonical, side_nodes, side_cells))
+            shared.setdefault(current, []).append((len(grids), canonical, side_nodes, side_cells))
         grids.append(grid)
         angles.append(measured)
         tallies.append(tally)
-    for occurrences in shared.values():
-        if len(occurrences) != 2:
+    for current, occurrences in shared.items():
+        if len(occurrences) == 1 and users.get(current, 1) == 1:
+            # A side on the domain boundary: checkMesh measures its faces'
+            # skewness too.
+            (owner, _canonical, side_nodes, owner_cells), = occurrences
+            tally = tallies[owner]
+            for k, own in enumerate(owner_cells):
+                start, end = side_nodes[k], side_nodes[k + 1]
+                tally.skew(_skewness(own, None, start, end), start, end)
             continue
+        if len(occurrences) != 2:
+            continue  # a face shared with a block left out
         (owner, canonical, side_nodes, owner_cells), (_other, _c, other_nodes, other_cells) = sorted(
             occurrences, key=lambda item: item[0]
         )
@@ -428,6 +499,7 @@ def sample_model(
         for k, (own, nei) in enumerate(zip(owner_cells, other_cells)):
             start, end = side_nodes[k], side_nodes[k + 1]
             tally.add(_non_orthogonality(own, nei, start, end, canonical), start, end)
+            tally.skew(_skewness(own, nei, start, end), start, end)
     blocks = tuple(
         BlockSample(
             grid.block_id,
@@ -443,6 +515,8 @@ def sample_model(
             measured.folded_at,
             tally.faces,
             tally.total,
+            tally.skewness,
+            tally.skew_at,
         )
         for grid, measured, tally in zip(grids, angles, tallies)
     )

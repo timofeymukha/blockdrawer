@@ -493,7 +493,10 @@ its real cell counts and grading (`--interior-cells`, default 256 a side;
 `--no-interior` skips it) with blockMesh's interpolation, and each face is
 measured as `checkMesh` measures it - between the two cell centres and the
 face normal; on the 30P30N sessions and three engine outputs the sampled
-maximum and severe-face count equalled checkMesh's. Beside it, the corner
+maximum and severe-face count equalled checkMesh's. The verdict also gives
+the maximum face skewness, measured as checkMesh measures it (it fails a
+mesh above 4); sampled and checkMesh values agreed to two decimals on the
+engine, 30P30N and sized sessions. Beside it, the corner
 screen reports per-block corner angles measured from the first mesh cell,
 non-orthogonality, equiangle skewness, corner cell aspect ratios, cell-to-cell
 growth, and the cell size jump across every internal edge, with warnings at
@@ -615,7 +618,7 @@ degrees, where the real-count smoother is held at 86.7 by the cell sizes.
 `size` sets every cell count and grading from a few physical inputs
 (`first_width`, `core_size`, `growth`, optional `wall_aspect`,
 `interface_growth` (default 1.25), `count_rule`, `budget`, per-patch
-`first_widths`, `continuity_rounds`, `blocks`/`bbox` scope), using only what a
+`first_widths`, `blocks`/`bbox` scope), using only what a
 session has. The size field is directional: every wall segment asks for the
 wall-normal series across it and for `wall_aspect` times that along it, and
 the size wanted along an edge is the smallest any wall asks in that
@@ -628,20 +631,40 @@ strip of similar blocks (chosen to need the fewest cells), so no rectangle
 is sheared; counts per component are the demand of the size profile and
 what that shared series needs to stay within its bounds. A strip that wants
 fine cells at both ends is cut with `split_edge` where the wanted size peaks
-(multi-section grading is out of scope), unless the cut would leave a
-sliver. With `continuity_rounds` the actual widths are fed back as sources,
-so the blocks beside a strip that a long component made fine are graded
-from it; each round only lowers bounds and raises counts. `keep_counts=true`
-recomputes the gradings only. The report gives the cells, blocks, the
-interface jumps above 2.5, 5 and 20 and the worst ones, the splits, the
-refusals and the links left out of sync. Measured (shape, size, polish,
-checkMesh): the backward step at 21,750 cells (hand 23,598), 0 degrees,
-worst jump 1.1; the square cylinder 48.8 degrees, jump 3.3; the grooved
-tandem 27.1 degrees but jump 63 at the groove strips, 4.5 with one
-continuity round at 240k cells; the 30P30N meshes keep jumps of 130 (coarse)
-and 183 (fine) where an edge two thousandths long shares its count with
-spokes thirty times longer - one round of continuity multiplied the coarse
-mesh's cells by seventeen. The sequence for a finished topology is
+(multi-section grading is out of scope), unless a piece would be shorter
+than one cell of the size wanted along it. That is the field's own state.
+A strip a long count component makes fine (a thin wake strip, a seam
+sliver) is invisible to it, so `budget` total cells (default 1.5 times the
+field's own; a smaller budget first coarsens the field to budget/1.5) are
+then spent on continuity: free regrades of a strip and count raises are
+taken greedily by the drop in a jump cost (the square of how far each
+interface's log width ratio exceeds log `interface_growth`) per cell, until
+the first raise the budget cannot pay, so more budget never leaves a higher
+cost. Each move is checked on the sampled grid (64 cells a side) of the
+blocks it touches and undone if it folds a cell, adds a face above 70
+degrees or takes checkMesh's skewness past 4; a block the field itself
+leaves above skewness 4 or with faces above 70 degrees is repaired first,
+and a result above skewness 4 from an input below is refused. Strips the
+spent state leaves coarse between finer neighbours at both ends are split
+and the budget spent again when that lowers the jumps. `keep_counts=true`
+recomputes the gradings only. The report gives the cells, the field's own
+cells and jump cost against the result's, the interface jumps above 2.5, 5
+and 20 and the worst ones, the moves, the guard's refusals, the splits and
+the links left out of sync. Measured (shape, size, polish, checkMesh, budget
+= the reference's cells; references: hand meshes and the previous fixed
+sizing): the backward step 15,204 cells, 0 degrees, worst jump 1.1 (hand
+23,598, 1.1); the square cylinder 2.2 against 6.0 and the three foils
+16.5 against 34.0 with fewer faces above 70; the three ellipses 25.6
+against 17.4 (a thin gap strip beside a two-ended wedge whose split would
+leave a sliver); the grooved tandem 13.6 against the hand's 7.6 at the
+same 62.7k cells, 4.5 at twice them; the coarse 30P30N 74 against 56.8 at
+15.3k, 41 at twice the cells with every other jump count lower; the fine
+30P30N at 451k cells keeps 7 faces above 70 degrees (the guard samples 64
+cells a side and misses faces of blocks with hundreds) where the previous
+sizing had none. The remaining worst jumps are topological: a seam wedge
+whose four sides are one count component beside a sliver two thousandths
+long.
+The sequence for a finished topology is
 `smooth mode=shape allow_stale_fold=true`, `size ...`, `smooth`.
 A running server keeps the tool schemas it started with; restart it after
 upgrading BlockDrawer. Every tool takes the session path, so agents and the GUI

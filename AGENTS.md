@@ -149,6 +149,14 @@ them in the canvas widgets.
   earlier block as blockMesh's owner, so per-block severe faces line up with
   the `nonOrthoFaces` set mapped to blocks. At the real counts it reproduced
   checkMesh's maximum and severe count on the 30P30N and engine sessions.
+  It also measures checkMesh's face skewness (`_skewness`:
+  `primitiveMeshTools::faceSkewness` on interior and shared faces,
+  `boundaryFaceSkewness` on domain-boundary sides) into `max_skewness` per
+  block and in the summary and the quality verdict; it matched checkMesh to
+  two decimals on the engine, 30P30N and sized sessions (and overestimates
+  the grooved tandem's 0.93 as 1.12). `blocks=` samples a subset, leaving
+  out faces shared with blocks outside it. `smooth` and `size` refuse a
+  result above 4 (checkMesh's limit) from an input below it.
   `repair.py` judges its candidates with `block_grid`/`cell_angles`; item
   2's smoother is meant to use the same code. Pure Python, standard library.
 - `blockdrawer/repair.py`: `repair_block`, the local repair an agent would
@@ -224,15 +232,36 @@ them in the canvas widgets.
   keep every member within its end bounds (`_fit_count`); a mean ratio left
   the step's inlet column needing 313 cells. Counts per component: max of
   the profile demand (integral of ds/size of the field capped by the
-  gradation from both bounds) and the strip fit. `_solve` then feeds actual
-  widths back as seeds for `continuity_rounds` (bounds only decrease, counts
-  only increase, bounded by `maximum_cells`); an edge whose profile peaks
-  `SPLIT_RATIO` above both ends and whose ends are finer than its own cells
-  (so not made fine by its own count - the O-grid's outer side was cut 28
-  times) is two-ended; `_split_strips` cuts up to `SPLITS_PER_ROUND` such
-  strips with `split_edge` at the peak, refusing a cut that leaves a piece
-  shorter than `SPLIT_MIN_PIECE` of the strip's shortest edge, and the
-  sizing is solved again (at most `SPLIT_ROUNDS` times). Counts and total
+  gradation from both bounds) and the strip fit; an edge whose profile
+  peaks `SPLIT_RATIO` above both ends is two-ended and `_split_strips` cuts
+  up to `SPLITS_PER_ROUND` such strips with `split_edge` at the peak,
+  refusing a cut that leaves any piece shorter than one cell of the size
+  the field wants along it (a 30P30N cut left 0.00065 where 0.017 was
+  wanted), and undoing a round that raises the jump cost (at most
+  `SPLIT_ROUNDS`). That is the field's state; `budget` (default
+  `DEFAULT_BUDGET` = 1.5 times its cells; a smaller budget coarsens the
+  field to budget/1.5 first) is then spent by `_spend`, a greedy optimiser
+  of the jump cost - over the quality screen's interface pairs, the square
+  of how far log(width ratio) exceeds log(`interface_growth`). Moves: regrade
+  one strip's log ratio by +-0.5/1 log(cap) (free, never coarser than the
+  field at an end, never faster than `growth` per cell) first; else the
+  component raise (by `RAISE_STEP`, its strips refitted to keep one end's
+  width) with the largest drop per cell; it stops at the first raise the
+  budget cannot pay, so a smaller budget's moves are a prefix of a larger
+  one's and the cost is monotone in budget from 1.5 times the field's cells
+  up. Every move is checked on the sampled grid of the touched blocks and
+  their neighbours (`sample_model(blocks=...)`, `GUARD_CELLS`): a fold,
+  more faces above 70 degrees or skewness crossing 4 undoes it and makes it
+  tabu. Before spending, `repair_shape` raises a component, flattens a
+  strip or gives a side its opposite side's grading in the block the field
+  leaves above skewness 4 when the input was below (folds refused, faces
+  above 70 allowed: checkMesh fails only the skewness), then in the block
+  with the worst face above 70 degrees while that count or the worst face
+  falls; `size_model` refuses a result still above skewness 4.
+  `_continuity_splits` then splits strips the spent state leaves coarse
+  against finer neighbours at both ends (`_stranded`), solves and spends
+  again, and keeps the round only when the jump cost falls and the worst
+  jump does not rise (`CONTINUITY_SPLIT_ROUNDS`). Counts and total
   ratios are written directly (links kept and reported); one validated edit.
   `quality` reports `interface_jumps` (above 2.5, 5, 20) in its summary.
 - `blockdrawer/render.py`: headless SVG/PNG rendering through one layout routine

@@ -712,7 +712,6 @@ def _run_size(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
         budget=args["budget"] or None,
         patch_first_widths=tuple(overrides),
         split=args["split"],
-        continuity_rounds=args["continuity_rounds"],
         keep_counts=args["keep_counts"],
     )
     result = size_model(model, options, blocks=args.get("blocks") or None, bbox=bbox)
@@ -1178,16 +1177,24 @@ _register(CommandSpec(
 _register(CommandSpec(
     "size",
     (
-        "Set every cell count and grading from a size field: first_width at "
-        "patches of type wall, growing by growth away from them up to core_size. "
-        "Wall-normal edges (the wall distance changes along them) carry one "
-        "geometric series from their finer end; tangential edges stay uniform, "
-        "floored at wall_aspect first widths; each opposite-edge component takes "
-        "the max (or length-weighted mean) of its edges' demands. A strip that "
-        "wants fine cells at both ends is cut where its size peaks (split). With "
-        "interface_growth the widths are matched across block interfaces and "
-        "counts raised where a series would exceed it. Counts and gradings are "
-        "written directly: spacing links are kept and reported when out of sync."
+        "Set every cell count and grading from a directional size field: "
+        "first_width across patches of type wall, growing by growth away from "
+        "them up to core_size, and wall_aspect first widths along them. Every "
+        "edge end's width is bounded by the field and by interface_growth "
+        "across block interfaces; each strip of opposite edges shares one "
+        "geometric series, each opposite-edge component takes the max (or "
+        "length-weighted mean) of its edges' demands, and a strip that wants "
+        "fine cells at both ends is cut where its size peaks (split). Then "
+        "cells are spent on continuity: count raises and regrades are taken "
+        "greedily by the drop in interface jumps per cell until budget total "
+        "cells (default 1.5 times the field's own count) are used or nothing "
+        "gains; a sampled check undoes moves that fold cells, add faces above "
+        "70 degrees or take skewness above 4, a block the field leaves above "
+        "skewness 4 is raised first, and a result above 4 from an input below "
+        "is refused. Strips the spent budget leaves coarse between finer "
+        "neighbours at both ends are split and the budget spent again when "
+        "that lowers the jumps. Counts and gradings are written directly: "
+        "spacing links are kept and reported when out of sync."
     ),
     (
         Parameter("first_width", "float", "first cell width at a wall"),
@@ -1202,17 +1209,15 @@ _register(CommandSpec(
                   required=False, default=1.25),
         Parameter("count_rule", "choice", "count of a component from its edges' demands",
                   required=False, default="max", choices=("max", "mean")),
-        Parameter("budget", "int", "largest total cell count (0: none)",
+        Parameter("budget", "int",
+                  "total cells to spend on continuity (0: 1.5 times the field's own; "
+                  "below the field's own the field is coarsened)",
                   required=False, default=0),
         Parameter("first_widths", "optional_str",
                   "per-patch first widths, PATCH=WIDTH comma separated",
                   required=False, default=None),
         Parameter("split", "bool", "split two-ended strips where their size peaks",
                   required=False, default=True),
-        Parameter("continuity_rounds", "int",
-                  "rounds of grading the blocks beside forced-fine strips from them "
-                  "(raises counts; 0: none)",
-                  required=False, default=0),
         Parameter("keep_counts", "bool",
                   "keep every count and recompute only the gradings (after a smoothing)",
                   required=False, default=False),
@@ -1716,8 +1721,11 @@ def _note(result: CommandResult) -> dict[str, Any] | None:
             **base,
             "total_cells": data.get("total_cells"),
             "splits": [item.get("edge") for item in data.get("splits", [])],
-            "raised": len(data.get("raised", [])),
-            "mismatches": data.get("mismatch_count"),
+            "budget": data.get("budget"),
+            "field_cells": data.get("field_cells"),
+            "jump_cost": [data.get("field_jump_cost"), data.get("jump_cost")],
+            "moves": data.get("moves"),
+            "guard": data.get("guard") or None,
             "worst_interface_size_ratio": data.get("worst_interface_size_ratio"),
             "refused": data.get("refused"),
             "note": data.get("note"),

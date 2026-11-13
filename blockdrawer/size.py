@@ -32,14 +32,24 @@ the geometry's units and knows no construction roles.
    widths have the ratio of its end bounds - its total ratio is the ratio
    of the bounds - and whatever surplus its count gives makes both ends
    finer by the same factor.
-5. **Forced-fine interfaces are sources.** A short edge given many cells
-   by its component (a thin wake strip carrying the band's count) is much
-   finer than its bounds; its actual widths are fed back as bounds and the
-   propagation runs again, so the blocks beside it are graded from it. The
-   bounds only decrease and the counts only increase (they are bounded by
-   ``maximum_cells``), so the rounds terminate; ``interface_growth`` above
-   one damps them, since an end finer than its bound by less than that
-   factor changes no neighbour.
+5. **A cell budget buys continuity.** The state so far is the field's own
+   (a budget below ``DEFAULT_BUDGET`` times its cells coarsens the field to
+   budget / ``DEFAULT_BUDGET`` first). A short edge given many cells by its
+   component (a thin wake strip carrying the band's count) is much finer
+   than its neighbours, which the field does not see. The rest of the
+   budget (by default half the field's cells again) is spent greedily on
+   the jump cost - over every interface pair the quality screen compares,
+   the square of how far log(width ratio) exceeds log(``interface_growth``):
+   free regrades of one strip first, then the component raise (its strips
+   refitted) with the largest drop per cell, stopping at the first raise
+   the budget cannot pay, so from the field's own state up the cost never
+   rises with the budget. Every
+   move is checked on the sampled grid of the blocks it touches; one that
+   folds a cell, adds a face above 70 degrees or takes the skewness above
+   4 is undone. Before spending, a block the field leaves above skewness 4
+   or with faces above 70 degrees is repaired by the same moves; strips the
+   spent state leaves coarse between finer neighbours at both ends are
+   split and the budget is spent again when that lowers the jumps.
 
 Counts and gradings are written directly: spacing links are kept and the
 ones left out of sync are reported. Everything is deterministic and applied
@@ -62,9 +72,23 @@ from .session import from_data, to_data
 # both its ends by this factor (measured in the README).
 SPLIT_RATIO = 2.5
 SPLIT_ROUNDS = 8
-# A split is refused when it leaves a piece shorter than this fraction of
-# the strip's shortest edge.
-SPLIT_MIN_PIECE = 0.2
+# Without a budget, continuity may spend this multiple of the cells the
+# field alone asks for (measured in the README).
+DEFAULT_BUDGET = 1.5
+# A count raise adds this fraction of the count (at least one cell).
+RAISE_STEP = 0.1
+# Regrades try the strip's log ratio moved by these multiples of log(cap).
+REGRADE_STEPS = (-1.0, -0.5, 0.5, 1.0)
+# checkMesh fails a mesh above this face skewness; the sampled guard's resolution.
+SKEWNESS_LIMIT = 4.0
+GUARD_CELLS = 64
+# No strip is graded beyond this log total ratio (a refit at hundreds of
+# cells asked for exp(800)).
+MAX_LOG_RATIO = 50.0
+# Repairs of a block the field leaves above skewness 4 or 70 degrees.
+SHAPE_REPAIRS = 30
+# Rounds of splitting strips the spent budget leaves coarse at both ends.
+CONTINUITY_SPLIT_ROUNDS = 3
 # Strips split per sizing pass before the sizing is solved again.
 SPLITS_PER_ROUND = 8
 # Whether opposite sides share one grading along their strip.
@@ -94,11 +118,6 @@ class SizeOptions:
     # Keep every count and recompute the gradings from the current
     # geometry - after a smoothing changed the edge lengths.
     keep_counts: bool = False
-    # Rounds of feeding actual widths back as sources (forced-fine strips
-    # grade their neighbours, raising counts). Measured in the README: one
-    # round takes e3's worst jump from 45 to 6, and multiplies the 30P30N
-    # cells by seventeen.
-    continuity_rounds: int = 0
 
     def check(self, model: MeshModel) -> None:
         if not (self.first_width > 0.0 and self.core_size >= self.first_width):
@@ -124,8 +143,12 @@ class SizeResult:
     cells_before: int
     blocks: int
     components: int
-    rounds: int = 0
-    raised: int = 0
+    budget: int | None = None
+    moves: list = field(default_factory=list)
+    guard: str = ""
+    field_cells: int = 0
+    field_jump_cost: float = 0.0
+    jump_cost: float = 0.0
     splits: list[dict] = field(default_factory=list)
     refused: list[str] = field(default_factory=list)
     jumps: dict[str, Any] = field(default_factory=dict)
@@ -143,8 +166,15 @@ class SizeResult:
             "cells_before": self.cells_before,
             "blocks": self.blocks,
             "components": self.components,
-            "continuity_rounds": self.rounds,
-            "components_raised": self.raised,
+            "budget": self.budget,
+            "field_cells": self.field_cells,
+            "field_jump_cost": self.field_jump_cost,
+            "jump_cost": self.jump_cost,
+            "moves": len(self.moves),
+            "shape_repairs": sum(1 for move in self.moves if move["kind"] == "shape"),
+            "count_raises": sum(1 for move in self.moves if move["kind"] == "raise"),
+            "regrades": sum(1 for move in self.moves if move["kind"] == "regrade"),
+            "guard": self.guard,
             "splits": self.splits,
             "refused": self.refused,
             "interface_jumps": self.jumps,
@@ -451,22 +481,66 @@ def size_model(
     )
     splits: list[dict] = []
     refused: list[str] = []
-    attempt = 0
-    while True:
-        state = _solve(working, field_, options, blocks, bbox)
-        attempt += 1
-        if options.keep_counts or not options.split or attempt > SPLIT_ROUNDS:
-            break
-        if not state["two_ended"]:
-            break
-        if not _split_strips(working, state, options, splits, refused):
-            break
-    counts, bounds, edges, strips, scope = (
-        state["counts"], state["bounds"], state["edges"], state["strips"], state["scope"]
-    )
+    state = _solve(working, field_, options, blocks, bbox)
+    if options.split and not options.keep_counts:
+        for _attempt in range(SPLIT_ROUNDS):
+            if not state["two_ended"]:
+                break
+            saved = from_data(to_data(working))
+            made = len(splits)
+            if not _split_strips(working, field_, state, options, splits, refused):
+                break
+            trial = _solve(working, field_, options, blocks, bbox)
+            # A split must not leave a worse interface than the one it was
+            # meant to remove: the round is undone when the jump cost rises.
+            if _jump_cost(trial, options) > _jump_cost(state, options) * (1.0 + 1.0e-9):
+                working.__dict__.update(saved.__dict__)
+                for item in splits[made:]:
+                    refused.append(
+                        f"split of {item['edge']} undone: it raised the interface jump cost"
+                    )
+                del splits[made:]
+                break
+            state = trial
+    moves: list[dict] = []
+    guard = ""
+    budget = None
+    field_cells = _state_cells(working, state)
+    field_cost = _jump_cost(state, options)
+    skew_floor = _max_skewness(model)
+    if not options.keep_counts:
+        budget = options.budget if options.budget else int(round(DEFAULT_BUDGET * field_cells))
+        state, moves, guard = _spend(working, state, options, budget, skew_floor)
+        if options.split:
+            state, moves, guard = _continuity_splits(
+                working, field_, state, moves, guard, options, budget, blocks, bbox, splits, refused,
+                skew_floor,
+            )
+    _write(working, state, options)
+    skewness = _max_skewness(working)
+    if skewness > SKEWNESS_LIMIT >= skew_floor:
+        raise TopologyError(
+            f"size refused: the sized mesh's sampled face skewness {skewness:.3g} exceeds "
+            f"checkMesh's limit of {SKEWNESS_LIMIT:g} where the input's was {skew_floor:.3g}; "
+            "the block it names is too tapered for the counts the field gives it - raise "
+            "core_size's resolution there, split the block or keep the counts"
+        )
+    result = _report(working, cells_before, state["components"], splits, refused, state["factor"], note)
+    result.budget = budget
+    result.field_cells = field_cells
+    result.field_jump_cost = field_cost
+    result.jump_cost = _jump_cost(state, options)
+    result.moves = moves
+    result.guard = guard
+    _replace(model, working)
+    return result
+
+
+def _write(working: MeshModel, state: dict, options: SizeOptions) -> None:
+    counts, scope = state["counts"], state["scope"]
     for current, value in counts.items():
         working.edge_cells[current] = value
-    ratios = _ratios(strips, edges, bounds, options)
+    ratios = state.get("ratios") or _ratios(state["strips"], state["edges"], state["bounds"], options)
     for current in scope:
         total = ratios[current]
         if counts[current] < 2 or abs(total - 1.0) <= 1.0e-9:
@@ -474,17 +548,12 @@ def size_model(
         else:
             working.edge_grading[current] = total
     working.validate()
-    result = _report(
-        working, edges, cells_before, state["components"], state["rounds"], state["raised"],
-        splits, refused, state["factor"], note,
-    )
-    _replace(model, working)
-    return result
 
 
 def _solve(working, field_, options, blocks, bbox) -> dict:
-    """Counts and bounds for the model as it is: field bounds, counts, then
-    rounds of feeding the actual widths back until no count rises."""
+    """Counts, bounds and strip ratios for the model as it is: the field's
+    bounds, the counts their profiles and strips need (scaled to a budget
+    smaller than that), and the strips that are fine at both ends."""
     scope = _scope_edges(working, blocks, bbox)
     edges = {current: _sample_edge(working, current, field_, options) for current in working.edges()}
     links = _links(working)
@@ -495,8 +564,6 @@ def _solve(working, field_, options, blocks, bbox) -> dict:
     bounds = _bounds(edges, seeds, links, options)
     slope = options.growth - 1.0
     counts: dict[EdgeKey, int] = dict(working.edge_cells)
-    rounds = 0
-    raised = 0
     factor = 1.0
     two_ended: dict[EdgeKey, tuple[float, float]] = {}
     if not options.keep_counts:
@@ -507,37 +574,10 @@ def _solve(working, field_, options, blocks, bbox) -> dict:
             value = int(min(options.maximum_cells, max(options.minimum_cells, math.ceil(target * factor - 1.0e-9))))
             for member in members:
                 counts[member] = value
-    # Feed the actual widths back: an edge its component made finer than
-    # its bounds is a source for the blocks beside it. With ``keep_counts``
-    # the counts stay and only the bounds - the gradings - follow.
-    for rounds in range(1, max(options.continuity_rounds, 1 if options.keep_counts else 0) + 1):
-        widths = _actual(edges, _ratios(strips, edges, bounds, options), counts)
-        fed = dict(seeds)
-        changed = False
-        for key, value in widths.items():
-            if value < fed.get(key, math.inf):
-                fed[key] = value
-        new_bounds = _bounds(edges, fed, links, options)
-        new_ratios = _ratios(strips, edges, new_bounds, options)
-        targets = _targets(
-            edges, new_bounds, sized, slope, options,
-            _strip_targets(strips, edges, new_bounds, new_ratios, options), two_ended, widths,
-        )
-        for members, target in zip(sized, [] if options.keep_counts else targets):
-            value = int(min(options.maximum_cells, max(options.minimum_cells, math.ceil(target * factor - 1.0e-9))))
-            if value > counts[members[0]]:
-                for member in members:
-                    counts[member] = value
-                raised += 1
-                changed = True
-        stable = all(abs(new_bounds[key] - bounds.get(key, math.inf)) <= 1.0e-12 * new_bounds[key] for key in new_bounds)
-        bounds = new_bounds
-        seeds = fed
-        if not changed and (stable or not options.keep_counts):
-            break
     return {
         "counts": counts, "bounds": bounds, "edges": edges, "strips": strips, "scope": scope,
-        "components": len(sized), "rounds": rounds, "raised": raised, "factor": factor,
+        "components": len(sized), "factor": factor, "links": links, "seeds": seeds,
+        "ratios": _ratios(strips, edges, bounds, options),
         "two_ended": {key: value for key, value in two_ended.items() if key in scope},
     }
 
@@ -733,7 +773,7 @@ def _actual(edges, ratios, counts) -> dict[tuple[EdgeKey, str], float]:
     return widths
 
 
-def _report(model, edges, cells_before, components, rounds, raised, splits, refused, factor, note) -> SizeResult:
+def _report(model, cells_before, components, splits, refused, factor, note) -> SizeResult:
     from .quality import assess_quality
 
     report = assess_quality(model)
@@ -747,8 +787,6 @@ def _report(model, edges, cells_before, components, rounds, raised, splits, refu
         cells_before=cells_before,
         blocks=len(model.blocks),
         components=components,
-        rounds=rounds,
-        raised=raised,
         splits=splits,
         refused=refused,
         jumps=summary.get("interface_jumps", {}),
@@ -819,19 +857,23 @@ def _budget_factor(model, components, targets, options: SizeOptions) -> float:
             result += nx * ny * model.z_cells
         return result
 
-    if total(1.0) <= options.budget:
+    # The field gets the share of the budget the default leaves it (the
+    # default budget is DEFAULT_BUDGET times the field's own cells); the
+    # rest is spent on continuity.
+    limit = options.budget / DEFAULT_BUDGET
+    if total(1.0) <= limit:
         return 1.0
     low, high = 1.0e-3, 1.0
     for _ in range(40):
         middle = 0.5 * (low + high)
-        if total(middle) > options.budget:
+        if total(middle) > limit:
             high = middle
         else:
             low = middle
     return low
 
 
-def _split_strips(model, state, options, splits, refused) -> bool:
+def _split_strips(model, field_, state, options, splits, refused) -> bool:
     """Split the two-ended strips found, the most two-ended first, at most
     one per count component; ``True`` when one was split."""
     candidates = sorted(state["two_ended"].items(), key=lambda item: (-item[1][1], item[0]))
@@ -861,16 +903,22 @@ def _split_strips(model, state, options, splits, refused) -> bool:
             item for item in model.edges()
             if any(v in split.split_vertex_ids for v in item) and item not in split.cut_edges
         ]
-        shortest = min((model.edge_length(item) for item in new_edges), default=math.inf)
-        parent = min((saved.edge_length(item) for item in component), default=math.inf)
-        if shortest < SPLIT_MIN_PIECE * parent:
-            # A cut that leaves a sliver makes a forced-fine source of its
-            # own: a 30P30N strip cut at its peak left a 0.001 piece
-            # carrying nine cells beside 0.014 cells.
+        # A piece must hold at least one cell of the size wanted where it
+        # lies: a cut that leaves a sliver makes a forced-fine source of its
+        # own (a 30P30N strip cut at its peak left a 0.001 piece carrying
+        # nine cells beside 0.014 cells).
+        sliver = None
+        for item in new_edges:
+            sample = _sample_edge(model, item, field_, options)
+            if sample.length < min(sample.field):
+                sliver = (item, sample.length, min(sample.field))
+                break
+        if sliver is not None:
             model.__dict__.update(saved.__dict__)
             text = (
-                f"two-ended strip of {'-'.join(current)} not split: the cut would leave a "
-                f"piece of {shortest:.3g} on a strip whose shortest edge is {parent:.3g}"
+                f"two-ended strip of {'-'.join(current)} not split: the piece "
+                f"{'-'.join(sliver[0])} would be {sliver[1]:.3g} long where cells of "
+                f"{sliver[2]:.3g} are wanted"
             )
             if text not in refused:
                 refused.append(text)
@@ -919,3 +967,491 @@ def _bands(model: MeshModel) -> list[dict]:
                 "first_width": [min(firsts), max(firsts)],
             })
     return bands
+
+
+# ---------------------------------------------------------------------------
+# Spending a cell budget on continuity
+# ---------------------------------------------------------------------------
+
+
+def _max_jump(state: dict) -> float:
+    widths = _actual(state["edges"], state["ratios"], state["counts"])
+    return max((max(widths[a] / widths[b], widths[b] / widths[a])
+                for a, b in _pair_list(state["links"])), default=1.0)
+
+
+def _stranded(state: dict, options: SizeOptions) -> dict[EdgeKey, tuple[float, float]]:
+    """Edges left coarse at both ends against finer neighbours.
+
+    At each end the width an edge should have is its finest neighbour's
+    times ``interface_growth`` (or the field's, if finer); growing from
+    both ends at ``growth`` meets inside, and when the size there is
+    ``SPLIT_RATIO`` times the ends' and the edge's series misses both, one
+    series cannot serve it: a thin strip forced fine by its count on one
+    side, a wall on the other (e3's wedge between a thin gap and the
+    wall)."""
+    cap = options.interface_growth or 1.25
+    slope = options.growth - 1.0
+    widths = _actual(state["edges"], state["ratios"], state["counts"])
+    found = {}
+    for current, item in state["edges"].items():
+        if current not in state["scope"] or state["counts"][current] < 2:
+            continue
+        wanted = []
+        for vertex in current:
+            partners = state["links"].get((current, vertex), ())
+            target = state["seeds"][(current, vertex)]
+            if partners:
+                target = min(target, cap * min(widths[partner] for partner in partners))
+            wanted.append(target)
+        if not all(widths[(current, vertex)] > want * (1.0 + 1.0e-6)
+                   for vertex, want in zip(current, wanted)):
+            continue
+        profile = _profile(item, wanted[0], wanted[1], slope, options.core_size)
+        ends = max(profile[0], profile[-1])
+        peak = max(range(len(profile)),
+                   key=lambda index: (profile[index], -abs(item.arc[index] - 0.5 * item.arc[-1])))
+        fraction = item.arc[peak] / item.arc[-1]
+        if profile[peak] >= SPLIT_RATIO * ends and 0.05 < fraction < 0.95:
+            found[current] = (fraction, profile[peak] / ends)
+    return found
+
+
+def _continuity_splits(working, field_, state, moves, guard, options, budget, blocks, bbox, splits, refused,
+                       skew_floor=None):
+    """Split strips the spent state leaves stranded, then solve and spend
+    again; a round is kept only when it lowers the jump cost without
+    raising the worst jump."""
+    for _round in range(CONTINUITY_SPLIT_ROUNDS):
+        stranded = _stranded(state, options)
+        if not stranded:
+            break
+        saved = from_data(to_data(working))
+        made = len(splits)
+        if not _split_strips(working, field_, {"two_ended": stranded}, options, splits, refused):
+            break
+        trial = _solve(working, field_, options, blocks, bbox)
+        trial, trial_moves, trial_guard = _spend(working, trial, options, budget, skew_floor)
+        if (_jump_cost(trial, options) >= _jump_cost(state, options)
+                or _max_jump(trial) > _max_jump(state) * (1.0 + 1.0e-9)):
+            working.__dict__.update(saved.__dict__)
+            for item in splits[made:]:
+                refused.append(
+                    f"split of {item['edge']} undone: after spending the budget again it did "
+                    "not lower the interface jumps"
+                )
+            del splits[made:]
+            break
+        state, moves, guard = trial, trial_moves, trial_guard
+    return state, moves, guard
+
+
+def _max_skewness(model: MeshModel) -> float:
+    from .sampling import sample_model
+
+    return sample_model(model, GUARD_CELLS).summary().get("max_skewness", 0.0)
+
+
+def _state_cells(model: MeshModel, state: dict) -> int:
+    counts = state["counts"]
+    total = 0
+    for block in model.blocks:
+        nx = counts[edge_key(*block.directed_edge(0))]
+        ny = counts[edge_key(*block.directed_edge(1))]
+        total += nx * ny * model.z_cells
+    return total
+
+
+def _pair_list(links) -> list[tuple[tuple[EdgeKey, str], tuple[EdgeKey, str]]]:
+    pairs = []
+    for first, others in sorted(links.items()):
+        for second in sorted(others):
+            if first < second:
+                pairs.append((first, second))
+    return pairs
+
+
+def _pair_cost(w1: float, w2: float, cap: float) -> float:
+    """Convex in log(jump) above the cap: several medium jumps and one huge
+    one are both seen."""
+    excess = abs(math.log(w1 / w2)) - math.log(cap)
+    return excess * excess if excess > 0.0 else 0.0
+
+
+def _jump_cost(state: dict, options: SizeOptions) -> float:
+    cap = options.interface_growth or 1.25
+    widths = _actual(state["edges"], state["ratios"], state["counts"])
+    return sum(_pair_cost(widths[a], widths[b], cap) for a, b in _pair_list(state["links"]))
+
+
+def _spend(model: MeshModel, state: dict, options: SizeOptions, budget: int, skew_floor: float | None = None):
+    """Spend cells on continuity, greedily, never taking a move that does
+    not pay.
+
+    The global measure is the jump cost: over every interface pair the
+    quality screen compares, the square of how far log(width ratio) exceeds
+    log(interface_growth). Moves: raise one component's count (every strip
+    it holds keeps its ratio, so both ends get finer), at a cost in cells,
+    or regrade one strip's shared ratio, free but kept within the field's
+    own sizes and its cell-to-cell growth. Free moves come first, then the
+    raise with the largest drop per cell, until the budget is spent or no
+    move lowers the cost; the greedy stops at the first move the budget
+    cannot pay for. Each accepted move is checked on the sampled
+    grid of the blocks it touches and their neighbours: a move that folds
+    a cell, adds a face above 70 degrees or takes the skewness above 4 when
+    it was below is undone and not tried again. ``repair_shape`` runs
+    first (see there); ``skew_floor`` is the input's sampled skewness.
+    """
+    from .sampling import sample_model
+
+    cap = options.interface_growth or 1.25
+    edges, strips, seeds = state["edges"], state["strips"], state["seeds"]
+    counts = dict(state["counts"])
+    scope = state["scope"]
+    pairs = _pair_list(state["links"])
+    strip_of: dict[EdgeKey, int] = {}
+    begin_of: dict[EdgeKey, str] = {}
+    logs: list[float] = []
+    ratios = state["ratios"]
+    for index, orientation in enumerate(strips):
+        for current, begin in orientation.items():
+            strip_of[current] = index
+            begin_of[current] = begin
+        member = next(iter(orientation))
+        value = math.log(ratios[member])
+        logs.append(value if begin_of[member] == member[0] else -value)
+    components = _components(model)
+    component_of = {member: index for index, members in enumerate(components) for member in members}
+    pairs_of_edge: dict[EdgeKey, list[int]] = {}
+    for index, (a, b) in enumerate(pairs):
+        pairs_of_edge.setdefault(a[0], []).append(index)
+        pairs_of_edge.setdefault(b[0], []).append(index)
+    blocks_of_edge: dict[EdgeKey, list[str]] = {}
+    across: dict[str, list[int]] = {}
+    for block in model.blocks:
+        keys = [edge_key(*block.directed_edge(k)) for k in range(4)]
+        for current in keys:
+            blocks_of_edge.setdefault(current, []).append(block.id)
+        across.setdefault(component_of[keys[0]], []).append(component_of[keys[1]])
+        across.setdefault(component_of[keys[1]], []).append(component_of[keys[0]])
+
+    def total_ratio(current, log=None):
+        value = logs[strip_of[current]] if log is None else log
+        return math.exp(value if begin_of[current] == current[0] else -value)
+
+    def width(current, vertex, n=None, log=None):
+        first, last = _end_widths(edges[current].length, counts[current] if n is None else n,
+                                  total_ratio(current, log))
+        return first if vertex == current[0] else last
+
+    def cost_of(indices, n_of=None, log_of=None):
+        total = 0.0
+        for index in indices:
+            (e1, v1), (e2, v2) = pairs[index]
+            n1 = n_of.get(component_of[e1]) if n_of else None
+            n2 = n_of.get(component_of[e2]) if n_of else None
+            l1 = log_of.get(strip_of[e1]) if log_of else None
+            l2 = log_of.get(strip_of[e2]) if log_of else None
+            total += _pair_cost(width(e1, v1, n1, l1), width(e2, v2, n2, l2), cap)
+        return total
+
+    def allowed(current, log, n=None):
+        # Never coarser at an end than the field wants there (or than it
+        # already is, under a budget below the field's own cells), and
+        # never growing faster from cell to cell than the field does.
+        if abs(log) > MAX_LOG_RATIO:
+            return False
+        old, length = counts[current], edges[current].length
+        n = old if n is None else n
+        first, last = _end_widths(length, n, total_ratio(current, log))
+        now_first, now_last = _end_widths(length, old, total_ratio(current))
+        if first > max(seeds[(current, current[0])], now_first) * (1.0 + 1.0e-9):
+            return False
+        if last > max(seeds[(current, current[1])], now_last) * (1.0 + 1.0e-9):
+            return False
+        if n < 2:
+            return abs(log) <= 1.0e-12
+        step = abs(log) / (n - 1)
+        here = abs(logs[strip_of[current]]) / (old - 1) if old > 1 else 0.0
+        return step <= max(math.log(options.growth), here) + 1.0e-12
+
+    def refits(strip, n):
+        """Ratios a strip can take at ``n`` cells: its own, and the ones that
+        keep one end of one of its edges at the width it has now."""
+        values = [logs[strip]]
+        for member in sorted(strips[strip])[:8]:
+            length = edges[member].length
+            for vertex in member:
+                kept = width(member, vertex)
+                log = (n - 1) * math.log(series_ratio(kept, length, n))
+                if vertex == member[1]:
+                    log = -log
+                values.append(log if begin_of[member] == member[0] else -log)
+        return [value for value in values if all(allowed(m, value, n) for m in strips[strip])]
+
+    component_pairs = [
+        sorted({index for member in members for index in pairs_of_edge.get(member, ())})
+        for members in components
+    ]
+    strip_pairs = [
+        sorted({index for member in orientation for index in pairs_of_edge.get(member, ())})
+        for orientation in strips
+    ]
+    strips_of_component: dict[int, list[int]] = {}
+    for index, orientation in enumerate(strips):
+        strips_of_component.setdefault(component_of[next(iter(orientation))], []).append(index)
+    component_blocks = [
+        sorted({block for member in members for block in blocks_of_edge.get(member, ())})
+        for members in components
+    ]
+    strip_blocks = [
+        sorted({block for member in orientation for block in blocks_of_edge.get(member, ())})
+        for orientation in strips
+    ]
+    neighbours: dict[str, set[str]] = {}
+    for users in blocks_of_edge.values():
+        for block in users:
+            neighbours.setdefault(block, set()).update(users)
+    scoped_components = [
+        index for index, members in enumerate(components) if any(m in scope for m in members)
+    ]
+    scoped_strips = [
+        index for index, orientation in enumerate(strips) if all(m in scope for m in orientation)
+    ]
+    trial = from_data(to_data(model))
+    _write(trial, {**state, "counts": counts}, options)
+
+    def write_raise(index, value, refit):
+        for member in components[index]:
+            trial.edge_cells[member] = value
+        for strip, log in refit.items():
+            write_regrade(strip, log)
+
+    def write_regrade(index, value):
+        for member in strips[index]:
+            total = total_ratio(member, value)
+            if trial.edge_cells[member] < 2 or abs(total - 1.0) <= 1.0e-9:
+                trial.edge_grading.pop(member, None)
+            else:
+                trial.edge_grading[member] = total
+
+    def verdict(blocks):
+        summary = sample_model(trial, GUARD_CELLS, blocks=blocks).summary()
+        return (summary.get("folded_cells", 0), summary.get("severe_faces", 0),
+                summary.get("max_skewness", 0.0), summary.get("max_non_orthogonality", 0.0))
+
+    def guarded(blocks, apply, undo) -> bool:
+        local = sorted({other for block in blocks for other in neighbours.get(block, ())})
+        before = verdict(local)
+        apply()
+        after = verdict(local)
+        if (after[0] <= before[0] and after[1] <= before[1]
+                and not (after[2] > SKEWNESS_LIMIT and before[2] <= SKEWNESS_LIMIT)):
+            return True
+        undo()
+        return False
+
+    cells = _state_cells(model, {"counts": counts})
+    moves: list[dict] = []
+    tabu: set[tuple] = set()
+    refused = 0
+
+    def repair_shape() -> None:
+        """Repair what the field's counts break before any cell is spent on
+        continuity; the guard then keeps it repaired.
+
+        First a block left above skewness 4 when the input was below (a
+        tapered block with few cells across): only folds are refused there,
+        since checkMesh fails a mesh above skewness 4 but only counts faces
+        above 70 degrees (e3's b77 at five cells across: 4.9 with 10 such
+        faces, 3.5 with 15 at seven). Then the block with the worst face
+        above 70 degrees, while its count of them or its worst face falls
+        and the skewness stays at or below 4. Candidates: raise one of the
+        block's two components, take one of its strips towards uniform, or
+        give one side the grading of its opposite side.
+        """
+        nonlocal cells
+        by_id = {block.id: block for block in model.blocks}
+        skew_phase = skew_floor is not None and skew_floor <= SKEWNESS_LIMIT
+        for _repair in range(SHAPE_REPAIRS):
+            summary = sample_model(trial, GUARD_CELLS).summary()
+            if skew_phase and summary.get("max_skewness", 0.0) > SKEWNESS_LIMIT:
+                worst = by_id[summary["worst_skew_block"]]
+                skewed = True
+            elif summary.get("severe_faces", 0) and summary.get("worst_block") in by_id:
+                worst = by_id[summary["worst_block"]]
+                skewed = False
+            else:
+                break
+            keys = [edge_key(*worst.directed_edge(k)) for k in range(4)]
+            local = sorted(neighbours.get(worst.id, {worst.id}))
+            base = verdict(local)
+            trials = []
+            for index in sorted({component_of[k] for k in keys[:2]}):
+                n = counts[components[index][0]]
+                raised = min(options.maximum_cells, n + max(1, math.ceil(RAISE_STEP * n)))
+                added = (raised - n) * sum(counts[components[other][0]] for other in across.get(index, ()))
+                if raised > n and cells + added * model.z_cells <= budget:
+                    trials.append(("raise", index, raised, added * model.z_cells))
+            values: dict[int, set[float]] = {}
+            for index in {strip_of[k] for k in keys}:
+                values.setdefault(index, set()).update((0.0, 0.5 * logs[index]))
+            for k in range(4):
+                # Side k runs from corner k to k+1, its opposite from k+3 to k+2.
+                here, there = worst.directed_edge(k), worst.directed_edge((k + 2) % 4)
+                key, other = edge_key(*here), edge_key(*there)
+                ratio_there = total_ratio(other) if there[0] == other[0] else 1.0 / total_ratio(other)
+                wanted = 1.0 / ratio_there
+                total = wanted if here[0] == key[0] else 1.0 / wanted
+                values.setdefault(strip_of[key], set()).add(
+                    math.log(total) if begin_of[key] == key[0] else -math.log(total))
+            for index in sorted(values):
+                for value in sorted(values[index]):
+                    if abs(value - logs[index]) > 1.0e-9 and all(allowed(m, value) for m in strips[index]):
+                        trials.append(("regrade", index, value, 0))
+            best_trial = None
+            for kind, index, value, added in trials:
+                if kind == "raise":
+                    old = counts[components[index][0]]
+                    write_raise(index, value, {})
+                    result = verdict(local)
+                    write_raise(index, old, {})
+                else:
+                    old = logs[index]
+                    write_regrade(index, value)
+                    result = verdict(local)
+                    write_regrade(index, old)
+                if result[0] > base[0]:
+                    continue
+                if skewed:
+                    score = (result[2],)
+                    better = result[2] < base[2] - 1.0e-9
+                else:
+                    score = (result[1], result[3])
+                    better = (
+                        (result[1] < base[1] or (result[1] == base[1] and result[3] < base[3] - 0.5))
+                        and not (result[2] > SKEWNESS_LIMIT >= base[2])
+                    )
+                if better and (best_trial is None or score < best_trial[0]):
+                    best_trial = (score, kind, index, value, added)
+            if best_trial is None:
+                break
+            _score, kind, index, value, added = best_trial
+            if kind == "raise":
+                moves.append({"kind": "shape", "component": index, "from": counts[components[index][0]],
+                              "to": value, "cells": added})
+                write_raise(index, value, {})
+                for member in components[index]:
+                    counts[member] = value
+                cells += added
+            else:
+                moves.append({"kind": "shape", "strip": index, "from": logs[index], "to": value})
+                write_regrade(index, value)
+                logs[index] = value
+
+    repair_shape()
+    for _iteration in range(20000):
+        best = None
+        for index in scoped_strips:
+            touched = strip_pairs[index]
+            if not touched:
+                continue
+            before = cost_of(touched)
+            if before <= 0.0:
+                continue
+            for step in REGRADE_STEPS:
+                value = logs[index] + step * math.log(cap)
+                if ("regrade", index, round(value, 9)) in tabu:
+                    continue
+                if not all(allowed(m, value) for m in strips[index]):
+                    continue
+                gain = before - cost_of(touched, log_of={index: value})
+                if gain > 1.0e-9 and (best is None or gain > best[1]):
+                    best = ("regrade", gain, index, value, 0)
+        if best is None:
+            for index in scoped_components:
+                touched = component_pairs[index]
+                if not touched:
+                    continue
+                before = cost_of(touched)
+                if before <= 0.0:
+                    continue
+                n = counts[components[index][0]]
+                raised = min(options.maximum_cells, n + max(1, math.ceil(RAISE_STEP * n)))
+                if raised <= n or ("raise", index, raised) in tabu:
+                    continue
+                added = (raised - n) * sum(counts[components[other][0]] for other in across.get(index, ()))
+                added *= model.z_cells
+                refit: dict[int, float] = {}
+                for strip in strips_of_component.get(index, ()):
+                    options_here = refits(strip, raised)
+                    if not options_here:
+                        refit = None
+                        break
+                    refit[strip] = min(
+                        options_here,
+                        key=lambda value, strip=strip: cost_of(
+                            strip_pairs[strip], n_of={index: raised}, log_of={strip: value}),
+                    )
+                if refit is None:
+                    continue
+                gain = before - cost_of(touched, n_of={index: raised}, log_of=refit)
+                if gain <= 1.0e-9:
+                    continue
+                score = gain / max(added, 1)
+                if best is None or score > best[1]:
+                    best = ("raise", score, index, raised, (added, refit))
+        if best is None:
+            break
+        if best[0] == "raise" and cells + best[4][0] > budget:
+            # Stop at the first move the budget cannot pay for: a smaller
+            # budget's moves are then a prefix of a larger one's, so more
+            # budget never leaves a higher jump cost.
+            break
+        kind, _score, index, value, added = best
+        if kind == "regrade":
+            old = logs[index]
+
+            def apply(index=index, value=value):
+                write_regrade(index, value)
+
+            def undo(index=index, old=old):
+                write_regrade(index, old)
+
+            if not guarded(strip_blocks[index], apply, undo):
+                tabu.add(("regrade", index, round(value, 9)))
+                refused += 1
+                continue
+            moves.append({"kind": "regrade", "strip": index, "from": old, "to": value})
+            logs[index] = value
+        else:
+            added, refit = added
+            old = counts[components[index][0]]
+            old_logs = {strip: logs[strip] for strip in refit}
+
+            def apply(index=index, value=value, refit=refit):
+                write_raise(index, value, refit)
+
+            def undo(index=index, old=old, old_logs=old_logs):
+                write_raise(index, old, old_logs)
+
+            if not guarded(component_blocks[index], apply, undo):
+                tabu.add(("raise", index, value))
+                refused += 1
+                continue
+            moves.append({"kind": "raise", "component": index, "from": old, "to": value, "cells": added})
+            for member in components[index]:
+                counts[member] = value
+            logs_changed = refit
+            for strip, log in logs_changed.items():
+                logs[strip] = log
+            cells += added
+    new_ratios = dict(ratios)
+    for index, orientation in enumerate(strips):
+        for member in orientation:
+            new_ratios[member] = total_ratio(member)
+    guard = (
+        f"{refused} move(s) refused by the sampled check (a folded cell, a face above "
+        "70 degrees or skewness above 4)" if refused else ""
+    )
+    return {**state, "counts": counts, "ratios": new_ratios}, moves, guard
