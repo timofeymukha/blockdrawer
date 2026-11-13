@@ -21,10 +21,12 @@ python experiments/scaffold_spike/run.py 30p30n --n 700 --zoom=0.55,-0.15,0.95,0
 python experiments/scaffold_spike/run.py CASE --n N --rotate 17 # stability under rotation
 python experiments/scaffold_spike/graph.py naca0012 --n 400   # planar graph and faces of the partition
 python experiments/scaffold_spike/medial.py grooved_cylinder --spacing 0.01 --rho 3 --zoom=0.2,-0.2,0.6,0.2
+python experiments/scaffold_spike/extract.py naca0012 --n 800 --band 0.05 --out /tmp/naca.json --zoom=0.85,-0.2,1.2,0.07
 ```
 
-The pictures and JSON go to `output/`; the figures cited below are
-committed there.
+The commands write pictures and JSON to `output/`, which git ignores (the
+research `.gitignore` rule). The figures this memo cites are copies kept in
+`figures/`; the commands above regenerate them.
 
 Geometry comes from the repository:
 
@@ -108,24 +110,24 @@ corners' $+1$, and get exactly $12\times(-\tfrac14)$.
 
 ### What the field does where the engine uses templates
 
-- **Reflex step corner** (`backward_step_n500.png`, `backward_step_n500_zoom0.png`).
+- **Reflex step corner** (`figures/backward_step_n500.png`, `figures/backward_step_n500_zoom0.png`).
   The two separatrices from the corner cut the domain into exactly the
   three-row H-grid a person draws: three quads, no singularity. The engine
   refuses this case (`sweep_correspondence`).
-- **Trailing edge** (`naca0012_n400.png`, `naca0012_n400_zoom0.png`). The
+- **Trailing edge** (`figures/naca0012_n400.png`, `figures/naca0012_n400_zoom0.png`). The
   $k=4$ trailing edge sends the wake line to the outlet plus one normal up
   and one down. The two −¼ singularities sit just above and below the nose.
   Together that is the classic C/H blocking, with the wake cut and the
   nose singularity pair produced by the field rather than by `wake.py`.
-- **Cove** (`30p30n_n700_zoom1.png`). The cove fills with a structured array:
+- **Cove** (`figures/30p30n_n700_zoom1.png`). The cove fills with a structured array:
   horizontal separatrices from the cove's corners cross to the flap, and a
   −¼ singularity sits at the cove lip and one at the flap nose. That is what
   `cove_anchors` and the pocket arrays do by hand.
-- **Slots and walls** (`30p30n_n700_zoom0.png`). Several separatrices from
+- **Slots and walls** (`figures/30p30n_n700_zoom0.png`). Several separatrices from
   different singularities run parallel to the walls a few pixels apart.
   These are the near-coincident pairs (11 on 30P30N), and they cut thin
   strips (thinnest 0.044). This is the cross-field version of our slivers.
-- **Grooves** (`grooved_cylinder_n320_zoom0.png`). Every groove corner
+- **Grooves** (`figures/grooved_cylinder_n320_zoom0.png`). Every groove corner
   ($k=3$) sends one separatrix radially and one tangentially. The tangential
   ones from neighbouring grooves nearly coincide on rings around the body
   (9 pairs). The result is many 2- and 3-node patches, against the hand
@@ -179,7 +181,7 @@ The full medial axis comes from the Voronoi diagram of boundary samples at
 - **Stability.** The branches are stable under rotation and resolution (a
   spread under 1%).
 - **They appear.** The step and the groove carry self-branches at either
-  ρ (figures `medial_*_zoom0.png`).
+  ρ (`figures/medial_*_zoom0.png`).
 - **The cove is a pruning decision, not a fact of the geometry.** The
   30P30N cove is wide and shallow relative to its mouth, so its branch
   appears at ρ=1.5 and not at ρ=3.
@@ -275,39 +277,117 @@ this spike and from reading the code, not measured.
   outside the bands, where the NACA field already shows the C/H structure.
   The bands, the near-body medial gates and `cove_anchors` stay.
 
+## Item 8b: extraction - gate G1 failed
+
+### What was built (`extract.py`)
+
+1. **The band is clipped first.** Each body is offset by the band height
+   $H$ (a plain offset along vertex normals, not the engine's `layers.py`,
+   with a round join of radius $H$ at a convex corner sharper than 60°).
+   The field is solved and traced only outside these fronts, and the band
+   is meant to be one row of blocks between wall and front. A front
+   interval lying entirely on a round join gets its middle as a node, so
+   the band there is a kite.
+2. **Merge rule** (one length scale, $M = H/2$):
+   - graph nodes closer than $M$ become one node;
+   - a separatrix ends where it comes within $M$ of a boundary after having
+     been farther, and one that never leaves that strip is dropped;
+   - a singularity within $M$ of a boundary is moved onto it.
+
+   What this gives up is alignment within $M$ of walls and fronts: a trace
+   there is cut instead of followed. At the cut a block corner can sit up
+   to 45° off the field.
+3. **T-junctions.** A node at which a fluid face turns by less than 45° is
+   extended: a trace leaves it into the face along the cross direction most
+   normal to the face's side, and runs to a boundary or a singularity. This
+   repeats until no face has one, or for 12 rounds.
+4. **Session.** Graph nodes become vertices and four-corner faces become
+   blocks. Arcs become polyLine edges through the trace. Band blocks run
+   from wall stations under each front node to the front, with spline wall
+   edges.
+
+### Gate G1: NACA 0012 at 5° in the box - fails
+
+The band height was 0.05 chord, as for the operators' NACA.
+
+| Raster | Singularities | Fluid faces after 12 rounds (corners: count) | Hanging nodes left | Blocks written | Session |
+|---|---|---|---|---|---|
+| n = 400 ($H$ = 5 px) | 4 × −¼ (nose pair, tail pair) | 4: 12, 3: 1 | 2 | 16 | refused: block b13 not strictly convex |
+| n = 800 ($H$ = 10 px) | 4 × −¼ | 4: 9, 5: 2, 3: 1, 2: 2 | 2 | 13 | refused: block b11 not strictly convex |
+
+For comparison, the operators' NACA is 190 blocks, Mesh OK at 48.6°, and
+the engine's C-grid is 185 blocks, Mesh OK at 44.1°.
+
+Figures:
+- `figures/extract_naca0012_n800_field.png` – the field outside the front;
+- `figures/extract_naca0012_n800_graph.png` – the faces, green = four
+  corners, other colours = not;
+- `figures/extract_naca0012_n800_graph_zoom0.png` – the trailing edge.
+
+What it shows:
+
+- **Away from the trailing edge the layout is right.** With the band
+  clipped, no separatrix hugs the airfoil any more. The nose pair of
+  singularities sits off the front with short separatrices onto it. The
+  far field is nine to twelve clean quads of an H/C topology. The wake is
+  a band of two separatrices from the tail pair to the outlet: a wake
+  line, not a fan.
+- **The trailing edge is where it fails, at both resolutions.**
+  - The two tail singularities sit about $1.7H$ from the round join.
+  - Their separatrices, the round-join midpoint's extension and the
+    merge-snapped landings cut faces with two, three and five corners
+    there.
+  - The two remaining T-junction nodes sit on the front inside the round
+    join, so every extension from them lands back on the front within $M$
+    and is cut. They never resolve.
+  - The quads written next to them are not convex.
+- **Doubling the raster did not fix it**, so this is not a resolution
+  limit: the trailing-edge band and the singular pair behind it are a
+  construction problem. The engine solves exactly this with its wake
+  template (the band continuing as a wake band). The cross field did not
+  produce it from the round join by itself, and a sharp front corner (a
+  mitred trailing edge) would put a 172° band corner at the wall.
+
+Per the gate, G2 (grooved cylinder) and G3 (30P30N) were not run. The
+block-count stability check applies only to passing cases, so there is
+none.
+
 ## Recommendation
 
-**Do not commit to (b) yet, and do not spend on (a) first.**
+**Keep the engine as it is, and rely on the construction operators for
+what it refuses.** Do not fund (b), (c) or (a) now.
 
-The cross field gets the hard part right by construction, and stably:
-- the singular structure the templates hard-code;
-- the step's three rows;
-- the wake line;
-- the cove array.
+- **(b) and (c)** stand on the extraction, and G1 — the simplest body with
+  a sharp edge — did not produce a valid session at either resolution. The
+  remaining fault sits exactly where the engine's 3,500-line wake template
+  works: the band–wake junction at a trailing edge. Getting it from the
+  field needs a C-grid-like rule at the trailing edge, which is the
+  template again.
+- **(a)** costs 3–4 rounds and buys the step, L-channels and coves.
+  - Two of those already go by hand with the operators: the step in 8
+    commands (Mesh OK, 0°) and the grooved cylinders in 14 (Mesh OK,
+    20.5°, against the hand script's 42.7°).
+  - The cove branch exists only at a pruning threshold of 1.5, not 3, so a
+    rule would still decide whether it is there.
 
-The open part is turning separatrices into blocks. Its first test failed
-on every case with a body (NACA, grooved cylinder, three ellipses),
-because of near-coincident separatrices.
+What the spike did establish, and what is worth keeping: the field's
+singularity sets are stable under rotation and a 1.5× raster in all five
+cases, and away from sharp edges the clipped layout is clean quads.
 
-Next round:
-1. The extraction alone, on the NACA, the grooved cylinder and 30P30N:
-   - snap separatrices within a band height of each other;
-   - extend T-junctions;
-   - clip at a band offset.
-2. Gate it on a valid session and `checkMesh` for NACA and 30P30N.
+**First concrete step:** freeze the scaffold. Record in the engine README
+and the skill's route table that refusals go to the operators, which is
+already the measured route. Keep `experiments/scaffold_spike/` as the
+harness any future scaffold proposal must pass: G1, then G2, then G3,
+unchanged.
 
-If that passes with no more blocks and no worse slivers than the engine,
-go to (c), then (b). If near-coincident separatrices on 30P30N cannot be
-merged without new slivers, keep the medial scaffold for the near field
-and lean on the construction operators for the domains it refuses: they
-build the step and the grooves today in 8 and 14 commands. In that case
-(a) is worth its cost only for coves and L-channels.
+**Evidence that would reopen the choice:**
+- a trailing-edge construction that makes `extract.py naca0012` write a
+  valid, Mesh OK session without a per-case rule — then (c), with the
+  far field and wakes from the field;
+- or a refused domain class that the operators cannot state in a few dozen
+  commands — then (a), for that class.
 
-The evidence that would change this:
-- extraction succeeding at a block count near the engine's;
-- or, against the cross field, separatrix counts on 30P30N that keep
-  rising with resolution.
+### Previous recommendation (item 8, superseded)
 
-Measured here: everything in the tables. Not measured: anything about a
-cross-field mesh's checkMesh quality (no session was built), the cost
-estimates, and the self-branch consumption (read, not coded).
+Item 8 recommended a round on extraction before choosing; item 8b was that
+round, and its gate failed.
