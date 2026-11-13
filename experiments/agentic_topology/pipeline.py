@@ -145,8 +145,10 @@ class PipelineResult:
     export_notes: list = field(default_factory=list)
     # The interface grading propagation's report, when it ran.
     interface_grading: dict | None = None
-    # The production smoother's report, when ``smooth`` ran it.
+    # The production smoother's report, when ``smooth`` ran it: the
+    # count-free shape pass before sizing and the real-count polish after.
     smoothing: dict | None = None
+    shape_smoothing: dict | None = None
     # ``shape`` samples every block at uniform fractions and is judged against
     # the shape limits only; ``grid`` samples the graded mesh nodes the
     # session defines and carries the sizing report.
@@ -1286,6 +1288,8 @@ def _finish(result: PipelineResult, settings: PipelineOptions) -> None:
         and not result.failures
         and result.covered
     ):
+        if settings.smooth:
+            _shape_smooth(result, settings)
         try:
             result.counts = sizing.assign_counts(
                 result.graph, result.metric, settings.sizing
@@ -1354,6 +1358,82 @@ def _finish(result: PipelineResult, settings: PipelineOptions) -> None:
         except Exception as error:  # pragma: no cover - reported, not raised
             result.errors.append({"stage": "grid_quality", "error": _describe(error)})
     result.analysis = build_analysis(result)
+
+
+def _shape_smooth(result: PipelineResult, settings: PipelineOptions) -> None:
+    """Smooth the graph's count-free shape before the sizing stage.
+
+    The graph is emitted as a session with placeholder counts, the
+    production smoother runs in shape mode on it, and the moved vertices
+    and the similarity-carried edge paths are written back into the graph,
+    so the counts, the grading and every grid are computed on the smoothed
+    geometry. The graph is checked again (edge crossings, boundary chains,
+    coverage); any new problem restores it and is reported.
+    """
+    from blockdrawer.smooth import SmoothOptions, smooth_model
+
+    try:
+        model, identifiers, _refused = session_emit.build_model_from_graph(
+            result.graph, result.domain, counts={}, grading=(), reference_curves=False,
+        )
+        shaped = smooth_model(model, options=SmoothOptions(mode="shape", allow_stale_fold=True))
+    except Exception as error:  # pragma: no cover - reported, not raised
+        result.errors.append({"stage": "shape_smooth", "error": _describe(error)})
+        return
+    record = shaped.to_data()
+    result.shape_smoothing = record
+    if not shaped.applied or not shaped.positions:
+        return
+    graph = result.graph
+    key_of = {identifier: key for key, identifier in identifiers.items()}
+    moved = {key_of[identifier]: np.asarray(point, dtype=np.float64)
+             for identifier, point in shaped.positions.items()}
+    saved_points = {key: graph.vertices[key].point.copy() for key in moved}
+    saved_edges = {}
+    for key, edge in graph.edges.items():
+        if key[0] not in moved and key[1] not in moved:
+            continue
+        saved_edges[key] = (edge.points, edge.path)
+        first_old = complex(*graph.vertices[key[0]].point)
+        second_old = complex(*graph.vertices[key[1]].point)
+        first_new = complex(*moved.get(key[0], graph.vertices[key[0]].point))
+        second_new = complex(*moved.get(key[1], graph.vertices[key[1]].point))
+        chord = second_old - first_old
+        if abs(chord) <= 0.0:
+            continue
+        factor = (second_new - first_new) / chord
+
+        def carry(x, y):
+            z = first_new + factor * (complex(x, y) - first_old)
+            return z.real, z.imag
+
+        edge.points = tuple(carry(x, y) for x, y in edge.points)
+        edge.path = np.asarray([carry(x, y) for x, y in edge.path], dtype=np.float64)
+    for key, point in moved.items():
+        graph.vertices[key].point = point
+    problems = graph.problems(check_geometry=settings.check_edge_crossings)
+    if result.domain is not None:
+        problems.extend(pg.boundary_problems(graph, result.domain))
+    coverage = None
+    try:
+        coverage = pg.coverage(graph, result.domain, samples=settings.coverage_samples)
+    except Exception as error:  # pragma: no cover - reported, not raised
+        problems.append(f"coverage: {_describe(error)}")
+    covered = bool(
+        coverage
+        and coverage["uncovered_samples"] == 0
+        and coverage["overlapping_samples"] == 0
+        and coverage["outside_samples"] == 0
+    )
+    if problems or not covered:
+        for key, point in saved_points.items():
+            graph.vertices[key].point = point
+        for key, (points, path) in saved_edges.items():
+            graph.edges[key].points = points
+            graph.edges[key].path = path
+        record["reverted"] = problems[:4] or ["the smoothed graph does not cover the domain"]
+        return
+    result.coverage = coverage
 
 
 def run(names, loops, options: PipelineOptions | None = None) -> PipelineResult:
@@ -1523,6 +1603,8 @@ def build_analysis(result: PipelineResult) -> dict:
         }
     if result.smoothing is not None:
         analysis["smoothing"] = result.smoothing
+    if result.shape_smoothing is not None:
+        analysis["shape_smoothing"] = result.shape_smoothing
     if result.model is not None:
         analysis["session"] = {
             "export_notes": list(result.export_notes),

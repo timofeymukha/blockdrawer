@@ -507,11 +507,15 @@ them in the canvas widgets.
   graph is validated with the real domain; refusals keep their reason under
   `medial.hull` and the annular construction runs instead.
   `--smooth` (opt-in, `PipelineOptions.smooth`) runs the production
-  `blockdrawer.smooth` on the emitted model in `pipeline._finish`, after the
-  session is built and before the shape grid, counts grid and fold check,
-  so the verdict is the one of the session written; the record is under
-  `smoothing`. It changes no engine rule and is off by default; its corpus
-  measurement is in the engine README.
+  `blockdrawer.smooth` twice in `pipeline._finish`: `mode=shape` on a
+  placeholder-count emission of the graph before `sizing.assign_counts`
+  (`_shape_smooth` writes the moved vertices and similarity-carried paths
+  back into the graph, rechecks crossings, boundary chains and coverage,
+  and restores the graph on any new problem), then the real-count polish
+  on the built session before the grids are judged, so the verdict is the
+  one of the session written; records `shape_smoothing` and `smoothing`.
+  It changes no engine rule and is off by default; its corpus measurement
+  is in the engine README.
   `spanned.py` exposes an opt-in `--span-gaps` construction: mutually facing
   mouths replace a narrow body-body medial branch with one core strip and
   dissolve its two junctions into valence-five front vertices. Trials include

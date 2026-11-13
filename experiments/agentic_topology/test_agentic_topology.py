@@ -948,6 +948,10 @@ class SessionTests(unittest.TestCase):
         result = run_case("single_ellipse", options=replace(FAST, smooth=True))
         self.assertIsNotNone(result.smoothing)
         self.assertIn("smoothing", result.analysis)
+        # The shape pass ran on the graph before sizing.
+        self.assertIsNotNone(result.shape_smoothing)
+        self.assertEqual(result.shape_smoothing["mode"], "shape")
+        self.assertIn("shape_smoothing", result.analysis)
         # The grids were judged on the model the smoother left, which is the
         # one written: its sampled maximum is the smoother's "after".
         from blockdrawer.sampling import sample_model

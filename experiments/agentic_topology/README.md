@@ -1437,45 +1437,61 @@ construction is not part of this audit, and spanning remains opt-in.
 
 ### Production smoother (opt-in `--smooth`)
 
-`research_cli.py run --smooth` runs BlockDrawer's `smooth` command
-(`blockdrawer/smooth.py`, default options) on the emitted model inside
-`pipeline._finish`, after the session is built and before the shape grid,
-the counts grid and the fold check are evaluated, so the verdict is the
-one of the session written; the report carries the smoother's own record
-under `smoothing`. No engine rule changes, and without the flag nothing
-does. The corpus with and without it (each row "without -> with"; the last
-column is the smoother's checkMesh-measure of the counts grid):
+`research_cli.py run --smooth` runs BlockDrawer's `smooth` twice inside
+`pipeline._finish`. Before the sizing stage (`_shape_smooth`) the graph is
+emitted with placeholder counts, smoothed in `mode=shape` (count-free,
+wall-band spokes held), and the moved vertices and similarity-carried edge
+paths are written back into the graph; edge crossings, boundary chains and
+coverage are checked again on the smoothed geometry and any new problem
+restores the graph (`shape_smoothing.reverted`). The engine's own sizing then
+counts and grades the smoothed geometry, and after the session is built the
+real-count `smooth` polishes it before the shape grid, counts grid and fold
+check are evaluated, so the verdict is the one of the session written. The
+records are `shape_smoothing` and `smoothing`. No engine rule changes, and
+without the flag nothing does.
 
-| case | blocks | verdict | shape non-orth | wall misalign | min scaled Jacobian | sampled max NO / faces > 70 |
+The corpus, each cell "without / polish only (the first version of the
+flag) / shape before sizing and polish"; `wake_tandem` is `--case
+tandem_foils --wake`, `wake_blunt` `--case blunt_foil --wake --layer-height
+0.05`, `hull_tandem15` and `hull_staggered` the Makefile's
+`research-tandem-15c` and `research-staggered` arguments; every session
+passes checkMesh:
+
+| case | blocks | verdict | shape non-orth | wall misalign | min scaled Jacobian | checkMesh max (Mesh OK) |
 |---|---|---|---|---|---|---|
-| single_ellipse | 12 | admissible -> admissible | 38.8 -> 37.9 | 30.6 -> 30.6 | 0.779 -> 0.789 | 35.1/0 -> 34.4/0 |
-| two_circles | 32 | resolved -> resolved | 64.9 -> 58.0 | 7.0 -> 6.9 | 0.424 -> 0.531 | 63.3/0 -> 55.7/0 |
-| three_rotated_ellipses | 80 | admissible -> admissible | 80.0 -> 79.4 | 64.6 -> 64.0 | 0.173 -> 0.185 | 79.4/121 -> 78.7/100 |
-| concave_and_convex | 42 | admissible -> admissible | 65.6 -> 61.1 | 43.5 -> 44.2 | 0.412 -> 0.483 | 60.5/0 -> 56.7/0 |
-| four_bodies | 53 | resolved -> resolved | 65.7 -> 63.6 | 13.3 -> 13.3 | 0.411 -> 0.445 | 64.0/0 -> 61.2/0 |
-| sharp_bodies | 45 | admissible -> admissible | 76.2 -> 73.9 | 10.7 -> 11.4 | 0.238 -> 0.277 | 74.9/18 -> 72.4/6 |
-| narrow_gap_tip | 57 | admissible -> admissible | 69.6 -> 69.4 | 21.7 -> 19.6 | 0.348 -> 0.352 | 67.9/0 -> 63.1/0 |
-| peanut_body | 24 | admissible -> admissible | 46.1 -> 45.9 | 41.3 -> 41.1 | 0.693 -> 0.695 | 43.4/0 -> 43.2/0 |
-| skimming_tail | 50 | admissible -> admissible | 67.4 -> 70.0 | 67.4 -> 70.0 | 0.385 -> 0.342 | 64.3/0 -> 59.5/0 |
-| tandem_foils | 49 | admissible -> admissible | 76.4 -> 70.8 | 70.5 -> 70.5 | 0.234 -> 0.330 | 73.3/3 -> 68.3/0 |
-| blunt_foil | 15 | admissible -> admissible | 70.9 -> 62.8 | 70.5 -> 61.4 | 0.328 -> 0.457 | 68.3/0 -> 59.4/0 |
-| straight_channel | 48 | resolved -> resolved | 0.000 -> 0.000 | 0.000 -> 0.000 | 1.000 -> 1.000 | 0.0/0 -> 0.0/0 (no-op) |
-| periodic_hill | 33 | resolved -> resolved | 29.2 -> 27.5 | 21.2 -> 21.8 | 0.873 -> 0.887 | 36.2/0 -> 34.6/0 |
-| wake_tandem | 51 | admissible -> admissible | 70.5 -> 69.3 | 21.6 -> 29.8 | 0.333 -> 0.353 | 68.9/0 -> 67.0/0 |
-| wake_blunt | 18 | resolved -> admissible | 67.9 -> 67.4 | 16.5 -> 34.1 | 0.376 -> 0.384 | 77.6/64 -> 73.4/40 |
-| hull_tandem15 | 122 | admissible -> resolved | 70.5 -> 66.4 | 6.4 -> 22.5 | 0.333 -> 0.401 | 55.4/0 -> 35.6/0 |
-| hull_staggered | 197 | admissible -> admissible | 70.5 -> 70.0 | 6.2 -> 21.1 | 0.333 -> 0.342 | 65.6/0 -> 61.3/0 |
+| single_ellipse | 12 | adm / adm / adm | 38.8 / 37.9 / 36.9 | 30.6 / 30.6 / 30.6 | 0.78 / 0.79 / 0.80 | 35.1 / 34.4 / 34.6 |
+| two_circles | 32 | res / res / res | 64.9 / 58.0 / 47.6 | 7.0 / 6.9 / 6.4 | 0.42 / 0.53 / 0.67 | 63.3 / 55.7 / 40.7 |
+| three_rotated_ellipses | 80 | adm / adm / adm | 80.0 / 79.4 / 74.1 | 64.6 / 64.0 / 61.2 | 0.17 / 0.18 / 0.27 | 79.4 / 78.7 / 71.3 |
+| concave_and_convex | 42 | adm / adm / adm | 65.6 / 61.1 / 54.6 | 43.5 / 44.2 / 44.9 | 0.41 / 0.48 / 0.58 | 60.5 / 56.7 / 53.3 |
+| four_bodies | 53 | res / res / res | 65.7 / 63.6 / 60.3 | 13.3 / 13.3 / 14.0 | 0.41 / 0.45 / 0.50 | 64.0 / 61.2 / 54.5 |
+| sharp_bodies | 45 | adm / adm / adm | 76.2 / 73.9 / 71.1 | 10.7 / 11.4 / 17.2 | 0.24 / 0.28 / 0.32 | 74.9 / 72.4 / 69.3 |
+| narrow_gap_tip | 57 | adm / adm / adm | 69.6 / 69.4 / 69.5 | 21.7 / 19.6 / 5.3 | 0.35 / 0.35 / 0.35 | 67.9 / 63.1 / 43.5 |
+| peanut_body | 24 | adm / adm / adm | 46.1 / 45.9 / 45.9 | 41.3 / 41.1 / 41.0 | 0.69 / 0.70 / 0.70 | 43.4 / 43.2 / 43.2 |
+| skimming_tail | 50 | adm / adm / adm | 67.4 / 70.0 / 70.0 | 67.4 / 70.0 / 70.0 | 0.38 / 0.34 / 0.34 | 64.3 / 59.5 / 58.8 |
+| tandem_foils | 49 | adm / adm / adm | 76.4 / 70.8 / 70.5 | 70.5 / 70.5 / 70.5 | 0.23 / 0.33 / 0.33 | 73.3 / 68.3 / 68.2 |
+| blunt_foil | 15 | adm / adm / adm | 70.9 / 62.8 / 61.0 | 70.5 / 61.4 / 59.6 | 0.33 / 0.46 / 0.48 | 68.3 / 59.4 / 57.5 |
+| straight_channel | 48 | res / res / res | 0.00 / 0.00 / 0.00 | 0.00 / 0.00 / 0.00 | 1.00 / 1.00 / 1.00 | 0.00 / 0.00 / 0.00 |
+| periodic_hill | 33 | res / res / res | 29.2 / 27.5 / 25.8 | 21.2 / 21.8 / 22.3 | 0.87 / 0.89 / 0.90 | 36.2 / 34.6 / 33.0 |
+| wake_tandem | 51 | adm / adm / adm | 70.5 / 69.3 / 65.4 | 21.6 / 29.8 / 32.3 | 0.33 / 0.35 / 0.42 | 68.9 / 67.0 / 53.5 |
+| wake_blunt | 18 | res / adm / adm | 67.9 / 67.4 / 58.2 | 16.5 / 34.1 / 49.5 | 0.38 / 0.38 / 0.53 | 77.6 / 73.4 / 65.6 |
+| hull_tandem15 | 122 | adm / res / res | 70.5 / 66.4 / 60.6 | 6.4 / 22.5 / 13.7 | 0.33 / 0.40 / 0.49 | 55.4 / 35.6 / 31.5 |
+| hull_staggered | 197 | adm / adm / adm | 70.5 / 70.0 / 70.0 | 6.2 / 21.1 / 28.0 | 0.33 / 0.34 / 0.34 | 65.6 / 61.3 / 61.9 |
 
-`wake_tandem` is `--case tandem_foils --wake`, `wake_blunt` `--case blunt_foil
---wake --layer-height 0.05`, `hull_tandem15` and `hull_staggered` the Makefile's
-`research-tandem-15c` and `research-staggered` arguments.
-
-The smoother optimises the counts grid, so the count-free shape grid can
-move either way (skimming_tail 67.4 -> 70.0). Wall misalignment rises where
-the smoother may turn spokes: at sharp corners and fans, where a spoke is
-not held to the wall normal (wake_blunt 16.5 -> 34.1 drops it from resolved
-to admissible; the hull far fields 6 -> 21 to 23), while hull_tandem15
-becomes resolved. Smooth-wall single spokes keep their alignment.
+Each column has five resolved runs: hull_tandem15 becomes resolved and
+wake_blunt drops to admissible with either flag version, and no other run
+changes its verdict, although the shape pass lowers checkMesh's maximum on
+every run but the straight channel (two_circles 63.3 -> 40.7, narrow_gap_tip
+67.9 -> 43.5) and the shape-grid non-orthogonality on all but skimming_tail.
+What keeps them admissible is mostly wall misalignment above its 25-degree
+limit (single_ellipse 30.6, concave_and_convex 44.9, peanut_body 41.0,
+skimming_tail 70, tandem_foils 70.5, blunt_foil 59.6), set at the fixed wall
+vertices and the band fronts, which the smoother does not move, and seam
+wedges at sharp corners (three_rotated_ellipses 74.1, sharp_bodies 71.1).
+Wall misalignment rises in the band blocks next to a corner, a fan or a
+trailing edge, where a spoke is not held to a wall normal (wake_blunt 16.5 ->
+49.5, which drops it from resolved; the hull far fields 6 -> 14 and 28):
+it is the bands, not the far-field spokes - in every one of those runs the
+worst misaligned block is a band block with one unheld spoke.
 
 ### Periodic hill (internal-flow acceptance)
 

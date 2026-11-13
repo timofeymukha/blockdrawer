@@ -408,11 +408,13 @@ the halves (`set_edge_grading v3-core_mid end_width 0.017 propagate=true`).
 Commit the batch with the session so the topology can be regenerated and
 reviewed.
 
-**Smoothing engine output.** `research_cli.py run --smooth` applies the
-production `smooth` to the emitted session before it is judged, so the
-verdict is the smoothed session's. On the corpus it lowered the sampled
-maximum non-orthogonality on every case it moved, but where spokes are
-free to turn (sharp corners, fans, hull far fields) it raised wall
+**Smoothing engine output.** `research_cli.py run --smooth` smooths the
+count-free shape before the engine sizes it and polishes the sized session
+before it is judged, so the verdict is the smoothed session's. On the
+corpus it lowered checkMesh's maximum on every run it moved (two_circles
+63 -> 41 degrees) but turned only hull_tandem15 resolved: the others' wall
+misalignment is set by the fixed wall gates and band fronts. Where spokes
+are free to turn (corners, fans, hull far fields) it raised wall
 misalignment, and wake_blunt fell from resolved to admissible - compare
 both verdicts before keeping it.
 
