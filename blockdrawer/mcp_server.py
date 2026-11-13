@@ -87,6 +87,11 @@ JSON); ask for the part you need rather than the whole session.
    "add_boundary inlet",
    "set_edge_boundary v0-v3 inlet") or with commands_file pointing at a
    generated batch (one command per line, # comments, JSON objects allowed).
+   Build layouts with the construction operators rather than vertex by
+   vertex: add_grid (Cartesian or polar stations, skip boxes, outside=CURVE,
+   conforms to what exists), add_band (rows along a chain of exterior edges,
+   or to_box), add_ring (a band round a closed reference curve) and
+   set_boundary_by (patches by curve, bbox or chain).
    list_commands documents every command. Batches are atomic: nothing is
    saved when any command fails. The answer counts the commands and lists
    the IDs created and removed and the results worth reading (repairs,

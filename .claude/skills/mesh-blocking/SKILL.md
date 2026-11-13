@@ -299,6 +299,28 @@ choose a far field: that came with the brief.
 
 ## 4. Build outward from the wall
 
+**By hand, state the layout with the construction operators** - a dozen
+lines, no script. The grooved tandem (251 blocks, Mesh OK at 20.5 degrees):
+
+1. `new SESSION --box -8 -8 -1 -1` - the first block where a grid cell will
+   reuse it (or remove it with `remove_edge` when nothing will).
+2. `import_curve cylinder1.dat name=cyl1` (and `cyl2`).
+3. `add_grid center=0,0 rs=0.25,0.29,0.5,0.6 thetas=-15,-12,12,15,30
+   period=60 outside=cyl1` - the grooves, their side and bottom strips and
+   the wall band as one polar patch; cells inside the body are left out.
+4. `set_boundary_by cyl1 type=wall curves=cyl1`.
+5. `add_band bbox=-0.7,-0.7,0.7,0.7 to_box=-1,-1,1,1` - the band's outer
+   loop to a square (put spokes at the square's corners).
+6. `add_grid xs=-8,-1,1,2,4,22 ys=-8,-1,1,8 outside=cyl1,cyl2` - the
+   H-grid; the squares' vertices become stations.
+7. `set_boundary_by inlet type=patch bbox=-8,-8,-8,8`, ... per far-field side.
+
+A smooth or sharp-edged body without grooves takes `add_ring CURVE HEIGHT
+count=N` (a fan at its sharp corners) and `add_band ... height=` rows before
+`to_box`. A station list on one side of a box that is not on the other
+cannot close an H-grid conformally (`add_grid` refuses it): carry bands to
+the far-field box instead.
+
 Layers, from the inside out: wall - **collar** (the boundary-layer band, a
 mitred normal offset) - near-field marched offsets - an algebraic blend - the
 medial ring or a transition circle - the far field. The collar's front, not

@@ -278,6 +278,29 @@ them in the canvas widgets.
   field state (`CONTINUITY_SPLIT_ROUNDS`). Counts and total
   ratios are written directly (links kept and reported); one validated edit.
   `quality` reports `interface_jumps` (above 2.5, 5, 20) in its summary.
+- `blockdrawer/construct.py`: construction operators behind the registry
+  commands `add_grid`, `add_band`, `add_ring` and `set_boundary_by`, derived
+  from what the two hand builds coded themselves (coordinate-deduplicated
+  vertices, polar points, ray-square hits, offset circles, arcs, edge
+  marking). Each runs on a copy (`_atomic`) through `_Build`: vertices
+  reused by coordinate (tolerance 1e-9 of the extent) or named
+  `ID_k`/next `vN`, blocks ordered and checked strictly convex
+  (`_validate_convex_ccw`, refused by name) or reused when the same four
+  vertices already form one, counts merged as `add_block_from_vertices`
+  does, arc/spline geometry on new edges only, one `validate()`.
+  `add_grid` skips cells by centre (skip boxes, inside `outside` curves,
+  inside existing blocks), conforms to existing exterior vertices on kept
+  cells' sides (fixed point, stations merged within tolerance) and refuses
+  a grid vertex inside an existing straight exterior edge. `_band` builds
+  spokes per chain vertex (mitre `1/cos` capped at `MITRE_LIMIT`; a fan of
+  `ceil(turn/FAN_SECTOR)` kite blocks at a convex turn above `FAN_ANGLE`;
+  open ends along the adjacent boundary edge when within 60 degrees of the
+  normal; exact arc tangents) and rows by `growth`; `_band_to_box` snaps a
+  box corner to the nearer of the two spokes straddling it. `add_ring`
+  places stations at curve corners (`CORNER_ANGLE`) and by arc length,
+  spline wall edges through the curve's points (at most
+  `MAX_SPLINE_POINTS`, none within a thousandth of a station). Curves
+  without a repeated end point are closed implicitly. No engine code.
 - `blockdrawer/size_distance.py`: item 3's sizing (commit 9a84f29),
   unchanged, behind `size method=distance`: the scalar wall-distance field,
   wall-normal edges graded from their finer end, tangential edges uniform,

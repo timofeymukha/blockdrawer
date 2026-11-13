@@ -1245,6 +1245,146 @@ _register(CommandSpec(
     ),
     _run_size,
 ))
+def _run_add_grid(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
+    from .construct import add_grid
+
+    return add_grid(
+        model, xs=args["xs"], ys=args["ys"], center=args["center"], rs=args["rs"],
+        thetas=args["thetas"], period=args["period"], skip=args["skip"],
+        outside=args["outside"], conform=args["conform"], prefix=args["id"],
+    ).to_data()
+
+
+def _run_add_band(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
+    from .construct import add_band
+
+    return add_band(
+        model, edges=args["edges"], bbox=args["bbox"], height=args["height"],
+        rows=args["rows"], growth=args["growth"], to_box=args["to_box"], prefix=args["id"],
+    ).to_data()
+
+
+def _run_add_ring(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
+    from .construct import add_ring
+
+    return add_ring(
+        model, args["curve"], args["height"], count=args["count"],
+        fractions=args["fractions"], rows=args["rows"], growth=args["growth"],
+        prefix=args["id"],
+    ).to_data()
+
+
+def _run_set_boundary_by(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
+    from .construct import set_boundary_by
+
+    return set_boundary_by(
+        model, args["name"], kind=args["type"] or None, curves=args["curves"],
+        tolerance=args["tolerance"], bbox=args["bbox"], between=args["between"],
+        unassigned=args["unassigned"],
+    ).to_data()
+
+
+_ID = Parameter("id", "optional_str",
+                "name new vertices ID_0, ID_1, ... and blocks ID_b0, ... (default: next vN, bN)",
+                required=False, default=None)
+_register(CommandSpec(
+    "add_grid",
+    (
+        "Add blocks from station lists: xs and ys, or radii rs and angles "
+        "thetas (degrees) about center, repeated every period degrees round "
+        "the circle (circumferential edges are arcs). A cell is left out when "
+        "its centre lies in a skip box (xmin,ymin,xmax,ymax, several allowed), "
+        "inside an outside curve, or inside an existing block. Vertices "
+        "coincident with existing ones are reused; with conform (default) "
+        "existing vertices lying on a grid line become stations, so the grid "
+        "closes conformally round what is there."
+    ),
+    (
+        Parameter("xs", "numbers", "x stations", required=False, default=()),
+        Parameter("ys", "numbers", "y stations", required=False, default=()),
+        Parameter("center", "numbers", "centre x,y of a polar grid", required=False, default=()),
+        Parameter("rs", "numbers", "radii of a polar grid", required=False, default=()),
+        Parameter("thetas", "numbers", "angles of a polar grid, degrees", required=False, default=()),
+        Parameter("period", "float", "repeat thetas every period degrees (0: no repeat)",
+                  required=False, default=0.0),
+        Parameter("skip", "numbers", "boxes whose cells are left out, 4 numbers each",
+                  required=False, default=()),
+        Parameter("outside", "curves", "leave out cells inside these closed curves",
+                  required=False, default=()),
+        Parameter("conform", "bool", "take existing vertices on grid lines as stations",
+                  required=False, default=True),
+        _ID,
+    ),
+    _run_add_grid,
+))
+_register(CommandSpec(
+    "add_band",
+    (
+        "Add a band of blocks along a chain or loop of exterior edges (edges, "
+        "or the unassigned exterior edges inside bbox): spokes along the "
+        "mitred normals, height high in rows rows (growth: each row's height "
+        "over the previous), a fan of corner blocks at a convex corner sharper "
+        "than 60 degrees, open ends following the boundary they meet, offset "
+        "arcs kept arcs. With to_box every spoke runs to that rectangle "
+        "instead, a box corner taken by the nearest spoke."
+    ),
+    (
+        Parameter("edges", "edges", "the chain's edges", required=False, default=()),
+        Parameter("bbox", "numbers", "select the unassigned exterior edges inside this box",
+                  required=False, default=()),
+        Parameter("height", "float", "band height (0 with to_box)", required=False, default=0.0),
+        Parameter("rows", "int", "rows of blocks", required=False, default=1),
+        Parameter("growth", "float", "row height ratio", required=False, default=1.0),
+        Parameter("to_box", "numbers", "xmin,ymin,xmax,ymax the spokes run to",
+                  required=False, default=()),
+        _ID,
+    ),
+    _run_add_band,
+))
+_register(CommandSpec(
+    "add_ring",
+    (
+        "Add a band of blocks round a closed reference curve: vertices on the "
+        "curve at its sharp corners and at count edges spread by arc length "
+        "(or at the given arc-length fractions from its first point), wall "
+        "edges as splines through the curve's points, then the band as "
+        "add_band builds it, height high."
+    ),
+    (
+        Parameter("curve", "curve", "closed reference curve (ID or name)"),
+        Parameter("height", "float", "band height"),
+        Parameter("count", "int", "edges round the curve (0: fractions only)",
+                  required=False, default=0),
+        Parameter("fractions", "numbers", "arc-length fractions of extra stations",
+                  required=False, default=()),
+        Parameter("rows", "int", "rows of blocks", required=False, default=1),
+        Parameter("growth", "float", "row height ratio", required=False, default=1.0),
+        _ID,
+    ),
+    _run_add_ring,
+))
+_register(CommandSpec(
+    "set_boundary_by",
+    (
+        "Assign to patch name (created if missing, type if given) every "
+        "exterior edge chosen by all the given selectors: within tolerance "
+        "(default a thousandth of the curve's size) of the curves, inside "
+        "bbox, on the shortest exterior chain between two vertices; "
+        "unassigned=true leaves assigned edges alone."
+    ),
+    (
+        Parameter("name", "str", "patch name"),
+        Parameter("type", "optional_str", "patch type (patch, wall, symmetry, empty)",
+                  required=False, default=None),
+        Parameter("curves", "curves", "reference curves the edges lie on", required=False, default=()),
+        Parameter("tolerance", "float", "distance to the curves (0: a thousandth of their size)",
+                  required=False, default=0.0),
+        Parameter("bbox", "numbers", "xmin,ymin,xmax,ymax", required=False, default=()),
+        Parameter("between", "vertices", "two exterior vertices", required=False, default=()),
+        Parameter("unassigned", "bool", "only edges with no patch yet", required=False, default=False),
+    ),
+    _run_set_boundary_by,
+))
 _register(CommandSpec(
     "add_boundary",
     "Create a named patch of type patch.",
@@ -1748,6 +1888,15 @@ def _note(result: CommandResult) -> dict[str, Any] | None:
             "refused": data.get("refused"),
             "note": data.get("note"),
         }
+    if result.name in ("add_grid", "add_band", "add_ring"):
+        return {
+            **base,
+            "blocks": len(data.get("created_blocks", [])),
+            "reused_vertices": data.get("reused_vertices"),
+            "skipped_cells": data.get("skipped_cells"),
+        }
+    if result.name == "set_boundary_by":
+        return {**base, "edges": data.get("edges")}
     if result.name == "split_edge":
         return {
             **base,

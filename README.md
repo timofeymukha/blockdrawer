@@ -462,6 +462,45 @@ blockdrawer-cli check case.json                    # runs blockMesh and checkMes
 blockdrawer-cli commands                           # lists every editing command
 ```
 
+### Construction operators
+
+Four registry commands build whole rows and patches of blocks so a layout is
+stated, not computed (every one atomic, one history entry, a non-convex block
+refused by name; `id=PREFIX` names new vertices `PREFIX_0, ...` and blocks
+`PREFIX_b0, ...`):
+
+- `add_grid xs=... ys=... [skip=XMIN,YMIN,XMAX,YMAX ...] [outside=CURVES]` or
+  `add_grid center=X,Y rs=... thetas=... [period=DEG]` - blocks from station
+  lists, Cartesian or polar (circumferential edges are arcs). A cell is left
+  out when its centre is in a skip box, inside an `outside` curve or inside an
+  existing block; coincident vertices are reused, and existing exterior
+  vertices on a kept cell's side become stations (`conform`, default on), so
+  an H-grid closes round O-rings already built. A station that would cut an
+  existing edge is refused by name.
+- `add_band edges=... | bbox=... height=H [rows=N growth=G]` or `to_box=...` -
+  rows of blocks along a chain or loop of exterior edges (`bbox` takes the
+  unassigned exterior edges inside it): mitred spokes, a fan of corner blocks
+  at a convex corner sharper than 60 degrees, open ends following the
+  boundary they meet, offset arcs kept arcs; `to_box` carries every spoke to a
+  rectangle, its corners taken by the nearest spokes.
+- `add_ring CURVE HEIGHT count=N | fractions=...` - a band round a closed
+  reference curve: vertices on the curve at its sharp corners and spread by
+  arc length, wall edges as splines through the curve's points.
+- `set_boundary_by NAME [type=T] [curves=...] [bbox=...] [between=A,B]
+  [unassigned=true]` - every exterior edge all given selectors choose, the
+  patch created when missing.
+
+Measured (`review_operators/` beside the trial data): the 27-block backward
+step in 8 commands (`add_grid` with one skip box and six `set_boundary_by`;
+`size`: 21,750 cells, Mesh OK, 0 degrees); the grooved tandem in 14 (two
+polar grids with `outside` the bodies, two `add_band ... to_box`, one H-grid,
+251 blocks with the hand build's patches; shape, size, polish: 47,616 cells,
+Mesh OK, max 20.5 degrees against the hand mesh's 42.7); a NACA 0012 at 5
+degrees in 12 (`add_ring` with a trailing-edge fan, two mitred bands,
+`to_box`; 59,908 cells at a first width of 1e-4, Mesh OK, max 48.6 degrees,
+no face above 70). A session starts with one block (`new --box`): put it
+where a grid cell will reuse it, or remove it with `remove_edge` at the end.
+
 Edits are applied atomically with `apply`. Commands are short text lines or
 JSON objects; edges are written `first-second` in either order, a grading
 value or split fraction is read along the edge in the order you wrote it
