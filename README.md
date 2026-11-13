@@ -742,13 +742,14 @@ upgrading BlockDrawer. Every tool takes the session path, so agents and the GUI
 can share one file: save in the editor, let the agent edit and check, then
 reopen.
 
-The server's instructions cover tool mechanics only. How to choose and build
-a topology - O, C or H grids, wall bands and wakes, far-field placement,
-sizing from a target $y^+$, the validation ladder and the known failure
-signatures - is the repository skill
+The server's instructions cover tool mechanics only. The procedure - choose
+the route (construction operators or the topology engine), build, shape,
+size, polish, judge, deliver - is the repository skill
 [`.claude/skills/mesh-blocking/SKILL.md`](.claude/skills/mesh-blocking/SKILL.md),
 which Claude Code loads as a project skill and any other agent can read as a
-document. It is kept in step with the topology engine under `experiments/`.
+document; its reference files (`engine.md`, `sizing.md`, `failures.md`) and
+three worked example batches (`examples/`) sit beside it. It is kept in step
+with the topology engine under `experiments/`.
 
 ## Tests
 

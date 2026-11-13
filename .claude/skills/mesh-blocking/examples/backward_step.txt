@@ -1,0 +1,16 @@
+#! new --box -5 0 0 0.15
+# (the first block is the upstream wall band's first cell; add_grid reuses it).
+# x stations: inlet, step face, step band, two streamwise stations, outlet.
+# y stations: lower wall + band, shear rows either side of the step line, upper band + wall.
+add_grid xs=-5,0,0.15,1.5,7,20 ys=-1,-0.85,-0.15,0,0.15,0.85,1 skip=-5,-1,0,0
+set_boundary_by inlet type=patch bbox=-5,-1,-5,1
+set_boundary_by outlet type=patch bbox=20,-1,20,1
+set_boundary_by lower_wall_upstream type=wall bbox=-5,0,0,0
+set_boundary_by step type=wall bbox=0,-1,0,0
+set_boundary_by lower_wall_downstream type=wall bbox=0,-1,20,-1
+set_boundary_by upper_wall type=wall bbox=-5,1,20,1
+set_export_settings z_min_patch_type=empty z_max_patch_type=empty
+
+# Follow-on, after the build (shape, size, polish where given):
+#> size 0.005 0.25 growth=1.1 wall_aspect=30
+# checkMesh: 21,750 cells, Mesh OK, max non-orthogonality 0, 0 faces above 70 (size splits two core rows: 36 blocks)

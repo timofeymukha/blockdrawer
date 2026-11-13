@@ -1,0 +1,25 @@
+#! new --box -8 -8 -1 -1
+import_curve cylinder1.dat name=cyl1
+import_curve cylinder2.dat name=cyl2
+# Each cylinder: a polar patch out to r = 0.6 - groove bottom strip (0.25-0.29), groove (to 0.5), wall band (to 0.6);
+# per 60-degree period: groove side strips -15..-12 and 12..15, groove middle, land ray at 30. Cells inside the body are left out.
+add_grid center=0,0 rs=0.25,0.29,0.5,0.6 thetas=-15,-12,12,15,30 period=60 outside=cyl1
+add_grid center=3,0 rs=0.25,0.29,0.5,0.6 thetas=-15,-12,12,15,30 period=60 outside=cyl2
+set_boundary_by cyl1 type=wall curves=cyl1
+set_boundary_by cyl2 type=wall curves=cyl2
+# Carry each ring's outer loop to a square (the spokes at 45, 135, ... take the corners).
+add_band bbox=-0.7,-0.7,0.7,0.7 to_box=-1,-1,1,1
+add_band bbox=2.3,-0.7,3.7,0.7 to_box=2,-1,4,1
+# H-grid round both squares; the squares' vertices become stations.
+add_grid xs=-8,-1,1,2,4,22 ys=-8,-1,1,8 outside=cyl1,cyl2
+set_boundary_by inlet type=patch bbox=-8,-8,-8,8
+set_boundary_by outlet type=patch bbox=22,-8,22,8
+set_boundary_by top type=patch bbox=-8,8,22,8
+set_boundary_by bottom type=patch bbox=-8,-8,22,-8
+set_export_settings z_min_patch_type=empty z_max_patch_type=empty
+
+# Follow-on, after the build (shape, size, polish where given):
+#> smooth mode=shape allow_stale_fold=true
+#> size 0.005 0.5 growth=1.2 wall_aspect=10
+#> smooth
+# checkMesh: 47,616 cells, Mesh OK, max non-orthogonality 20.5, 0 faces above 70, max skewness 0.77

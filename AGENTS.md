@@ -28,13 +28,24 @@ them in the canvas widgets.
 - Agent tools: `python -m blockdrawer.mcp_server` (installed as
   `blockdrawer-mcp`; needs `pip install blockdrawer[mcp]`). Keep the MCP tool
   surface and the CLI in step: both must go through `commands.py`.
-- Meshing methodology for agents: `.claude/skills/mesh-blocking/SKILL.md`
-  (topology choice, bands and wakes, far field, sizing, validation ladder,
-  failure signatures). The MCP instructions point at it and carry mechanics
-  only. **Every change to the topology engine that alters what it builds,
-  refuses or measures - a new template, far-field option, acceptance term or
-  CLI flag - updates the skill's decision points in the same commit**, and the
-  MCP instructions when the agent workflow changes; a test checks the pointer.
+- Meshing methodology for agents: `.claude/skills/mesh-blocking/`.
+  `SKILL.md` is the procedure (at most 250 lines, a test keeps it there):
+  Steps 1-8 - collect, choose the route from a table of measured outcomes,
+  build (operators by hand or the engine), shape, size (with the
+  `method=distance` decision), polish, judge, deliver - each with its
+  command, what to read and the numbers that mean go on. Reference files
+  opened from those steps: `engine.md` (the engine per configuration, its
+  options and report), `sizing.md` (inputs, `verification`, measured
+  limits, sizing by hand), `failures.md` (signature -> tool) and
+  `examples/` (three operator batches with their follow-on lines and
+  checkMesh results; `tests/test_skill.py` builds them and checks that every
+  command, flag, option and Makefile target named in code spans exists). The
+  MCP instructions point at the steps by name and carry mechanics only.
+  **Every change to the topology engine that alters what it builds, refuses
+  or measures - a new template, far-field option, acceptance term or CLI
+  flag - updates `engine.md` (and the route table when the route changes) in
+  the same commit**, and the MCP instructions when the agent workflow
+  changes; a test checks the pointer.
 - Browser editor: `python -m blockdrawer.web [SESSION]` (installed as
   `blockdrawer-web`). Standard library only; it opens a tab on a loopback
   port and must stay functionally equivalent to the Tk editor.

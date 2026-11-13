@@ -87,27 +87,13 @@ JSON); ask for the part you need rather than the whole session.
    "add_boundary inlet",
    "set_edge_boundary v0-v3 inlet") or with commands_file pointing at a
    generated batch (one command per line, # comments, JSON objects allowed).
-   Build layouts with the construction operators rather than vertex by
-   vertex: add_grid (Cartesian or polar stations, skip boxes, outside=CURVE,
-   conforms to what exists), add_band (rows along a chain of exterior edges,
-   or to_box), add_ring (a band round a closed reference curve) and
-   set_boundary_by (patches by curve, bbox or chain).
-   list_commands documents every command. Batches are atomic: nothing is
-   saved when any command fails. The answer counts the commands and lists
-   the IDs created and removed and the results worth reading (repairs,
-   smoothing, splits, fits); detail=true returns every command's result.
-   To size and improve a finished topology: "smooth mode=shape
-   allow_stale_fold=true" (the count-free block shapes), "size
-   first_width=... core_size=... growth=..." (every count and grading from
-   a directional wall-distance field, widths matched across interfaces,
-   strips fine at both ends split, then cells spent on continuity up to
-   budget=N total cells, default 1.5 times the field's own; its
-   "verification" gives faces above 70 degrees and the worst face for the
-   field's state and the result - spending never adds to them; when the
-   field's own show faces above 70, try "size ... method=distance" too and
-   keep the one check prefers), then "smooth" (the
-   real-count polish, keeps wall bands, cell sizes and the worst face), then
-   "repair_block" on the blocks that remain bad.
+   list_commands documents every command - the construction operators
+   (add_grid, add_band, add_ring, set_boundary_by), smooth, size,
+   repair_block among them. Batches are atomic: nothing is saved when any
+   command fails. The answer counts the commands and lists the IDs created
+   and removed and the results worth reading (operators, repairs,
+   smoothing, sizing with its verification, splits, fits); detail=true
+   returns every command's result.
 3. quality_report: a verdict (valid, untangled, worst non-orthogonality and
    faces above 70 degrees, measured as checkMesh does on the block
    interiors sampled at the real counts), the worst blocks and edges, and
@@ -120,11 +106,14 @@ JSON); ask for the part you need rather than the whole session.
    location to render. export_block_mesh_dict writes the dictionary into a
    case.
 
-How to choose and build a topology - O, C or H grids, wall bands, wakes,
-far-field placement, sizing from a target y+, the validation ladder and the
-known failure signatures - is the repository skill
-.claude/skills/mesh-blocking/SKILL.md. Read it before building or judging a
-mesh. Pseudo-2D cases need both z patches of type empty:
+The procedure is the repository skill .claude/skills/mesh-blocking/SKILL.md:
+Step 2 (choose the route: operators by hand or the topology engine),
+Step 3 (build), Step 4 (shape: smooth mode=shape), Step 5 (size, and the
+method=distance decision from its verification), Step 6 (polish: smooth),
+Step 7 (judge: quality_report, then check_mesh) and Step 8 (deliver); its
+reference files (engine.md, sizing.md, failures.md, examples/) are opened
+from those steps. Read it before building or judging a mesh. Pseudo-2D cases
+need both z patches of type empty:
 set_export_settings z_min_patch_type=empty z_max_patch_type=empty.
 """
 

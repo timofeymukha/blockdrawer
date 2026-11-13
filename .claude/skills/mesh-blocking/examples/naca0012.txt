@@ -1,0 +1,22 @@
+#! new --box 20 20 21 21
+# (a placeholder block, removed at the end: every block here grows from the airfoil).
+import_curve naca0012_a5.dat name=naca
+# O-band round the airfoil: 40 edges by arc length plus the trailing edge, 0.05 chords high, a fan at the trailing edge.
+add_ring naca 0.05 count=40
+set_boundary_by airfoil type=wall curves=naca
+# Two more mitred rows round it, each rounder than the last, then spokes to the far-field box.
+add_band bbox=-0.5,-0.5,1.5,0.5 height=0.5
+add_band bbox=-1.5,-1.5,2.5,1.5 height=2.5
+add_band bbox=-5,-5,6,5 to_box=-10,-10,15,10
+remove_edge v0-v1
+set_boundary_by inlet type=patch bbox=-10,-10,-10,10
+set_boundary_by outlet type=patch bbox=15,-10,15,10
+set_boundary_by top type=patch bbox=-10,10,15,10
+set_boundary_by bottom type=patch bbox=-10,-10,15,-10
+set_export_settings z_min_patch_type=empty z_max_patch_type=empty
+
+# Follow-on, after the build (shape, size, polish where given):
+#> smooth mode=shape allow_stale_fold=true
+#> size 1e-4 1.0 growth=1.2 wall_aspect=50
+#> smooth
+# checkMesh: 59,908 cells, Mesh OK, max non-orthogonality 48.6, 0 faces above 70, max skewness 2.15
