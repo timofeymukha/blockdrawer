@@ -3,8 +3,9 @@
 A decision memo. The question is whether the topology engine should keep its
 scaffold — a raster Voronoi diagram with one site per closed loop — and
 extend it, or change it. This spike measures a challenger and the
-incumbent's obvious extension. It changes nothing in the engine or in
-`blockdrawer/`.
+incumbent's obvious extension. Part 3 then asks whether an existing all-quad
+mesher, used as a black box, can give the scaffold instead. It changes
+nothing in the engine or in `blockdrawer/`.
 
 Everything here runs from a clean checkout. NumPy and Pillow are required,
 and `scipy` is used where it can be imported: `ndimage` labels the
@@ -22,6 +23,10 @@ python experiments/scaffold_spike/run.py CASE --n N --rotate 17 # stability unde
 python experiments/scaffold_spike/graph.py naca0012 --n 400   # planar graph and faces of the partition
 python experiments/scaffold_spike/medial.py grooved_cylinder --spacing 0.01 --rho 3 --zoom=0.2,-0.2,0.6,0.2
 python experiments/scaffold_spike/extract.py naca0012 --n 800 --band 0.05 --out /tmp/naca.json --zoom=0.85,-0.2,1.2,0.07
+# Part 3: gmsh as a black box (skips when no gmsh binary is found)
+python experiments/scaffold_spike/quadmesh.py naca0012 --mesher quadqs --sizing uniform --n 40 --out /tmp/naca.json --zoom=0.8,-0.25,1.25,0.1
+python experiments/scaffold_spike/quadmesh.py grooved_cylinder --mesher frontal --sizing curvature --n 40
+python experiments/scaffold_spike/quadmesh.py three_rotated_ellipses --mesher quadqs --sizing uniform --n 80 --band
 ```
 
 The commands write pictures and JSON to `output/`, which git ignores (the
@@ -353,10 +358,239 @@ Per the gate, G2 (grooved cylinder) and G3 (30P30N) were not run. The
 block-count stability check applies only to passing cases, so there is
 none.
 
+## Part 3: an all-quad mesher as the scaffold (`quadmesh.py`)
+
+The question: can an existing all-quad mesher, used as a black box, give a
+general block scaffold? The mesher is the installed gmsh
+(`5.0.0-git-b1baeffb8`); nothing was built or downloaded.
+
+### What was built
+
+- **Geometry to mesher input.** Each loop is split at corners turning more
+  than 30°; straight pieces become `Line`s, curved pieces `Spline`s through
+  the supplied points. A smooth body is split into four pieces, a body with
+  one corner into two. One physical curve per patch.
+- **Meshers.** The same settings for every case.
+  - `quadqs`: gmsh's quasi-structured quad mesher, `-algo quadqs`.
+  - `frontal`: frontal-Delaunay for quads, recombined and subdivided
+    (`-algo delquad`, `RecombineAll`, `SubdivisionAlgorithm 1`). This is
+    always all quads.
+  - Sizing: either `curvature` (size = longer domain side / n, refined by
+    curvature at 16 elements per $2\pi$, down to a fortieth of that size)
+    or `uniform` (that one size).
+  - Kernel: the built-in one, or OpenCASCADE (`occ`).
+- **Base complex.**
+  - An interior vertex is irregular when its valence is not 4. A boundary
+    vertex is irregular when its quad count is not round(fluid angle / 90°).
+  - Separatrices leave every irregular vertex and every boundary corner
+    along each incident edge. They go straight through regular vertices
+    and stop at the next irregular or boundary vertex.
+  - Patches are flood-filled across uncut edges. A patch whose rim has four
+    corners is a block.
+- **Session.**
+  - Blocks are counter-clockwise. Each edge's cell count is its chain
+    length, so opposite sides agree by construction.
+  - Wall chains become splines and other chains polyLines, each with about
+    40 points.
+  - Boundary chains get their patch names.
+  - The model's own validation decides `valid`.
+- **Pipeline (n = 40).**
+  - First `set_export_settings` with empty z patches.
+  - Up to 600 blocks: `smooth mode=shape allow_stale_fold=true`, then
+    `size FIRST CORE ...`, then `smooth`. Above 600 blocks only `size`
+    runs, because shape smoothing a few thousand blocks does not finish in
+    the time box.
+  - Then `check` (blockMesh and checkMesh).
+  - The size arguments are per case and the same for every mesher:
+    - step: `0.005 0.25 growth=1.1 wall_aspect=30`
+    - grooved cylinder: `0.005 0.5 growth=1.2 wall_aspect=10`
+    - NACA: `1e-4 1.0 growth=1.2 wall_aspect=50`
+    - ellipses: `0.01958 0.3916 growth=1.2 count_rule=mean`
+    - 30P30N: `0.001 1.0 wall_aspect=25`
+- **Band first (`--band`).** Every body is replaced by its front, offset
+  into the fluid by 5% of the smallest body's extent. The mesher meshes
+  outside the fronts. Each front chain then gets a band block down to the
+  wall, whose corners are the nearest wall points. Only smooth bodies are
+  accepted: a body with a sharp corner is refused, because the offset
+  gives no mitre, fan or wake there.
+- **Self-test.** `selftest.py` checks the base complex on meshes of known
+  structure:
+  - a 4×3 grid is one block with counts 3, 3, 4, 4;
+  - an L-shaped grid is three blocks cut at its reflex corner;
+  - three subdivided quads round a valence-3 vertex are three blocks.
+
+  An end-to-end test runs quadqs on the step and skips when gmsh is absent.
+
+### The matrix
+
+Block counts are given at n = 20 / 40 / 80. Everything else is at n = 40.
+"Irregular" is the number of interior irregular vertices, then how many of
+them lie within a band height (5% of the smallest body) of a wall, then the
+number of irregular boundary vertices. "Thinnest" is the most slender
+block: the smaller sum of opposite side lengths over the larger one. The
+checkMesh column gives the cells, the maximum non-orthogonality, the faces
+above 70° and the worst size jump across block interfaces.
+
+| case | mesher | all quad | irregular | blocks 20/40/80 | thinnest | session | checkMesh after shape, size, polish |
+|---|---|---|---|---|---|---|---|
+| step | quadqs, curvature | yes | 4 / 0 / 0 | 9 / 24 / 47 | 0.025 | valid | **OK**: 36,331 cells, 25.5°, 0 faces, jump 1.4 |
+| step | quadqs, uniform | yes | 0 / 0 / 0 | 3 / 3 / 55 | 0.05 | valid | **OK**: 6 blocks after size, 50,640 cells, 0.0°, 0, 1.0 |
+| step | frontal | yes | 43 / 0 / 6 | 3 / 141 / 115 | 0.18 | valid | **OK**: 162 blocks, 89,314 cells, 55.7°, 0, 5.1 |
+| grooved cylinder | quadqs, curvature | crash at every size: `cannot project with surface projector` | | | | | |
+| grooved cylinder | quadqs, uniform | yes | 14 / 0 / 6 | 95 / 170 / 270 | 0.033 | valid | **OK**: 42,488 cells, 40.6°, 0, 3.0 |
+| grooved cylinder | frontal | yes | 461 / 44 / 19 | 1,718 / 3,462 / 10,220 | 0.21 | valid | size only, **OK**: 111,706 cells, 79.1°, **28**, 9.4 |
+| NACA 0012 | quadqs, curvature | crash at 20 and 40, timeout at 80 | | | | | |
+| NACA 0012 | quadqs, uniform | yes | 7 / 0 / 0 | 61 / 74 / 244 | 0.044 | valid | **OK**: 189,701 cells, 52.7°, 0, **15.0** |
+| NACA 0012 | frontal | yes | 264 / 25 / 7 | 659 / 1,975 / 5,205 | 0.17 | valid | size only, **OK**: 528,632 cells, 70.0°, 0, **275** |
+| three ellipses | quadqs, curvature | crash at every size | | | | | |
+| three ellipses | quadqs, uniform | yes | 6 / 0 / 0 | 77 / 81 / 342 | 0.043 | valid | **OK**: 5,056 cells, 24.4°, 0, 2.6 |
+| three ellipses | frontal | yes | 433 / 35 / 22 | 1,245 / 2,659 / 5,312 | 0.16 | valid | size only, **OK**: 4,193 cells, 56.9°, 0, 9.7 |
+| three ellipses | quadqs, uniform, band first | crash at 20 and 40; at 80: yes | 44 / – / 6 | – / – / 690 + 41 band | 0.031 | valid | size only (n = 80), **OK**: 5,452 cells, 51.7°, 0, 3.6 |
+| 30P30N | quadqs, curvature | crash at 20 and 40, timeout at 80 | | | | | |
+| 30P30N | quadqs, uniform | crash at every size | | | | | |
+| 30P30N | frontal | yes | 386 / 17 / 18 | 975 / 2,423 / 7,585 | 0.18 | valid | size only, **OK**: 131,069 cells, 76.1°, **5**, **30.4** |
+
+Every curved case with the OpenCASCADE kernel and quadqs gave a degenerate
+mesh:
+- NACA: 3,172 of 5,354 nodes coincide;
+- grooved cylinder: 4,286 of 6,708;
+- ellipses: 5,711 of 10,344;
+- 30P30N: 11,346 of 17,844.
+
+Merging the coincident nodes leaves collapsed quads and edges shared by up
+to 16 quads, so these are failures, not a writing artefact. On the step,
+OCC matches the built-in kernel.
+
+Band first was refused on NACA (one sharp corner), on the grooved cylinder
+(24 corners) and on 30P30N (sharp trailing edges). It does not apply to
+the step, whose walls are the domain's own boundary.
+
+References, built by hand, with the operators or by the engine:
+
+| case | blocks | max non-orthogonality | faces > 70° | worst jump |
+|---|---|---|---|---|
+| step | 27 by hand, 36 with the operators | 0° | 0 | 1.1 |
+| grooved tandem | 251 / 270 with the operators | 20.5° | 0 | 3.4 |
+| NACA 0012 | 190 with the operators, 185 by the engine | 48.6° and 44.1° | 0 | 4.4 (operators) |
+| three ellipses | 80 by the engine | 71° | 2–3 | – |
+| 30P30N | 203 by the engine | 68.8° | 0 | – |
+
+The ellipses' size arguments give a very coarse mesh (about 5,000 cells)
+whichever mesher made the layout, so that row compares layouts, not
+resolutions.
+
+Other gmsh settings tried, each on its own, outside the matrix:
+- Recombination without subdivision (`RecombinationAlgorithm 1`) left 2
+  triangles on NACA. 262 of its 2,052 interior vertices were irregular,
+  the same density as `frontal`.
+- Blossom full-quad (`RecombinationAlgorithm 3`) aborted with "1D mesh of
+  MEdge 6 cannot be divided by 2".
+- On 30P30N, none of these stopped quadqs from crashing in "optimize quad
+  mesh topology with cavity remeshing":
+  - `QuadqsSizemapMethod` 1 or 3;
+  - `QuadqsScalingOnTriangulation 0.5`;
+  - `QuadqsTopologyOptimizationMethods 0`.
+
+### What the matrix says
+
+![NACA 0012 trailing edge, frontal: a 3-5 pair every few cells, blocks of 2x2 cells](figures/quad_naca_te_frontal.png)
+
+- **An unstructured all-quad mesher is not a scaffold.**
+  - `frontal` meshed every case as all quads. Its irregular vertices
+    scale with the cell count: on NACA there are 264 at n = 40 and 503 at
+    n = 80, 25 of them within a band height of the wall.
+  - The base complex is therefore 1,000–10,000 blocks of about 2×2 cells
+    (figure above; [30P30N cove](figures/quad_30p30n_cove_frontal.png),
+    [slat and slot](figures/quad_30p30n_slat_frontal.png)).
+  - The pipeline still reaches Mesh OK on every case, but with 28 faces
+    above 70° on the grooved cylinder, 5 on 30P30N and size jumps of 9 to
+    275. Those are many tiny blocks sized independently.
+- **quadqs gives a coarse layout, but only with a uniform size, and not
+  on 30P30N.**
+  - With gmsh's own curvature sizing, quadqs crashed on every curved
+    body. With the OpenCASCADE kernel it wrote degenerate meshes.
+  - With one uniform size and the built-in kernel it meshed four of the
+    five cases. Each became a valid session and reached Mesh OK:
+    [NACA](figures/quad_naca_quadqs.png),
+    [grooves](figures/quad_grooves_quadqs.png),
+    [ellipse](figures/quad_ellipse_quadqs.png),
+    [step](figures/quad_step_quadqs.png).
+  - It crashed on 30P30N at all three sizes with both size settings and
+    with the four option changes above.
+  - Using the size field to rescue the curved cases is a per-mesher
+    setting, the same for all cases. It is reported here as a finding,
+    not tuned per case.
+- **What quadqs does well.**
+  - No interior irregular vertex lies within a band height of any wall.
+  - At the NACA trailing edge it puts four quads round the edge and a
+    straight wake line downstream
+    ([figure](figures/quad_naca_te_quadqs.png)). This is the structure
+    item 8b could not get from the cross field.
+  - On the step and on the ellipses its layouts are cleaner than the
+    references. The step has 3 blocks and 0°. The ellipses have 81 blocks
+    and 24°, against the engine's 71°, though at the coarse resolution
+    noted above.
+- **What it does badly.**
+  - **Its block layout is not stable under refinement.** NACA goes from
+    61 to 74 to 244 blocks, the grooved cylinder from 95 to 170 to 270,
+    the ellipses from 77 to 81 to 342, and the step from 3 to 3 to 55.
+    Each added 3–5 pair sends separatrices across the whole domain one or
+    two cells apart. They make the thin strip blocks (thinnest 0.016–0.07)
+    that run from the body to the box.
+  - **The layout round a body is an H-grid, not a band.**
+    - The body is a block-structured rectangle with corners at the
+      leading and trailing edges (the ellipse tips likewise).
+    - At the NACA leading edge, wall-normal lines fan from that corner
+      ([sized](figures/quad_naca_le_sized.png)), and strip separatrices
+      land on the wall.
+    - After sizing, NACA's worst size jump is **15**, against 4.4 with the
+      operators. The jump sits where a strip carrying the wall's first
+      cell meets a block that does not. These are the jumps the user asked
+      not to have.
+- **Band first did not help.**
+  - It is refused on any sharp corner, and three of the four bodies have
+    them.
+  - On the ellipses the mesher crashed outside the front at two of three
+    sizes. At the third the layout had 731 blocks for 5,452 cells.
+
+## Part 3 recommendation
+
+**No: gmsh as a black box is not a general scaffold.**
+- `frontal` is general but its base complex is the mesh itself.
+- `quadqs` is coarse but not general: it crashes on 30P30N and on every
+  curved body under its own curvature sizing. Its block count follows the
+  mesh size. Its H-type layout round bodies leaves size jumps the sizing
+  cannot remove.
+
+**At most a partial scaffold:** a quadqs layout with a uniform size, for a
+single smooth or mildly featured body in a box, or for a channel. That is
+the step, the grooved cylinder, NACA and the ellipses, all Mesh OK. Even
+there it is a first draft, because the block count depends on n. Those are
+already the cases the operators handle in 8 to 30 commands.
+
+**The practical answer for now is the agent workflow with the construction
+operators**, as the item 8b recommendation already says. The engine stays
+frozen.
+
+Evidence that would change this:
+- A quadqs (a newer gmsh, not built here) that meshes 30P30N at three sizes
+  without crashing, under its own curvature sizing.
+- After that, a base-complex simplification on our side that holds the
+  block count within about 20% from n = 20 to 80 on all five cases. It
+  would merge the parallel 3–5 strips, for example with `combine_blocks`
+  along whole strips.
+- A worst jump at or below the operators' (4.4 on NACA) after `size`.
+
+Only then would a round wiring quadqs into the engine as its scaffold pay
+for itself. The simplification is our own code, about a round, but it is
+not worth starting while the 30P30N crash stands.
+
 ## Recommendation
 
 **Keep the engine as it is, and rely on the construction operators for
-what it refuses.** Do not fund (b), (c) or (a) now.
+what it refuses.** Do not fund (b), (c) or (a) now. Part 3 adds that an
+off-the-shelf all-quad mesher (gmsh) is no general alternative either; see
+the Part 3 recommendation above.
 
 - **(b) and (c)** stand on the extraction, and G1 — the simplest body with
   a sharp edge — did not produce a valid session at either resolution. The
