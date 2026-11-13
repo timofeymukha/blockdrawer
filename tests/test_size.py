@@ -198,13 +198,14 @@ class ContinuityTests(unittest.TestCase):
         self.assertLess(result.jump_cost, 0.6 * result.field_jump_cost)
         self.assertLessEqual(result.total_cells, result.budget)
         self.assertEqual(result.budget, round(1.5 * result.field_cells))
-        self.assertTrue(any(move["kind"] == "raise" for move in result.moves))
+        self.assertTrue(result.moves)
         rich = fan()
-        size_model(rich, SizeOptions(**options, budget=4 * result.field_cells))
+        richer = size_model(rich, SizeOptions(**options, budget=4 * result.field_cells))
+        self.assertTrue(any(move["kind"] == "raise" for move in richer.moves))
         forced = 0.1 / rich.edge_cells[edge_key("b", "c")]
         at_b = rich.edge_width_at_vertex(edge_key("b", "e"), "b")
         self.assertLess(at_b, model.edge_width_at_vertex(edge_key("b", "e"), "b"))
-        self.assertLess(at_b, 5.0 * forced)
+        self.assertLess(at_b, 6.0 * forced)
 
     def test_more_budget_never_raises_the_jump_cost(self) -> None:
         # From the field's own state a smaller budget's moves are a prefix
@@ -236,9 +237,11 @@ class ContinuityTests(unittest.TestCase):
         calls = []
 
         def folding(model, *args, **kwargs):
-            # Every sampling reports one more fold than the one before, so
-            # every move looks like it folds a cell.
+            # Every guard sampling reports one more fold than the one
+            # before, so every move looks like it folds a cell.
             sample = real(model, *args, **kwargs)
+            if kwargs.get("blocks") is None or (args and args[0] is None):
+                return sample
             calls.append(1)
             summary = {**sample.summary(), "folded_cells": len(calls)}
             return mock.Mock(summary=lambda: summary)
@@ -250,6 +253,59 @@ class ContinuityTests(unittest.TestCase):
         self.assertIn("refused by the sampled check", refused.guard)
         self.assertEqual(refused.total_cells, refused.field_cells)
         self.assertEqual(refused.jump_cost, refused.field_jump_cost)
+
+    def test_the_verification_undoes_what_the_coarse_guard_passed(self) -> None:
+        # The guard samples 64 cells a side; the verification at 256 (and
+        # real counts where faces are steep) is what the result promises.
+        # Here every raised state is made to show one more face above 70
+        # degrees in b1 than the field's - as at 64 a side, where the guard
+        # was blind to blocks of hundreds of cells: the guard passes the
+        # raises, the verification puts them back, deterministically.
+        from unittest import mock
+
+        import blockdrawer.size as size
+
+        real = size._verify
+
+        def run():
+            seen = []
+
+            def steep(model, neighbours):
+                blocks, summary = real(model, neighbours)
+                cells = sum(c[0] * c[1] for c in (model.block_cell_counts(x) for x in model.blocks))
+                seen.append(cells)
+                if cells > seen[0]:
+                    blocks = {**blocks, "b1": {**blocks["b1"], "severe_faces": blocks["b1"]["severe_faces"] + 1}}
+                    summary = {**summary, "severe_faces": summary["severe_faces"] + 1}
+                return blocks, summary
+
+            model = fan()
+            with mock.patch.object(size, "_verify", steep):
+                result = size_model(model, SizeOptions(
+                    first_width=0.01, core_size=0.2, split=False, budget=32000))
+            return model, result, seen[0]
+
+        model, result, repaired = run()
+        self.assertGreater(result.verification["undone_moves"], 0)
+        self.assertIn("undone by the verification", result.guard)
+        self.assertEqual(result.total_cells, repaired)
+        self.assertFalse(any(move["kind"] == "raise" for move in result.moves))
+        again, second, _ = run()
+        self.assertEqual(to_data(model), to_data(again))
+        self.assertEqual(result.verification, second.verification)
+
+    def test_the_result_reports_its_verified_faces(self) -> None:
+        result = size_model(fan(), SizeOptions(first_width=0.01, core_size=0.2, split=False))
+        verification = result.to_data()["verification"]
+        self.assertEqual(verification["cells_per_side"], 256)
+        for state in ("field", "result"):
+            self.assertIn("severe_faces", verification[state])
+            self.assertIn("max_non_orthogonality", verification[state])
+        self.assertLessEqual(verification["result"]["severe_faces"], verification["field"]["severe_faces"])
+        self.assertLessEqual(
+            verification["result"]["max_non_orthogonality"],
+            verification["field"]["max_non_orthogonality"] + 0.5,
+        )
 
     def test_a_ring_terminates(self) -> None:
         # A closed chain of interfaces (the O-grid's four blocks round the

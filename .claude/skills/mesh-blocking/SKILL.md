@@ -509,11 +509,14 @@ The order is shape, sizing, polish, then hand corrections:
    Then `budget` total cells (default 1.5 times the field's own; below
    that the field is coarsened to budget/1.5) are spent on continuity:
    regrades and count raises taken greedily by the drop in interface jumps
-   per cell, each checked on the sampled grid (no fold, no new face above
-   70 degrees, skewness not past 4). Read its report: `field_cells`,
-   `budget`, `jump_cost` against `field_jump_cost`, interface jumps above
-   2.5/5/20 and the worst, splits, refusals, `guard`, links left out of
-   sync. A `size refused` error means the counts would take checkMesh's
+   per cell, each checked on the sampled grid at 256 a side, and the
+   result verified against the field's state (no fold, no new face above
+   70 degrees, worst face at most 0.5 degrees higher, skewness not past 4;
+   spending undone where it broke that). Read its report: `field_cells`,
+   `budget`, `jump_cost` against `field_jump_cost`, `verification` (faces
+   above 70 and the worst face for the field's state and the result -
+   the field's own are yours to fix), interface jumps above 2.5/5/20 and
+   the worst, splits, refusals, `guard`, links left out of sync. A `size refused` error means the counts would take checkMesh's
    skewness past 4 in a tapered block: split it or keep the counts.
 3. `smooth` - the real-count polish.
 4. Hand corrections where the report or `quality_report` point.
@@ -526,12 +529,15 @@ foils 18 -> 5, coarse 30P30N 105 -> 29, grooved tandem 46 -> 22 against
 the hand); twice the cells brought the grooved tandem's worst to 4.7 (hand
 7.6) and the coarse 30P30N's to 41. What spending cannot fix: a sliver
 whose count the field sets from a longer edge it shares a component with
-(30P30N b21/b31 at v12: 9 cells on 0.0019, 64.7 beside a 0.07 spoke; set
-that component's count down by hand - 2 cells gave 11), and a thin strip
-beside an edge that needs fine cells at both ends whose split would leave
-a sliver (e3 b67/b73, 25). At hundreds of cells a block side (fine
-30P30N) the guard, which samples 64 a side, misses faces above 70
-degrees: run `check` and treat `size`'s result as a start there. Fix the
+(30P30N b21/b31 at v12: 9 cells on 0.0019, 64.7 beside a 0.07 spoke;
+counts are never lowered, so set that component's count down by hand - 2
+cells gave 11 - and run `size keep_counts=true`), and a thin strip beside
+an edge that needs fine cells at both ends whose split would leave a
+sliver (e3 b67/b73, 25). Fine engine sessions (hundreds of cells a block
+side): the field state itself can hold faces above 70 degrees in tapered
+blocks (fine 30P30N: 31 in b21, b39, b53; 6 at 85.8 degrees after the
+polish where the previous fixed sizing had 0) - `verification.field`
+shows them; run `check` and correct those blocks. Fix the
 sliver or the strip, or accept the cells.
 
 The physical inputs, and what the hand corrections should respect:

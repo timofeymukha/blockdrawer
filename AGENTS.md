@@ -250,18 +250,32 @@ them in the canvas widgets.
   budget cannot pay, so a smaller budget's moves are a prefix of a larger
   one's and the cost is monotone in budget from 1.5 times the field's cells
   up. Every move is checked on the sampled grid of the touched blocks and
-  their neighbours (`sample_model(blocks=...)`, `GUARD_CELLS`): a fold,
-  more faces above 70 degrees or skewness crossing 4 undoes it and makes it
-  tabu. Before spending, `repair_shape` raises a component, flattens a
-  strip or gives a side its opposite side's grading in the block the field
-  leaves above skewness 4 when the input was below (folds refused, faces
-  above 70 allowed: checkMesh fails only the skewness), then in the block
-  with the worst face above 70 degrees while that count or the worst face
-  falls; `size_model` refuses a result still above skewness 4.
+  their neighbours (`sample_model(blocks=...)`, `GUARD_CELLS` = smooth's
+  `VERIFY_CELLS`, 256 a side - at 64 it was blind to blocks of hundreds of
+  cells and the fine 30P30N gained 7 and 53 faces above 70): a fold, more
+  faces above 70 degrees, a worst face above the field's plus
+  `VERIFY_TOLERANCE` or skewness crossing 4 undoes it and makes it tabu.
+  Before spending, `repair_shape`, judging at 256 a side, raises a
+  component, flattens a strip or gives a side its opposite side's grading
+  in the block the field leaves above skewness 4 when the input was below
+  (folds refused, faces above 70 allowed: checkMesh fails only the
+  skewness), then in the block with the worst face above 70 degrees while
+  that count or the worst face falls. The repaired field state is the
+  reference: `_verify` samples at 256 a side and at real counts every
+  block whose worst face there exceeds `HOT_ANGLE` (65; at 256 the fine
+  30P30N's b39 read 6 faces above 70 where checkMesh counts 7), and the
+  spent state must have no more faces above 70, no more folds, a worst face
+  at most `VERIFY_TOLERANCE` (0.5 degrees) higher and skewness not past 4;
+  otherwise the components and strips through each offending block (then
+  its neighbours, then all) go back to the reference values until it holds
+  (`undone_moves`, deterministic). The result's `verification` gives both
+  verdicts. `size_model` refuses a result above skewness 4 from an input
+  below.
   `_continuity_splits` then splits strips the spent state leaves coarse
   against finer neighbours at both ends (`_stranded`), solves and spends
-  again, and keeps the round only when the jump cost falls and the worst
-  jump does not rise (`CONTINUITY_SPLIT_ROUNDS`). Counts and total
+  again, and keeps the round only when the jump cost falls, the worst
+  jump does not rise and the verification still holds against the first
+  field state (`CONTINUITY_SPLIT_ROUNDS`). Counts and total
   ratios are written directly (links kept and reported); one validated edit.
   `quality` reports `interface_jumps` (above 2.5, 5, 20) in its summary.
 - `blockdrawer/render.py`: headless SVG/PNG rendering through one layout routine

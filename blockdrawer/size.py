@@ -45,11 +45,15 @@ the geometry's units and knows no construction roles.
    the budget cannot pay, so from the field's own state up the cost never
    rises with the budget. Every
    move is checked on the sampled grid of the blocks it touches; one that
-   folds a cell, adds a face above 70 degrees or takes the skewness above
-   4 is undone. Before spending, a block the field leaves above skewness 4
-   or with faces above 70 degrees is repaired by the same moves; strips the
-   spent state leaves coarse between finer neighbours at both ends are
-   split and the budget is spent again when that lowers the jumps.
+   folds a cell, adds a face above 70 degrees, raises the worst face past
+   the field's or takes the skewness above 4 is undone. Before spending, a
+   block the field leaves above skewness 4 or with faces above 70 degrees
+   is repaired by the same moves. The spent state is verified against the
+   repaired field state at 256 cells a side (real counts where faces are
+   steep) and spending is undone where it added faces; both verdicts are
+   reported. Strips the spent state leaves coarse between finer neighbours
+   at both ends are split and the budget is spent again when that lowers
+   the jumps.
 
 Counts and gradings are written directly: spacing links are kept and the
 ones left out of sync are reported. Everything is deterministic and applied
@@ -66,6 +70,7 @@ from typing import Any, Sequence
 from .domain import EdgeKey, TopologyError, edge_key
 from .model import MeshModel
 from .session import from_data, to_data
+from .smooth import VERIFY_CELLS  # the verification's resolution, smooth's
 
 
 # A strip is two-ended when the size it wants inside exceeds the size at
@@ -79,12 +84,24 @@ DEFAULT_BUDGET = 1.5
 RAISE_STEP = 0.1
 # Regrades try the strip's log ratio moved by these multiples of log(cap).
 REGRADE_STEPS = (-1.0, -0.5, 0.5, 1.0)
-# checkMesh fails a mesh above this face skewness; the sampled guard's resolution.
+# checkMesh fails a mesh above this face skewness.
 SKEWNESS_LIMIT = 4.0
-GUARD_CELLS = 64
+# The per-move guard's resolution: smooth's verification resolution. At 64
+# a side it was blind to blocks of hundreds of cells (the fine 30P30N gained
+# 7 and 53 faces above 70 degrees); at 256 the fine 30P30N sizes in 259 s
+# against 212 s.
+GUARD_CELLS = VERIFY_CELLS
 # No strip is graded beyond this log total ratio (a refit at hundreds of
 # cells asked for exp(800)).
 MAX_LOG_RATIO = 50.0
+# The returned state is verified at smooth's resolution against the
+# field's repaired state: no more faces above 70 degrees, the worst face
+# at most this many degrees higher.
+VERIFY_TOLERANCE = 0.5
+# Blocks whose worst face exceeds this at 256 a side are verified at their
+# real counts.
+HOT_ANGLE = 65.0
+VERIFY_ROUNDS = 40
 # Repairs of a block the field leaves above skewness 4 or 70 degrees.
 SHAPE_REPAIRS = 30
 # Rounds of splitting strips the spent budget leaves coarse at both ends.
@@ -149,6 +166,7 @@ class SizeResult:
     field_cells: int = 0
     field_jump_cost: float = 0.0
     jump_cost: float = 0.0
+    verification: dict = field(default_factory=dict)
     splits: list[dict] = field(default_factory=list)
     refused: list[str] = field(default_factory=list)
     jumps: dict[str, Any] = field(default_factory=dict)
@@ -170,6 +188,7 @@ class SizeResult:
             "field_cells": self.field_cells,
             "field_jump_cost": self.field_jump_cost,
             "jump_cost": self.jump_cost,
+            "verification": self.verification,
             "moves": len(self.moves),
             "shape_repairs": sum(1 for move in self.moves if move["kind"] == "shape"),
             "count_raises": sum(1 for move in self.moves if move["kind"] == "raise"),
@@ -537,6 +556,7 @@ def size_model(
     result.jump_cost = _jump_cost(state, options)
     result.moves = moves
     result.guard = guard
+    result.verification = state.get("verification", {})
     _replace(model, working)
     return result
 
@@ -1037,8 +1057,12 @@ def _continuity_splits(working, field_, state, moves, guard, options, budget, bl
             break
         trial = _solve(working, field_, options, blocks, bbox)
         trial, trial_moves, trial_guard = _spend(working, trial, options, budget, skew_floor)
+        promised = state["verification"]["field"]
+        verified = trial["verification"]["result"]
         if (_jump_cost(trial, options) >= _jump_cost(state, options)
-                or _max_jump(trial) > _max_jump(state) * (1.0 + 1.0e-9)):
+                or _max_jump(trial) > _max_jump(state) * (1.0 + 1.0e-9)
+                or verified["severe_faces"] > promised["severe_faces"]
+                or verified["max_non_orthogonality"] > promised["max_non_orthogonality"] + VERIFY_TOLERANCE):
             working.__dict__.update(saved.__dict__)
             for item in splits[made:]:
                 refused.append(
@@ -1047,14 +1071,60 @@ def _continuity_splits(working, field_, state, moves, guard, options, budget, bl
                 )
             del splits[made:]
             break
+        trial["verification"] = {**trial["verification"], "field": promised}
         state, moves, guard = trial, trial_moves, trial_guard
     return state, moves, guard
+
+
+def _verify(model: MeshModel, neighbours: dict[str, set[str]]) -> tuple[dict[str, dict], dict]:
+    """Per block and in total: faces above 70 degrees, folds, the worst face
+    and skewness, at ``VERIFY_CELLS`` a side - and, for every block whose
+    worst face there exceeds ``HOT_ANGLE``, at its real counts (sampled with
+    its neighbours, so all its faces are measured): at 256 a side the fine
+    30P30N's b39 read 6 faces above 70 where checkMesh counts 7. A face above
+    70 degrees makes its owner block hot, so the totals count every one."""
+    from .sampling import sample_model
+
+    coarse = sample_model(model, VERIFY_CELLS)
+    blocks = {
+        item.block_id: {
+            "severe_faces": item.severe_faces,
+            "folded_cells": item.folded_cells,
+            "max_non_orthogonality": item.max_non_orthogonality,
+            "max_skewness": item.max_skewness,
+        }
+        for item in coarse.blocks
+    }
+    hot = sorted(block for block, item in blocks.items()
+                 if item["max_non_orthogonality"] > HOT_ANGLE or item["folded_cells"])
+    coarsened = {item.block_id for item in coarse.blocks if item.coarsened}
+    hot = [block for block in hot if block in coarsened or any(
+        other in coarsened for other in neighbours.get(block, ()))]
+    if hot:
+        subset = sorted({other for block in hot for other in neighbours.get(block, {block})} | set(hot))
+        real = sample_model(model, None, blocks=subset)
+        for item in real.blocks:
+            if item.block_id in hot:
+                blocks[item.block_id] = {
+                    "severe_faces": item.severe_faces,
+                    "folded_cells": item.folded_cells,
+                    "max_non_orthogonality": item.max_non_orthogonality,
+                    "max_skewness": max(item.max_skewness, blocks[item.block_id]["max_skewness"]),
+                }
+    summary = {
+        "severe_faces": sum(item["severe_faces"] for item in blocks.values()),
+        "folded_cells": sum(item["folded_cells"] for item in blocks.values()),
+        "max_non_orthogonality": max((item["max_non_orthogonality"] for item in blocks.values()), default=0.0),
+        "max_skewness": max((item["max_skewness"] for item in blocks.values()), default=0.0),
+        "real_count_blocks": len(hot),
+    }
+    return blocks, summary
 
 
 def _max_skewness(model: MeshModel) -> float:
     from .sampling import sample_model
 
-    return sample_model(model, GUARD_CELLS).summary().get("max_skewness", 0.0)
+    return sample_model(model, VERIFY_CELLS).summary().get("max_skewness", 0.0)
 
 
 def _state_cells(model: MeshModel, state: dict) -> int:
@@ -1240,10 +1310,14 @@ def _spend(model: MeshModel, state: dict, options: SizeOptions, budget: int, ske
             else:
                 trial.edge_grading[member] = total
 
-    def verdict(blocks):
-        summary = sample_model(trial, GUARD_CELLS, blocks=blocks).summary()
+    def verdict(blocks, cells=GUARD_CELLS):
+        summary = sample_model(trial, cells, blocks=blocks).summary()
         return (summary.get("folded_cells", 0), summary.get("severe_faces", 0),
                 summary.get("max_skewness", 0.0), summary.get("max_non_orthogonality", 0.0))
+
+    # The worst face the result may have: the field's (as repaired) plus
+    # VERIFY_TOLERANCE, set once the repair is done.
+    guard_ceiling = [math.inf]
 
     def guarded(blocks, apply, undo) -> bool:
         local = sorted({other for block in blocks for other in neighbours.get(block, ())})
@@ -1251,6 +1325,7 @@ def _spend(model: MeshModel, state: dict, options: SizeOptions, budget: int, ske
         apply()
         after = verdict(local)
         if (after[0] <= before[0] and after[1] <= before[1]
+                and (after[3] <= before[3] or after[3] <= guard_ceiling[0])
                 and not (after[2] > SKEWNESS_LIMIT and before[2] <= SKEWNESS_LIMIT)):
             return True
         undo()
@@ -1279,7 +1354,7 @@ def _spend(model: MeshModel, state: dict, options: SizeOptions, budget: int, ske
         by_id = {block.id: block for block in model.blocks}
         skew_phase = skew_floor is not None and skew_floor <= SKEWNESS_LIMIT
         for _repair in range(SHAPE_REPAIRS):
-            summary = sample_model(trial, GUARD_CELLS).summary()
+            summary = sample_model(trial, VERIFY_CELLS).summary()
             if skew_phase and summary.get("max_skewness", 0.0) > SKEWNESS_LIMIT:
                 worst = by_id[summary["worst_skew_block"]]
                 skewed = True
@@ -1290,7 +1365,7 @@ def _spend(model: MeshModel, state: dict, options: SizeOptions, budget: int, ske
                 break
             keys = [edge_key(*worst.directed_edge(k)) for k in range(4)]
             local = sorted(neighbours.get(worst.id, {worst.id}))
-            base = verdict(local)
+            base = verdict(local, VERIFY_CELLS)
             trials = []
             for index in sorted({component_of[k] for k in keys[:2]}):
                 n = counts[components[index][0]]
@@ -1319,12 +1394,12 @@ def _spend(model: MeshModel, state: dict, options: SizeOptions, budget: int, ske
                 if kind == "raise":
                     old = counts[components[index][0]]
                     write_raise(index, value, {})
-                    result = verdict(local)
+                    result = verdict(local, VERIFY_CELLS)
                     write_raise(index, old, {})
                 else:
                     old = logs[index]
                     write_regrade(index, value)
-                    result = verdict(local)
+                    result = verdict(local, VERIFY_CELLS)
                     write_regrade(index, old)
                 if result[0] > base[0]:
                     continue
@@ -1355,6 +1430,13 @@ def _spend(model: MeshModel, state: dict, options: SizeOptions, budget: int, ske
                 logs[index] = value
 
     repair_shape()
+    # The field's state as repaired: what the returned state is verified
+    # against, at the resolution smooth verifies at.
+    reference_counts = dict(counts)
+    reference_logs = list(logs)
+    repaired = len(moves)
+    reference = _verify(trial, neighbours)
+    guard_ceiling[0] = reference[1]["max_non_orthogonality"] + VERIFY_TOLERANCE
     for _iteration in range(20000):
         best = None
         for index in scoped_strips:
@@ -1465,12 +1547,107 @@ def _spend(model: MeshModel, state: dict, options: SizeOptions, budget: int, ske
             for strip, log in logs_changed.items():
                 logs[strip] = log
             cells += added
+    # Verification: the guard samples 64 cells a side and is blind to faces
+    # of blocks with hundreds (the fine 30P30N kept 7 and 53 faces above 70
+    # degrees it had promised not to add). Every block whose verified faces
+    # break the promise has the components and strips through it put back
+    # to the field's values, until the whole mesh keeps it.
+    field_blocks, field_summary = reference
+    ceiling = field_summary.get("max_non_orthogonality", 0.0) + VERIFY_TOLERANCE
+    field_skew = field_summary.get("max_skewness", 0.0)
+    reverted_components: set[int] = set()
+    reverted_strips: set[int] = set()
+    by_block = {block.id: block for block in model.blocks}
+    for _round in range(VERIFY_ROUNDS + 1):
+        verified, summary = _verify(trial, neighbours)
+        if (summary.get("severe_faces", 0) <= field_summary.get("severe_faces", 0)
+                and summary.get("folded_cells", 0) <= field_summary.get("folded_cells", 0)
+                and summary.get("max_non_orthogonality", 0.0) <= ceiling
+                and not (summary.get("max_skewness", 0.0) > SKEWNESS_LIMIT >= field_skew)):
+            break
+        offenders = sorted(
+            block for block, item in verified.items()
+            if item["severe_faces"] > field_blocks[block]["severe_faces"]
+            or item["folded_cells"] > field_blocks[block]["folded_cells"]
+            or item["max_non_orthogonality"] > ceiling
+            or item["max_skewness"] > SKEWNESS_LIMIT >= field_skew
+        )
+        changed = False
+        for ring in range(3):
+            if ring == 1:
+                offenders = sorted({other for block in offenders for other in neighbours.get(block, ())})
+            if ring == 2 or _round == VERIFY_ROUNDS:
+                offenders = sorted(by_block)
+            these_components: set[int] = set()
+            these_strips: set[int] = set()
+            for block in offenders:
+                keys = [edge_key(*by_block[block].directed_edge(k)) for k in range(4)]
+                for key in keys:
+                    these_components.add(component_of[key])
+                    these_strips.add(strip_of[key])
+            for index in list(these_components):
+                these_strips.update(strips_of_component.get(index, ()))
+            these_components = {
+                index for index in these_components
+                if counts[components[index][0]] != reference_counts[components[index][0]]
+            }
+            these_strips = {index for index in these_strips if logs[index] != reference_logs[index]}
+            if these_components or these_strips:
+                for index in sorted(these_components):
+                    member = components[index][0]
+                    cells -= (counts[member] - reference_counts[member]) * sum(
+                        counts[components[other][0]] for other in across.get(index, ())
+                    ) * model.z_cells
+                    write_raise(index, reference_counts[member], {})
+                    for each in components[index]:
+                        counts[each] = reference_counts[each]
+                for index in sorted(these_strips):
+                    logs[index] = reference_logs[index]
+                for index in sorted(these_strips | {
+                    strip for component in these_components for strip in strips_of_component.get(component, ())
+                }):
+                    write_regrade(index, logs[index])
+                reverted_components |= these_components
+                reverted_strips |= these_strips
+                changed = True
+                break
+        if not changed:
+            break
+    kept = moves[:repaired] + [
+        move for move in moves[repaired:]
+        if move.get("component") not in reverted_components and move.get("strip") not in reverted_strips
+    ]
+    undone = len(moves) - len(kept)
+    final = _verify(trial, neighbours)[1]
+
+    def brief(summary):
+        return {
+            "severe_faces": summary.get("severe_faces", 0),
+            "max_non_orthogonality": summary.get("max_non_orthogonality", 0.0),
+            "max_skewness": summary.get("max_skewness", 0.0),
+            "folded_cells": summary.get("folded_cells", 0),
+        }
+
+    verification = {
+        "cells_per_side": VERIFY_CELLS,
+        "field": brief(field_summary),
+        "result": brief(final),
+        "undone_moves": undone,
+    }
     new_ratios = dict(ratios)
     for index, orientation in enumerate(strips):
         for member in orientation:
             new_ratios[member] = total_ratio(member)
-    guard = (
-        f"{refused} move(s) refused by the sampled check (a folded cell, a face above "
-        "70 degrees or skewness above 4)" if refused else ""
-    )
-    return {**state, "counts": counts, "ratios": new_ratios}, moves, guard
+    notes = []
+    if refused:
+        notes.append(f"{refused} move(s) refused by the sampled check (a folded cell, a face above "
+                     "70 degrees or skewness above 4)")
+    if undone:
+        notes.append(
+            f"{undone} move(s) undone by the verification at {VERIFY_CELLS} cells a side "
+            f"(more faces above 70 degrees, a worst face above the field's "
+            f"{field_summary.get('max_non_orthogonality', 0.0):.1f} + {VERIFY_TOLERANCE:g}, "
+            "or skewness past 4)"
+        )
+    state = {**state, "counts": counts, "ratios": new_ratios, "verification": verification}
+    return state, kept, "; ".join(notes)

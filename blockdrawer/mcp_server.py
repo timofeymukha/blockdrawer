@@ -96,7 +96,10 @@ JSON); ask for the part you need rather than the whole session.
    first_width=... core_size=... growth=..." (every count and grading from
    a directional wall-distance field, widths matched across interfaces,
    strips fine at both ends split, then cells spent on continuity up to
-   budget=N total cells, default 1.5 times the field's own), then "smooth" (the
+   budget=N total cells, default 1.5 times the field's own; its
+   "verification" gives faces above 70 degrees and the worst face for the
+   field's state and the result - spending never adds to them, the field's
+   own are what the polish and hand corrections must take), then "smooth" (the
    real-count polish, keeps wall bands, cell sizes and the worst face), then
    "repair_block" on the blocks that remain bad.
 3. quality_report: a verdict (valid, untangled, worst non-orthogonality and

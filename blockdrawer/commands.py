@@ -1188,10 +1188,17 @@ _register(CommandSpec(
         "cells are spent on continuity: count raises and regrades are taken "
         "greedily by the drop in interface jumps per cell until budget total "
         "cells (default 1.5 times the field's own count) are used or nothing "
-        "gains; a sampled check undoes moves that fold cells, add faces above "
-        "70 degrees or take skewness above 4, a block the field leaves above "
-        "skewness 4 is raised first, and a result above 4 from an input below "
-        "is refused. Strips the spent budget leaves coarse between finer "
+        "gains. Before spending, a block the field leaves above skewness 4 or "
+        "with faces above 70 degrees is repaired by the same moves. Each move "
+        "is checked on the sampled grid (256 cells a side) and refused if it "
+        "folds a cell, adds a face above 70 degrees, raises the worst face "
+        "past the field's or takes skewness past 4; the result is verified at "
+        "256 a side (real counts for blocks with faces above 65 degrees) "
+        "against the field's repaired state - no more faces above 70 degrees, "
+        "worst face at most 0.5 degrees higher - and spending is undone where "
+        "it breaks that; both verdicts are reported. The faces above 70 the "
+        "field state itself has are not removed. A result above skewness 4 "
+        "from an input below is refused. Strips the spent budget leaves coarse between finer "
         "neighbours at both ends are split and the budget spent again when "
         "that lowers the jumps. Counts and gradings are written directly: "
         "spacing links are kept and reported when out of sync."
@@ -1724,6 +1731,7 @@ def _note(result: CommandResult) -> dict[str, Any] | None:
             "budget": data.get("budget"),
             "field_cells": data.get("field_cells"),
             "jump_cost": [data.get("field_jump_cost"), data.get("jump_cost")],
+            "verification": data.get("verification"),
             "moves": data.get("moves"),
             "guard": data.get("guard") or None,
             "worst_interface_size_ratio": data.get("worst_interface_size_ratio"),

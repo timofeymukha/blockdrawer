@@ -640,11 +640,20 @@ then spent on continuity: free regrades of a strip and count raises are
 taken greedily by the drop in a jump cost (the square of how far each
 interface's log width ratio exceeds log `interface_growth`) per cell, until
 the first raise the budget cannot pay, so more budget never leaves a higher
-cost. Each move is checked on the sampled grid (64 cells a side) of the
-blocks it touches and undone if it folds a cell, adds a face above 70
-degrees or takes checkMesh's skewness past 4; a block the field itself
-leaves above skewness 4 or with faces above 70 degrees is repaired first,
-and a result above skewness 4 from an input below is refused. Strips the
+cost. A block the field itself leaves above skewness 4 or with faces above
+70 degrees is repaired first, judged at 256 cells a side. Each move is
+checked on the sampled grid (256 cells a side) of the blocks it touches and
+undone if it folds a cell, adds a face above 70 degrees, raises the worst
+face past the field's or takes checkMesh's skewness past 4. The result is
+then verified against the repaired field state at 256 a side, and at real
+counts for every block with a face above 65 degrees (at 256 the fine
+30P30N's b39 read 6 faces above 70 where checkMesh counts 7): no more faces
+above 70 degrees and a worst face at most 0.5 degrees higher, or the
+spending through the offending blocks is undone until that holds. The
+report's `verification` gives both verdicts, so an agent sees what the
+spending cost without `check`; the faces above 70 the field state itself
+has are left to the polish and to hand corrections. A result above
+skewness 4 from an input below is refused. Strips the
 spent state leaves coarse between finer neighbours at both ends are split
 and the budget spent again when that lowers the jumps. `keep_counts=true`
 recomputes the gradings only. The report gives the cells, the field's own
@@ -659,15 +668,20 @@ beside an edge that needs fine cells at both ends, whose split would leave
 a sliver); the grooved tandem 10.3 against the hand's 7.6 at the same
 62.5k cells with fewer jumps above 2.5 and 5, 4.7 at twice them; the
 coarse 30P30N 64.7 against 56.8 at 15.2k cells with every jump count
-lower, 41 at twice the cells; the fine 30P30N at 451k cells keeps 7 faces
-above 70 degrees, and 53 at the default 890k (the guard samples 64 cells a
-side and misses faces of blocks with hundreds), where the previous sizing
-had none: size fine sessions with a budget near the field's own cells and
-check. The 30P30N seam
-jump (b21/b31) comes from the sliver's count: the field gives its
-component 9 cells for the wall-side edge it shares, the previous sizing
-gave it 2 and read 11; spending only adds cells, so it cannot take that
-back.
+lower, 41 at twice the cells. **Fine engine sessions** (hundreds of cells
+a block side): on the fine 30P30N spending adds no face above 70 degrees,
+but the field state itself has 31 at 87.4 degrees (452,791-cell budget; 71
+at the default budget) in the tapered blocks b21, b39 and b53, which the
+repair's moves do not lower; after the polish checkMesh counts 6 at 85.8
+degrees (12 at the default budget), where the previous fixed sizing gave 0
+at 68.8. Check fine sessions and correct those blocks by hand.
+
+Known limit - counts are never lowered: spending only adds cells, so a
+count the field sets too high stays. On the coarse 30P30N the 0.0019-long
+sliver v12-v13 gets 9 cells from its component c25, whose wall-side edge
+v53-v55 asks for them, and the seam jump b21/b31 reads 64.7; the previous
+sizing gave that component 2 cells and read 11.4. Lower such a count by
+hand (`set_edge_cells v12-v13 2`) and run `size keep_counts=true`.
 The sequence for a finished topology is
 `smooth mode=shape allow_stale_fold=true`, `size ...`, `smooth`.
 A running server keeps the tool schemas it started with; restart it after
