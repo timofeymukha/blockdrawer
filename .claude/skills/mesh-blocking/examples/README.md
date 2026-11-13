@@ -18,9 +18,10 @@ blockdrawer-cli check /tmp/x/step.json
 | `grooved_tandem.txt` | polar patches with grooves left in the body, `add_band ... to_box` to a square, an H-grid conforming to both squares | 14 | 251 blocks; shape, size, polish: 47,616 cells, Mesh OK, max 20.5 deg (the hand-scripted mesh: 62,712 cells, 42.7) |
 | `naca0012.txt` | `add_ring` with a trailing-edge fan, two mitred bands, `to_box` to the far field, a placeholder first block removed | 12 | 190 blocks; shape, size, polish: 59,908 cells at a first width of 1e-4 chords, Mesh OK, max 48.6 deg |
 
-Measured in the operators review (sessions, renders and logs under
-`/tmp/timofey/data/blockdrawer/review_operators/`). Rebuilt independently
-with other sizes: grooved tandem `size 0.002 0.5 growth=1.15 wall_aspect=10`
+Measured when the operators were added (the commit that introduced them;
+the README's "Construction operators" paragraph carries the same numbers),
+with BlockDrawer's `check` on OpenFOAM v2606. Rebuilt independently with
+other sizes: grooved tandem `size 0.002 0.5 growth=1.15 wall_aspect=10`
 117,085 cells, Mesh OK, max 23.3; NACA `size 1e-4 1.0 growth=1.15
 wall_aspect=20` 129,984 cells, Mesh OK, max 48.5.
 

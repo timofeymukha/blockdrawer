@@ -1204,15 +1204,23 @@ class MeshModel(
             raise
 
     def move_vertices(
-        self, positions: dict[str, tuple[float, float]], *, carry_curves: bool = True
+        self,
+        positions: dict[str, tuple[float, float]],
+        *,
+        carry_curves: bool = True,
+        edge_geometry: dict[EdgeKey, EdgeGeometry | None] | None = None,
     ) -> None:
         """Move several vertices at once and validate the result once.
 
         With ``carry_curves`` every curved edge with a moved endpoint follows
         the similarity that maps its old chord onto its new one - for one
         moved endpoint exactly :meth:`move_vertex`'s carry, and for two the
-        unique similarity whatever order the moves are thought of in. A
-        failed validation restores every vertex and edge.
+        unique similarity whatever order the moves are thought of in.
+        ``edge_geometry`` then replaces the geometry of the edges it names
+        (``None``: a straight line) - a boundary vertex slid along its
+        boundary has its two boundary edges re-cut from the original path
+        (:mod:`blockdrawer.slide`). A failed validation restores every
+        vertex and edge.
         """
         for vertex_id, (x, y) in positions.items():
             if vertex_id not in self.vertices:
@@ -1248,6 +1256,17 @@ class MeshModel(
                     moved = first_new + factor * (complex(px, py) - first_old)
                     points.append((moved.real, moved.imag))
                 self.edge_geometry[current] = EdgeGeometry(geometry.kind, tuple(points))
+        for current, geometry in (edge_geometry or {}).items():
+            current = edge_key(*current)
+            if current not in self.edge_cells:
+                for vertex_id, (x, y) in previous.items():
+                    self.vertices[vertex_id].x, self.vertices[vertex_id].y = x, y
+                self.edge_geometry = previous_geometry
+                raise TopologyError(f"Unknown edge {current!r}")
+            if geometry is None:
+                self.edge_geometry.pop(current, None)
+            else:
+                self.edge_geometry[current] = geometry
         try:
             self.validate()
         except (TopologyError, ValueError):

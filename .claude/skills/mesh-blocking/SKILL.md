@@ -152,7 +152,7 @@ on continuity. Read:
 
 Go on when `verification.result` has no face above 70. **If
 `verification.field` has faces above 70**, size again from the same shaped
-session with `method=distance` (item 3's wall-distance sizing), polish both,
+session with `method=distance` (the wall-distance sizing), polish both,
 and keep the one `check` finds fewer such faces in, then the better jump
 histogram. This rests on one session (fine 30P30N: distance 0 faces at
 68.8 deg, directional 6 at 85.8; README, `size`). A `size refused` error
@@ -167,7 +167,12 @@ non-orthogonality checkMesh measures, never raising a block's worst face,
 wall-band spokes within 5 percent of their length, edges within 50 percent,
 no size jump past 2.5 created; applied only when the sampled check at 256
 cells a side is no worse. `hold=V1,V2` keeps vertices you placed on purpose;
-`blocks=`/`bbox=` limit it. Read `reason`.
+`blocks=`/`bbox=` limit it. Read `reason`. `slide=true` also slides
+boundary vertices along their smooth boundary (corners, patch junctions and
+cyclic patches stay; edges re-cut from the input boundary, the deviation
+reported); measured it changed little (README, `smooth slide=true`), so try
+it in the polish and keep it when `check` agrees - not in Step 4, where it
+made sized meshes worse.
 
 ## Step 7 - Judge
 

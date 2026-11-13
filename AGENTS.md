@@ -226,7 +226,31 @@ them in the canvas widgets.
   faces real, untangled at `fold_cells`; `sampling.sample_model(uniform=N)`)
   without the length and size limits, keeps the band rule, and reports the
   stale real-count verdict as `real_before`/`real_after`; a stale fold is
-  refused unless `allow_stale_fold`.
+  refused unless `allow_stale_fold`. `slide=True` adds the boundary
+  vertices `slide.slidable` accepts (in scope, not held) as 1D variables:
+  `_State.attach_slides` keeps a scratch model, `_move_slide` re-cuts the
+  two boundary edges from the chain (`Chain.recut`) and resamples them,
+  `slide` (beside `search`) tries +-h of arc length, carries each free band
+  spoke end by the wall's tangent rotation (anchors are evaluated where the
+  wall vertex is now, normals turned with it), checks `lengths_hold` on
+  every moved vertex (and, in shape mode, the two re-cut edges'
+  `length_tolerance`), and judges with `local_many`. The application passes
+  the re-cut edges to `move_vertices(edge_geometry=...)` and refuses a
+  result whose re-cut edges leave the input boundary by more than
+  `SLIDE_TOLERANCE` of the chain length; the result reports `sliders`,
+  `slid`, `max_slide`, `boundary_deviation(_relative)`. Off by default;
+  measured trade-offs in the README.
+- `blockdrawer/slide.py`: boundary vertices sliding along their boundary.
+  `slidable` (two exterior edges of one non-cyclic patch, boundary turning
+  at most `SLIDE_CORNER` = 30 degrees there), `chains` (maximal chains
+  between pinned vertices; a loop is pinned at its smallest vertex ID),
+  `Chain` (the input path by arc length, exact for lines, polyLines and
+  arcs, `DENSE` samples for splines; `recut` gives line/polyLine through
+  the original breakpoints, an arc of the same circle, else a spline
+  through the original curve sampled at a quarter of its point spacing and
+  closing in on old joints; `distance` to the input path), `recut_edges`,
+  `deviation`, and the `slide_vertex` registry command (fraction or
+  distance towards a neighbour; internal curved edges carried, spokes not).
 - `blockdrawer/size.py`: `size_model`, behind the `size` registry command.
   `SizeField.size(x, y, u)` is directional: for each wall segment (bucket
   grid; per-patch first widths) the across size `first + (growth-1) d`

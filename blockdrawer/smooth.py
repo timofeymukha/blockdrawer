@@ -48,6 +48,7 @@ from .domain import EdgeKey, TopologyError, edge_key
 from .model import MeshModel
 from .sampling import SEVERE_NON_ORTHOGONALITY, ModelSample, sample_model
 from .session import from_data, to_data
+from .slide import SLIDE_TOLERANCE
 
 
 INF = math.inf
@@ -99,6 +100,10 @@ class SmoothOptions:
     # A shape result whose stored counts and grading would fold a real cell
     # is refused unless this is set (because ``size`` will follow).
     allow_stale_fold: bool = False
+    # Boundary vertices on a smooth path of one patch slide along it
+    # (:mod:`blockdrawer.slide`): corners, patch junctions and held vertices
+    # stay; a wall vertex carries its band spoke's free end with it.
+    slide: bool = False
 
 
 @dataclass(frozen=True)
@@ -124,11 +129,27 @@ class SmoothResult:
     # In shape mode: the mesh the stored counts and grading define, before and after.
     real_before: dict[str, Any] | None = None
     real_after: dict[str, Any] | None = None
+    # Sliding boundary vertices: how many could, how many did, the largest
+    # slide (arc length) and the largest distance of a re-cut boundary edge
+    # from the input boundary, absolute and over its chain's length.
+    sliders: int = 0
+    slid: int = 0
+    max_slide: float = 0.0
+    boundary_deviation: float = 0.0
+    boundary_deviation_relative: float = 0.0
 
     def to_data(self) -> dict[str, Any]:
         extra: dict[str, Any] = {}
         if self.mode != "real":
             extra = {"real_before": self.real_before, "real_after": self.real_after}
+        if self.sliders:
+            extra.update({
+                "sliders": self.sliders,
+                "slid": self.slid,
+                "max_slide": self.max_slide,
+                "boundary_deviation": self.boundary_deviation,
+                "boundary_deviation_relative": self.boundary_deviation_relative,
+            })
         return {
             "mode": self.mode,
             **extra,
@@ -489,10 +510,151 @@ class _State:
         return saved
 
     def _restore(self, saved: list) -> None:
-        for vertex_id, old, edges in saved:
+        for item in reversed(saved):
+            if item[0] == "slide":
+                _tag, vertex_id, s_old, rotation_old, scratch_old = item
+                self.s[vertex_id] = s_old
+                self.rotation[vertex_id] = rotation_old
+                for current, (x, y, geometry) in scratch_old.items():
+                    if current in self.scratch.vertices:
+                        self.scratch.vertices[current].x, self.scratch.vertices[current].y = x, y
+                    elif geometry is None:
+                        self.scratch.edge_geometry.pop(current, None)
+                    else:
+                        self.scratch.edge_geometry[current] = geometry
+                continue
+            vertex_id, old, edges = item
             self.coords[vertex_id] = old
             for current, samples in edges:
                 self.edge_samples[current] = samples
+
+    # -- sliding boundary vertices ------------------------------------------
+
+    def attach_slides(self, model: MeshModel, chains: dict) -> None:
+        from .slide import neighbours
+
+        self.chains = chains
+        self.scratch = from_data(to_data(model)) if chains else None
+        self.s = {v: chain.stations[chain.index[v]] for v, chain in chains.items()}
+        self.s0 = dict(self.s)
+        self.rotation = {v: 1.0 + 0j for v in chains}
+        self.tangent0 = {v: chain.tangent(self.s[v]) for v, chain in chains.items()}
+        self.slide_edges = {}
+        for v, chain in chains.items():
+            before, after = neighbours(chain, v)
+            self.slide_edges[v] = (before, after, edge_key(before, v), edge_key(v, after))
+
+    def station(self, vertex_id: str, chain) -> float:
+        if vertex_id in self.s and self.chains.get(vertex_id) is chain:
+            return self.s[vertex_id]
+        return chain.stations[chain.index[vertex_id]]
+
+    def slide_bounds(self, vertex_id: str) -> tuple[float, float]:
+        chain = self.chains[vertex_id]
+        before, after, _e1, _e2 = self.slide_edges[vertex_id]
+        low = self.station(before, chain)
+        high = self.station(after, chain)
+        if chain.closed and chain.index[after] == 0:
+            high = chain.length
+        return low, high
+
+    def _move_slide(self, vertex_id: str, s_new: float) -> list:
+        """Slide a boundary vertex to arc length ``s_new`` of its chain: its two
+        boundary edges re-cut from the original path, its other edges carried."""
+        from .slide import oriented
+
+        chain = self.chains[vertex_id]
+        before, after, first_edge, second_edge = self.slide_edges[vertex_id]
+        low, high = self.slide_bounds(vertex_id)
+        old = self.coords[vertex_id]
+        target = chain.point(s_new)
+        scratch_old = {
+            vertex_id: (self.scratch.vertices[vertex_id].x, self.scratch.vertices[vertex_id].y, None),
+            first_edge: (0.0, 0.0, self.scratch.edge_geometry.get(first_edge)),
+            second_edge: (0.0, 0.0, self.scratch.edge_geometry.get(second_edge)),
+        }
+        saved: list = [("slide", vertex_id, self.s[vertex_id], self.rotation[vertex_id], scratch_old)]
+        moved_edges = []
+        for current in self.vertex_edges.get(vertex_id, ()):
+            if current in (first_edge, second_edge):
+                continue
+            other = self.coords[current[1] if current[0] == vertex_id else current[0]]
+            chord = old - other
+            if abs(chord) <= 0.0:
+                continue
+            factor = (target - other) / chord
+            samples = self.edge_samples[current]
+            moved_edges.append((current, samples))
+            self.edge_samples[current] = [
+                (fraction, other + factor * (point - other)) for fraction, point in samples
+            ]
+        self.scratch.vertices[vertex_id].x, self.scratch.vertices[vertex_id].y = target.real, target.imag
+        for current, a, b, s0, s1 in ((first_edge, before, vertex_id, low, s_new),
+                                      (second_edge, vertex_id, after, s_new, high)):
+            geometry = oriented(chain.recut(s0, s1), a, b)
+            if geometry is None:
+                self.scratch.edge_geometry.pop(current, None)
+            else:
+                self.scratch.edge_geometry[current] = geometry
+            samples = self.edge_samples[current]
+            moved_edges.append((current, samples))
+            fractions = [fraction for fraction, _point in samples]
+            points = self.scratch.edge_points(current, fractions)
+            self.edge_samples[current] = [
+                (fraction, complex(x, y)) for fraction, (x, y) in zip(fractions, points)
+            ]
+        saved.append((vertex_id, old, moved_edges))
+        self.coords[vertex_id] = target
+        self.s[vertex_id] = s_new
+        self.rotation[vertex_id] = chain.tangent(s_new) / self.tangent0[vertex_id]
+        return saved
+
+    def local_many(self, vertex_ids, limit: float = INF):
+        positions = sorted({p for v in vertex_ids for p in self.vertex_blocks.get(v, ())})
+        evals: dict[int, _BlockEval | None] = {}
+        cost = 0.0
+        worst = 0.0
+        for position in positions:
+            evaluation = self._evaluate(position)
+            evals[position] = evaluation
+            if evaluation is None:
+                return INF, INF, evals, {}
+            cost += evaluation.cost
+            worst = max(worst, evaluation.worst)
+            if cost >= limit:
+                return INF, INF, evals, {}
+        interfaces: dict[EdgeKey, tuple[float, float]] = {}
+        for position in positions:
+            for current in self.block_edges[position]:
+                if current in interfaces or len(self.edge_blocks[current]) != 2:
+                    continue
+                value = self._interface(current, evals)
+                interfaces[current] = value
+                if value[0] == INF:
+                    return INF, INF, evals, interfaces
+                cost += value[0]
+                worst = max(worst, value[1])
+        return cost, worst, evals, interfaces
+
+    def current_local_many(self, vertex_ids) -> tuple[float, float]:
+        positions = sorted({p for v in vertex_ids for p in self.vertex_blocks.get(v, ())})
+        cost = 0.0
+        worst = 0.0
+        seen: set[EdgeKey] = set()
+        for position in positions:
+            evaluation = self.evals[position]
+            if evaluation is None:
+                return INF, INF
+            cost += evaluation.cost
+            worst = max(worst, evaluation.worst)
+            for current in self.block_edges[position]:
+                if current in seen or len(self.edge_blocks[current]) != 2:
+                    continue
+                seen.add(current)
+                value = self.interfaces[current]
+                cost += value[0]
+                worst = max(worst, value[1])
+        return cost, worst
 
     def local(self, vertex_id: str, limit: float = INF) -> tuple[float, float, dict, dict]:
         """Cost and worst tan^2 over the vertex's blocks and their interfaces;
@@ -770,23 +932,39 @@ def _project(
 
 def _optimise(
     model: MeshModel, free: list[str], spokes: dict[str, list[Spoke]],
-    options: SmoothOptions,
-) -> tuple[dict[str, tuple[float, float]], int, int]:
+    options: SmoothOptions, chains: dict | None = None,
+) -> tuple[dict[str, tuple[float, float]], int, int, dict[str, float]]:
     state = _State(model, options)
+    chains = chains or {}
+    state.attach_slides(model, chains)
+    sliders = [vertex_id for vertex_id in chains]
     if any(evaluation is None for evaluation in state.evals):
         # A block already folds or carries a flat corner: the barrier cannot
         # be crossed from inside, so the optimiser does not start.
-        return {}, 0, 0
+        return {}, 0, 0, {}
     allowance = math.radians(options.wall_angle)
-    anchors = {
-        vertex_id: [
-            (state.coords[spoke.wall], replace(spoke, misalignment=max(spoke.misalignment, allowance)))
-            for spoke in items
-        ]
+    spokes_of = {
+        vertex_id: [replace(spoke, misalignment=max(spoke.misalignment, allowance)) for spoke in items]
         for vertex_id, items in spokes.items()
     }
+
+    def anchors(vertex_id: str) -> list[tuple[complex, Spoke]]:
+        # The wall end and its normal where they are now: a slid wall vertex
+        # turns its normal with the wall's tangent.
+        out = []
+        for spoke in spokes_of.get(vertex_id, ()):
+            rotation = state.rotation.get(spoke.wall, 1.0 + 0j) if chains else 1.0 + 0j
+            normal = None if spoke.normal is None else spoke.normal * rotation
+            out.append((state.coords[spoke.wall], replace(spoke, normal=normal)))
+        return out
+
+    fronts: dict[str, list[str]] = {}
+    for vertex_id, items in spokes.items():
+        for spoke in items:
+            fronts.setdefault(spoke.wall, []).append(vertex_id)
+    free_set_all = set(free)
     first_step: dict[str, float] = {}
-    for vertex_id in free:
+    for vertex_id in list(free) + sliders:
         here = state.coords[vertex_id]
         lengths = [
             abs(state.coords[current[0] if current[1] == vertex_id else current[1]] - here)
@@ -845,33 +1023,38 @@ def _optimise(
                     options.aspect_cap,
                 )
 
-    def keeps_lengths(vertex_id: str, target: complex) -> bool:
+    def lengths_hold(vertex_ids) -> bool:
+        """The length and size limits for the edges of the given vertices,
+        where they are now in the sampled state."""
         if options.mode == "shape":
             return True  # no cells yet: sizing follows the shape
-        incident = state.vertex_edges.get(vertex_id, ())
+        incident = {current for v in vertex_ids for current in state.vertex_edges.get(v, ())}
         if options.length_tolerance > 0.0:
             for current in incident:
-                other = state.coords[current[1] if current[0] == vertex_id else current[0]]
-                ratio = abs(target - other) / chords[current]
+                ratio = abs(state.coords[current[0]] - state.coords[current[1]]) / chords[current]
                 if ratio > stretch or ratio * stretch < 1.0:
                     return False
-        moved = set(incident)
+        for current in incident:
+            for at in current:
+                for first, second, limit in size_pairs.get(at, ()):
+                    if first not in incident and second not in incident:
+                        continue
+                    ratio = _width(state, width_per_chord, first, at) / _width(
+                        state, width_per_chord, second, at
+                    )
+                    if ratio > limit or ratio * limit < 1.0:
+                        return False
+        return True
+
+    def keeps_lengths(vertex_id: str, target: complex) -> bool:
+        if options.mode == "shape":
+            return True
         old = state.coords[vertex_id]
         state.coords[vertex_id] = target
         try:
-            for current in incident:
-                for at in current:
-                    for first, second, limit in size_pairs.get(at, ()):
-                        if first not in moved and second not in moved:
-                            continue
-                        ratio = _width(state, width_per_chord, first, at) / _width(
-                            state, width_per_chord, second, at
-                        )
-                        if ratio > limit or ratio * limit < 1.0:
-                            return False
+            return lengths_hold([vertex_id])
         finally:
             state.coords[vertex_id] = old
-        return True
 
     def search(vertex_id: str, minmax: bool) -> bool:
         h = step[vertex_id]
@@ -881,7 +1064,7 @@ def _optimise(
         base = state.coords[vertex_id]
         best = None
         for direction in _DIRECTIONS:
-            target = _project(base + h * direction, anchors.get(vertex_id, []), options.band_tolerance)
+            target = _project(base + h * direction, anchors(vertex_id), options.band_tolerance)
             if target is None or target == base or not keeps_lengths(vertex_id, target):
                 continue
             saved = state._move(vertex_id, target)
@@ -908,18 +1091,104 @@ def _optimise(
         state.commit(best[2], best[3])
         return True
 
+    def slide(vertex_id: str, minmax: bool) -> bool:
+        """Slide a boundary vertex along its chain, carrying the free end of
+        each band spoke on it (length and angle to the wall normal kept)."""
+        h = step[vertex_id]
+        if h <= options.min_step * first_step[vertex_id]:
+            return False
+        low, high = state.slide_bounds(vertex_id)
+        margin = 0.05 * (high - low)
+        here = state.s[vertex_id]
+        carried = [front for front in fronts.get(vertex_id, ()) if front in free_set_all]
+        pinned_fronts = [front for front in fronts.get(vertex_id, ()) if front not in free_set_all]
+        moving = [vertex_id] + carried
+        cost, worst = state.current_local_many(moving)
+        best = None
+        for sign in (-1.0, 1.0):
+            s_new = here + sign * h
+            if not (low + margin < s_new < high - margin):
+                continue
+            old = state.coords[vertex_id]
+            tangent_old = state.chains[vertex_id].tangent(here)
+            saved = state._move_slide(vertex_id, s_new)
+            turn = state.chains[vertex_id].tangent(s_new) / tangent_old
+            new = state.coords[vertex_id]
+            ok = True
+            for front in carried:
+                target = new + turn * (state.coords[front] - old)
+                target = _project(target, anchors(front), options.band_tolerance)
+                if target is None:
+                    ok = False
+                    break
+                saved += state._move(front, target)
+            if ok:
+                for front in pinned_fronts:
+                    here_front = state.coords[front]
+                    projected = _project(here_front, anchors(front), options.band_tolerance)
+                    if projected is None or abs(projected - here_front) > 1.0e-12 * (1.0 + abs(here_front)):
+                        ok = False
+                        break
+            if ok and not lengths_hold(moving):
+                ok = False
+            if ok and options.mode == "shape" and options.length_tolerance > 0.0:
+                # No cells to protect yet, but a boundary edge slid to a
+                # sliver hands sizing a forced-fine count: the two re-cut
+                # edges keep their length within length_tolerance.
+                for current in state.slide_edges[vertex_id][2:]:
+                    ratio = abs(state.coords[current[0]] - state.coords[current[1]]) / chords[current]
+                    if ratio > stretch or ratio * stretch < 1.0:
+                        ok = False
+            if ok:
+                new_cost, new_worst, evals, interfaces = state.local_many(moving, INF if minmax else cost)
+                if new_cost != INF:
+                    if minmax:
+                        better = new_worst < worst * (1.0 - 1.0e-9) or (
+                            new_worst <= worst and new_cost < cost * (1.0 - 1.0e-9)
+                        )
+                        key = (new_worst, new_cost)
+                    else:
+                        better = new_cost < cost * (1.0 - 1.0e-9) and new_worst <= worst * (1.0 + 1.0e-12)
+                        key = (new_cost, new_worst)
+                    if better and (best is None or key < best[0]):
+                        best = (key, s_new, evals, interfaces)
+            state._restore(saved)
+        if best is None:
+            step[vertex_id] = h * 0.5
+            return False
+        old = state.coords[vertex_id]
+        tangent_old = state.chains[vertex_id].tangent(here)
+        state._move_slide(vertex_id, best[1])
+        turn = state.chains[vertex_id].tangent(best[1]) / tangent_old
+        new = state.coords[vertex_id]
+        for front in carried:
+            target = _project(new + turn * (state.coords[front] - old), anchors(front), options.band_tolerance)
+            state._move(front, target)
+        state.commit(best[2], best[3])
+        return True
+
+    def sweep(minmax: bool, vertices) -> int:
+        count = 0
+        for vertex_id in vertices:
+            if vertex_id in chains:
+                count += slide(vertex_id, minmax)
+            else:
+                count += search(vertex_id, minmax)
+        return count
+
+    everyone = list(free) + sliders
     sweeps = 0
     for sweeps in range(1, options.sweeps + 1):
         before = state.total_cost()
-        moved = sum(1 for vertex_id in free if search(vertex_id, False))
+        moved = sweep(False, everyone)
         after = state.total_cost()
         if moved == 0 or before - after <= options.converged * before:
             break
 
     rounds = 0
-    if options.minmax_rounds > 0 and free:
-        free_set = set(free)
-        for vertex_id in free:
+    if options.minmax_rounds > 0 and everyone:
+        free_set = set(everyone)
+        for vertex_id in everyone:
             step[vertex_id] = max(step[vertex_id], 0.25 * first_step[vertex_id])
         for rounds in range(1, options.minmax_rounds + 1):
             worst_before = state.global_worst()
@@ -942,16 +1211,16 @@ def _optimise(
                         for vertex_id in state.blocks[other].vertices:
                             if vertex_id in free_set and vertex_id not in candidates:
                                 candidates.append(vertex_id)
-            moved = sum(1 for vertex_id in candidates if search(vertex_id, True))
+            moved = sweep(True, candidates)
             if moved == 0:
                 break
         # Phase 2 lowers maxima at some cost to the sum; a last phase-1 pass
         # recovers the sum without raising any block's worst face again.
-        for vertex_id in free:
+        for vertex_id in everyone:
             step[vertex_id] = max(step[vertex_id], 0.25 * first_step[vertex_id])
         for _polish in range(options.sweeps):
             before = state.total_cost()
-            moved = sum(1 for vertex_id in free if search(vertex_id, False))
+            moved = sweep(False, everyone)
             after = state.total_cost()
             if moved == 0 or before - after <= options.converged * before:
                 break
@@ -962,7 +1231,73 @@ def _optimise(
         original = model.vertices[vertex_id]
         if point != complex(original.x, original.y):
             positions[vertex_id] = (point.real, point.imag)
-    return positions, sweeps, rounds
+    slides = {
+        vertex_id: state.s[vertex_id] for vertex_id in sliders
+        if state.s[vertex_id] != state.s0[vertex_id]
+    }
+    return positions, sweeps, rounds, slides
+
+
+def _slide_chains(model, blocks, bbox, hold) -> dict:
+    """The chain of every boundary vertex that may slide, in scope and not held."""
+    from .slide import _exterior, chains, slidable
+
+    exterior = _exterior(model)
+    used = {vertex for block in model.blocks for vertex in block.vertices}
+    scope = set(used)
+    if blocks:
+        known = {block.id: block for block in model.blocks}
+        scope &= {v for identifier in blocks for v in known[identifier].vertices}
+    if bbox is not None:
+        xmin, ymin, xmax, ymax = (float(value) for value in bbox)
+        scope &= {v for v in used if xmin <= model.vertices[v].x <= xmax and ymin <= model.vertices[v].y <= ymax}
+    sliders = {
+        v for v in sorted(scope)
+        if v in exterior and v not in set(hold) and slidable(model, v, exterior) is None
+    }
+    return chains(model, sliders) if sliders else {}
+
+
+def _slid(chains: dict, slides: dict, scale: float):
+    """Positions and re-cut boundary edges for the slides scaled by ``scale``."""
+    from .slide import recut_edges
+
+    by_chain: dict[int, tuple] = {}
+    for vertex_id, s in slides.items():
+        chain = chains[vertex_id]
+        s0 = chain.stations[chain.index[vertex_id]]
+        by_chain.setdefault(id(chain), (chain, {}))[1][vertex_id] = s0 + scale * (s - s0)
+    recut = {}
+    points = {}
+    for chain, targets in by_chain.values():
+        edges = recut_edges(chain, targets)
+        for current, geometry in edges.items():
+            if current[0] in targets or current[1] in targets:
+                recut[current] = geometry
+        for vertex_id, s in targets.items():
+            point = chain.point(s)
+            points[vertex_id] = (point.real, point.imag)
+    return recut, points
+
+
+def _boundary_deviation(model: MeshModel, chains: dict, recut: dict) -> tuple[float, float]:
+    """The largest distance of a re-cut edge from the input boundary, and
+    the largest such distance over its chain's length."""
+    from .slide import deviation
+
+    absolute = relative = 0.0
+    seen: set[int] = set()
+    for chain in chains.values():
+        if id(chain) in seen:
+            continue
+        seen.add(id(chain))
+        edges = [current for current in recut if current[0] in chain.index and current[1] in chain.index]
+        if not edges:
+            continue
+        value = deviation(model, chain, edges)
+        absolute = max(absolute, value)
+        relative = max(relative, value / max(chain.length, 1.0e-300))
+    return absolute, relative
 
 
 def smooth_model(
@@ -983,6 +1318,7 @@ def smooth_model(
     free = select_free(model, blocks=blocks, bbox=bbox, hold=hold)
     spokes = band_spokes(model, free)
     shape = options.mode == "shape"
+    chains = _slide_chains(model, blocks, bbox, hold) if options.slide else {}
 
     def judge(candidate: MeshModel) -> dict[str, Any]:
         if not shape:
@@ -1024,13 +1360,18 @@ def smooth_model(
             displacement, sum(len(items) for items in spokes.values()), band,
             edges_change, scale, sweeps, rounds, tuple(hold), positions,
             options.mode, real_before, real_after if applied else real_before,
+            len(chains), slid_count if applied else 0, max_slide if applied else 0.0,
+            boundary[0] if applied else 0.0, boundary[1] if applied else 0.0,
         )
 
     real_after: dict[str, Any] | None = None
+    slid_count = 0
+    max_slide = 0.0
+    boundary = (0.0, 0.0)
 
     model_before = {vertex_id: (vertex.x, vertex.y) for vertex_id, vertex in model.vertices.items()}
     lengths_before = {current: model.edge_length(current) for current in model.edges()}
-    if not free:
+    if not free and not chains:
         return result(False, "nothing to gain: no free vertex (every vertex in scope is on a boundary or held)")
     if before["folded_cells"]:
         return result(
@@ -1038,8 +1379,8 @@ def smooth_model(
             f"not smoothed: {before['folded_cells']} sampled cell(s) already fold; untangle "
             "the topology first (repair_block, split_edge or new vertex positions)",
         )
-    positions, sweeps, rounds = _optimise(model, free, spokes, options)
-    if not positions:
+    positions, sweeps, rounds, slides = _optimise(model, free, spokes, options, chains)
+    if not positions and not slides:
         return result(
             False,
             f"nothing to gain: no move of the {len(free)} free vertex(es) lowers the sampled "
@@ -1047,6 +1388,7 @@ def smooth_model(
             sweeps=sweeps, rounds=rounds,
         )
     stale_refusals: list[float] = []
+    deviation_refusals: list[float] = []
     for scale in (1.0, *FALLBACK_SCALES):
         scaled = {
             vertex_id: (
@@ -1055,11 +1397,21 @@ def smooth_model(
             )
             for vertex_id, (x, y) in positions.items()
         }
+        recut, slid_at = _slid(chains, slides, scale)
+        for vertex_id, point in slid_at.items():
+            scaled[vertex_id] = point
         working = from_data(to_data(model))
         try:
-            working.move_vertices(scaled, carry_curves=True)
+            working.move_vertices(scaled, carry_curves=True, edge_geometry=recut)
         except (TopologyError, ValueError):
             continue
+        boundary = _boundary_deviation(working, chains, recut)
+        if boundary[1] > SLIDE_TOLERANCE:
+            deviation_refusals.append(scale)
+            continue
+        slid_count = len(slid_at)
+        max_slide = max((abs(slides[v] - chains[v].stations[chains[v].index[v]]) * scale for v in slid_at),
+                        default=0.0)
         after = judge(working)
         if not _no_worse(after, before):
             continue
@@ -1076,9 +1428,11 @@ def smooth_model(
         )
         if not gained:
             break
-        model.move_vertices(scaled, carry_curves=True)
+        model.move_vertices(scaled, carry_curves=True, edge_geometry=recut)
         reason = (
-            f"smoothed {len(scaled)} of {len(free)} free vertices"
+            f"smoothed {len(scaled) - len(slid_at)} of {len(free)} free vertices"
+            + (f", slid {len(slid_at)} of {len(chains)} boundary vertices along their boundary "
+               f"(re-cut edges within {boundary[0]:.3g} of the input boundary)" if chains else "")
             + (f" at {scale:g} of the optimised displacement" if scale < 1.0 else "")
             + f": max non-orthogonality {before['max_non_orthogonality']:.2f} -> "
             f"{after['max_non_orthogonality']:.2f} degrees, average "
@@ -1096,6 +1450,13 @@ def smooth_model(
                 "were chosen for the old shape - run size next"
             )
         return result(True, reason, after, scaled, scale, sweeps, rounds, working)
+    if deviation_refusals:
+        return result(
+            False,
+            f"not applied: a re-cut boundary edge would leave the input boundary by more than "
+            f"{SLIDE_TOLERANCE:g} of its chain's length",
+            sweeps=sweeps, rounds=rounds,
+        )
     if stale_refusals:
         return result(
             False,

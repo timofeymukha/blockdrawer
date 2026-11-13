@@ -677,6 +677,7 @@ def _run_smooth(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
         length_tolerance=args["length_tolerance"],
         mode=args["mode"],
         allow_stale_fold=args["allow_stale_fold"],
+        slide=args["slide"],
     )
     result = smooth_model(
         model,
@@ -1132,7 +1133,8 @@ _register(CommandSpec(
         "length_tolerance, and no interface size jump crosses size_cap. The "
         "result is applied only when the full sampled check stays untangled "
         "with no more severe faces and no higher maximum. mode=shape optimises "
-        "the count-free block shape instead, before size sets counts and grading."
+        "the count-free block shape instead, before size sets counts and grading. "
+        "slide=true also slides boundary vertices along their boundary."
     ),
     (
         Parameter(
@@ -1175,8 +1177,48 @@ _register(CommandSpec(
             "a real cell (size follows)",
             required=False, default=False,
         ),
+        Parameter(
+            "slide", "bool",
+            "boundary vertices on a smooth path of one patch slide along it (edges "
+            "re-cut from the input boundary; a wall vertex carries its band spoke); "
+            "corners, patch junctions and held vertices stay",
+            required=False, default=False,
+        ),
     ),
     _run_smooth,
+))
+
+
+def _run_slide_vertex(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
+    from .slide import slide_vertex
+
+    return slide_vertex(
+        model, args["vertex"], fraction=args["fraction"], distance=args["distance"],
+        towards=args["towards"],
+    )
+
+
+_register(CommandSpec(
+    "slide_vertex",
+    (
+        "Slide a boundary vertex along its boundary: its two exterior edges "
+        "(one patch, no corner at the vertex) are re-cut from their current "
+        "path - lines stay lines, arcs on one circle stay arcs, splines are cut "
+        "from the path. fraction places it on the path between its two "
+        "boundary neighbours (0 at the first, 1 at towards); distance moves it "
+        "that arc length towards towards (default: the neighbour with the "
+        "larger ID). Internal curved edges are carried; band spokes are not."
+    ),
+    (
+        Parameter("vertex", "vertex", "the boundary vertex"),
+        Parameter("fraction", "float", "position between the neighbours, 0..1",
+                  required=False, default=None),
+        Parameter("distance", "float", "arc length towards towards (signed)",
+                  required=False, default=None),
+        Parameter("towards", "optional_str", "the neighbour fraction 1 and positive distance point to",
+                  required=False, default=None),
+    ),
+    _run_slide_vertex,
 ))
 _register(CommandSpec(
     "size",
@@ -1870,8 +1912,17 @@ def _note(result: CommandResult) -> dict[str, Any] | None:
             **base,
             "applied": data.get("applied"),
             "moved": data.get("moved"),
+            "slid": data.get("slid"),
+            "boundary_deviation": data.get("boundary_deviation"),
             "max_band_change": data.get("max_band_change"),
             "reason": data.get("reason"),
+        }
+    if result.name == "slide_vertex":
+        return {
+            **base,
+            "vertex": data.get("vertex"),
+            "moved": data.get("moved"),
+            "deviation": data.get("deviation"),
         }
     if result.name == "size":
         return {

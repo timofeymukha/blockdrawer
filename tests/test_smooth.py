@@ -127,7 +127,7 @@ class SmoothTests(unittest.TestCase):
         # An optimiser that proposes a fold: the full check must refuse it at
         # every scale and leave the model as it was.
         with mock.patch.object(
-            smooth_module, "_optimise", return_value=({"v6": (0.99, 0.99)}, 1, 0)
+            smooth_module, "_optimise", return_value=({"v6": (0.99, 0.99)}, 1, 0, {})
         ):
             result = smooth_model(model)
         self.assertFalse(result.applied)

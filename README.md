@@ -642,6 +642,36 @@ was nothing to gain. On the engine's 30P30N it took checkMesh from 60 faces
 above 70 degrees (max 77.9) to none (max 68.7) in 10 s, and the 475k-cell
 version from 8725 to 4716 in 68 s.
 
+`smooth slide=true` also slides boundary vertices along their boundary - a
+gate in the wrong place along a wall is what a person moves first. A vertex
+slides when its two exterior edges are one patch (not `cyclic`), the
+boundary turns at most 30 degrees there and it is not held; corners, patch
+junctions and trailing edges never move. Each boundary chain is taken once
+from the input session and every edge is re-cut from that path at every
+trial: lines stay lines, arcs on one circle stay arcs, polyLines keep their
+breakpoints, splines are re-fitted through the original curve. The report
+gives the boundary vertices slid and the largest distance of a re-cut edge
+from the input boundary; a result past 1e-5 of the chain's length is
+refused. A wall vertex carries the free end of its band spoke (length and
+angle to the wall normal kept); the real-count limits apply to the wall
+edges too, and in `mode=shape` a slid boundary edge keeps its length within
+`length_tolerance` as well. `slide_vertex V fraction=F` (or `distance=D`,
+`towards=W`) is the same re-cut for one vertex by hand; it does not carry
+spokes. Measured with shape, size, polish and checkMesh (polish sliding
+only, against no sliding): the fine 30P30N (`method=distance`) 0 faces
+above 70 at 68.98 degrees (68.83), coarse 65.81 (65.79), grooved tandem
+20.53 with no interface jump above 2.5 (20.51 with four), three ellipses
+71.09 with two faces above 70 (72.21, three), three foils 52.72 (55.10),
+NACA example 48.59 (48.60); re-cut edges within 4e-7 of the input walls,
+every pinned vertex exactly where it was. On the engine corpus with
+`--smooth` it resolved no further case (five of seventeen either way): the
+cases left admissible are held by wall misalignment, which the smoother
+does not minimise, and sliding moved it both ways (periodic hill 22.3 ->
+14.3, narrow gap tip 5.3 -> 11.6). Sliding in `mode=shape` as well made
+several sessions worse once sized (three rotated ellipses 93 faces above 70,
+the fine 30P30N 69.8 degrees), so it is off by default and best kept to the
+polish.
+
 `smooth mode=shape` optimises the layout before its cells exist: every block
 is judged at eight even parameter fractions a side (untangled at 32),
 ignoring the stored counts and grading, with no length or size limits and
