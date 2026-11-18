@@ -55,6 +55,12 @@ the geometry's units and knows no construction roles.
    at both ends are split and the budget is spent again when that lowers
    the jumps.
 
+The two edges of a ``cyclic`` pair (:mod:`blockdrawer.cyclic`) are one
+count component and one strip here, oriented so the shared ratio runs the
+same physical way on both, so a sized pair meshes face by face. The model's
+own count components do not join a pair, so a strip that holds a cyclic
+edge is not split (its partner would not be).
+
 Counts and gradings are written directly: spacing links are kept and the
 ones left out of sync are reported. Everything is deterministic and applied
 as one validated edit; on any failure the model is unchanged.
@@ -67,6 +73,7 @@ import heapq
 import math
 from typing import Any, Sequence
 
+from .cyclic import CyclicMatch, cyclic_pairs
 from .domain import EdgeKey, TopologyError, edge_key
 from .model import MeshModel
 from .session import from_data, to_data
@@ -476,7 +483,21 @@ def _end_widths(length: float, cells: int, total: float) -> tuple[float, float]:
     return first, first * total
 
 
+def _cyclic_matches(model: MeshModel) -> list[CyclicMatch]:
+    """The partner edges of every cyclic pair that corresponds edge by edge
+    (one that does not is left alone: export refuses it with the reason)."""
+    if not any(boundary.kind == "cyclic" for boundary in model.boundaries.values()):
+        return []
+    try:
+        pairs = cyclic_pairs(model, check_nodes=False)
+    except TopologyError:
+        return []
+    return [match for pair in pairs for match in pair.matches]
+
+
 def _components(model: MeshModel) -> list[list[EdgeKey]]:
+    """The opposite-edge count components, those holding the two edges of
+    a cyclic pair joined: a pair must keep one count."""
     seen: set[EdgeKey] = set()
     found = []
     for current in sorted(model.edge_cells):
@@ -485,7 +506,26 @@ def _components(model: MeshModel) -> list[list[EdgeKey]]:
         members = sorted(model.edge_constraint_component(current))
         seen.update(members)
         found.append(members)
-    return found
+    matches = _cyclic_matches(model)
+    if not matches:
+        return found
+    parent = list(range(len(found)))
+    index_of = {member: index for index, members in enumerate(found) for member in members}
+
+    def root(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    for match in matches:
+        a, b = root(index_of[match.first]), root(index_of[match.second])
+        if a != b:
+            parent[max(a, b)] = min(a, b)
+    joined: dict[int, list[EdgeKey]] = {}
+    for index, members in enumerate(found):
+        joined.setdefault(root(index), []).extend(members)
+    return [sorted(members) for _root, members in sorted(joined.items())]
 
 
 # ---------------------------------------------------------------------------
@@ -777,6 +817,14 @@ def _strips(model, edges) -> list[dict[EdgeKey, str]]:
                                 (corners[(k + 1) % 4], corners[(k + 2) % 4])):
                 pairs.setdefault((first, here), []).append((second, there))
                 pairs.setdefault((second, there), []).append((first, here))
+    # A cyclic pair grades the same physical way: each end of an edge faces
+    # the partner's end it maps onto.
+    for match in _cyclic_matches(model):
+        a, b = match.first, match.second
+        ends = ((a[0], b[0]), (a[1], b[1])) if match.aligned else ((a[0], b[1]), (a[1], b[0]))
+        for here, there in ends:
+            pairs.setdefault((a, here), []).append((b, there))
+            pairs.setdefault((b, there), []).append((a, here))
     strips = []
     seen: set[EdgeKey] = set()
     for seed in sorted(edges):
@@ -970,6 +1018,7 @@ def _split_strips(model, field_, state, options, splits, refused) -> bool:
     """Split the two-ended strips found, the most two-ended first, at most
     one per count component; ``True`` when one was split."""
     candidates = sorted(state["two_ended"].items(), key=lambda item: (-item[1][1], item[0]))
+    cyclic = {edge for match in _cyclic_matches(model) for edge in (match.first, match.second)}
     done: set[EdgeKey] = set()
     split_any = False
     made = 0
@@ -980,6 +1029,16 @@ def _split_strips(model, field_, state, options, splits, refused) -> bool:
         if done & component:
             continue
         done.update(component)
+        coupled = sorted(component & cyclic)
+        if coupled:
+            text = (
+                f"two-ended strip of {'-'.join(current)} (peak {ratio:.3g} times its ends) not "
+                f"split: it holds the cyclic edge {'-'.join(coupled[0])}, whose partner a split "
+                "would not cut"
+            )
+            if text not in refused:
+                refused.append(text)
+            continue
         saved = from_data(to_data(model))
         try:
             for member in component:

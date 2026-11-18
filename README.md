@@ -756,10 +756,14 @@ across a block interface, growing at most `growth - 1` per unit length along
 an edge. Opposite sides of a block share one geometric series through every
 strip of similar blocks (chosen to need the fewest cells), so no rectangle
 is sheared; counts per component are the demand of the size profile and
-what that shared series needs to stay within its bounds. A strip that wants
-fine cells at both ends is cut with `split_edge` where the wanted size peaks
-(multi-section grading is out of scope), unless a piece would be shorter
-than one cell of the size wanted along it. That is the field's own state.
+what that shared series needs to stay within its bounds. The two edges of a
+`cyclic` pair are one component and one strip, graded the same physical way,
+so a sized periodic pair exports face by face (the benchmark cascade had 7 of
+its 9 pairs differ before; matching them took the agent a hand batch). A
+strip that wants fine cells at both ends is cut with `split_edge` where the
+wanted size peaks (multi-section grading is out of scope), unless a piece
+would be shorter than one cell of the size wanted along it or the strip holds
+a cyclic edge (its partner would not be cut). That is the field's own state.
 A strip a long count component makes fine (a thin wake strip, a seam
 sliver) is invisible to it, so `budget` total cells (default 1.5 times the
 field's own; a smaller budget first coarsens the field to budget/1.5) are

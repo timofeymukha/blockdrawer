@@ -285,7 +285,13 @@ them in the canvas widgets.
   quality screen's interface pairs (`_links`, factor `interface_growth`) and
   along-edge gradation (`+ (growth-1) L`), both non-decreasing, so each end
   settles once. `_strips` groups opposite sides within
-  `OPPOSITE_LENGTH_RATIO` through the blocks with their orientation;
+  `OPPOSITE_LENGTH_RATIO` through the blocks with their orientation, and
+  the two edges of every cyclic pair (`cyclic.match_cyclic_pair`, end to
+  the end it maps onto) so a pair shares one physical grading;
+  `_components` joins the count components holding a pair's two edges (the
+  model's own components do not: `set_edge_cells` does not propagate across
+  a pair), and `_split_strips` refuses a component holding a cyclic edge,
+  whose partner the split would not cut;
   `_ratios` gives each strip the one total ratio needing the fewest cells to
   keep every member within its end bounds (`_fit_count`); a mean ratio left
   the step's inlet column needing 313 cells. Counts per component: max of

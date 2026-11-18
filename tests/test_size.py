@@ -435,5 +435,60 @@ class SkewnessTests(unittest.TestCase):
         self.assertTrue(_no_worse(worse, {**before, "max_skewness": 4.5}))
 
 
+
+def periodic_ring() -> MeshModel:
+    """The 3x3 ring round a hole, periodic between y = 0 and y = 3, the hole
+    lowered to y 0.6 .. 1.5 with a wall only on its bottom: the lower and
+    upper periodic edges of the middle column lie in different count
+    components and the field asks different things of them."""
+    from tests.helpers import build_ring_model, vertex_at
+
+    model = build_ring_model()
+    for x in (1.0, 2.0):
+        model.move_vertex(vertex_at(model, (x, 2.0)), x, 1.5)
+        model.move_vertex(vertex_at(model, (x, 1.0)), x, 0.6)
+    for name, kind in (("body", "wall"), ("lower", "patch"), ("upper", "patch"), ("sides", "patch")):
+        model.add_boundary(name)
+        model.set_boundary_type(name, kind)
+    model.set_boundary_type("lower", "cyclic", neighbour_patch="upper")
+    for current in model.edges():
+        if not model.is_boundary_edge(current):
+            continue
+        ys = {model.vertices[v].y for v in current}
+        xs = {model.vertices[v].x for v in current}
+        if ys == {0.0}:
+            model.set_edge_boundary(current, "lower")
+        elif ys == {3.0}:
+            model.set_edge_boundary(current, "upper")
+        elif ys == {0.6}:
+            model.set_edge_boundary(current, "body")
+        else:
+            model.set_edge_boundary(current, "sides")
+    return model
+
+
+class CyclicPairTests(unittest.TestCase):
+    def test_partner_edges_get_one_count_and_one_physical_grading(self) -> None:
+        from blockdrawer.cyclic import cyclic_pairs
+        from blockdrawer.foam import block_mesh_dict
+
+        model = periodic_ring()
+        result = size_model(model, SizeOptions(0.005, 0.2, growth=1.2, wall_aspect=10))
+        (pair,) = cyclic_pairs(model, check_nodes=False)
+        self.assertEqual(len(pair.matches), 3)
+        for match in pair.matches:
+            first = model.edge_total_expansion(match.first)
+            second = model.edge_total_expansion(match.second)
+            if not match.aligned:
+                second = 1.0 / second
+            self.assertEqual(model.edge_cells[match.first], model.edge_cells[match.second], match)
+            self.assertAlmostEqual(first, second, places=12, msg=str(match))
+        # Before pairs were joined the middle column's strips were split
+        # separately and came out with 26 and 16 cells; now a strip holding
+        # a cyclic edge is not split, and export accepts the pair node by node.
+        self.assertTrue(any("cyclic edge" in text for text in result.refused), result.refused)
+        block_mesh_dict(model)
+
+
 if __name__ == "__main__":
     unittest.main()
