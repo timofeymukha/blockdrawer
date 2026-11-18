@@ -224,9 +224,23 @@ them in the canvas widgets.
   `mode="shape"` (`smooth mode=shape`) runs the same optimiser on the
   count-free block map (`shape_cells` even parameter fractions a side, all
   faces real, untangled at `fold_cells`; `sampling.sample_model(uniform=N)`)
-  without the length and size limits, keeps the band rule, and reports the
-  stale real-count verdict as `real_before`/`real_after`; a stale fold is
-  refused unless `allow_stale_fold`. `slide=True` adds the boundary
+  without the size limits and with one length limit - every edge keeps
+  `shape_length_ratio` (`SHAPE_LENGTH_RATIO` = 0.1) of its input length,
+  in the search and at every fallback scale, since the count-free optimum
+  collapsed a ring edge to 0.0024 of its length (a size jump of 269 after
+  `size`) while the square cylinder's gain needs 0.089 - keeps the band
+  rule, and reports the stale real-count verdict as
+  `real_before`/`real_after`; a stale fold is refused unless
+  `allow_stale_fold`. Both modes report `min_edge_ratio`/`min_edge` and
+  `max_edge_ratio`/`max_edge` (edge length over input length, edges with a
+  moved end) in the result, the reason text and the digest note.
+  `keep_lines=True` (off by default in both modes: measured in the README)
+  finds each free vertex's straight block lines (`straight_lines`: two
+  internal `line` edges at it sharing no block, collinear within
+  `LINE_ANGLE` = 1 degree); on one line `search` tries only the two
+  directions along it (a band spoke's projection may slide it along the
+  line, nothing else) and `slide` does not carry it as a front; on two it
+  is dropped from the free set (`line_vertices`, `line_fixed`). `slide=True` adds the boundary
   vertices `slide.slidable` accepts (in scope, not held) as 1D variables:
   `_State.attach_slides` keeps a scratch model, `_move_slide` re-cuts the
   two boundary edges from the chain (`Chain.recut`) and resamples them,

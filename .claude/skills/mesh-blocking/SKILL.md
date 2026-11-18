@@ -130,11 +130,23 @@ instead of the whole description.
 
 `smooth mode=shape allow_stale_fold=true` moves the free interior vertices
 on the count-free block map (all faces real) before any count exists;
-wall-band spokes keep their length and do not turn from the wall normal.
-Read `reason`: the count-free maximum non-orthogonality before and after.
-It is applied only when that verdict is no worse; "nothing to gain" is
-normal on an H-grid of rectangles. (Engine square cylinder: checkMesh 87.7
--> 54.6 deg, 1344 -> 0 faces above 70; README, `smooth`.)
+wall-band spokes keep their length and do not turn from the wall normal,
+and no edge ends shorter than a tenth of its input length
+(`shape_length_ratio`; unlimited, a ring edge collapsed to 0.002 of its
+length and `size` then left a jump of 269). Read `reason`: the count-free
+maximum non-orthogonality before and after, and "edge lengths A (EDGE) to
+B (EDGE) of their input" - an A at the floor is an edge the optimum wanted
+shorter still: render it before sizing. It is applied only when that
+verdict is no worse; "nothing to gain" is normal on an H-grid of
+rectangles. `hold=V1,V2` keeps vertices you placed on purpose (a wake
+line, a fan's middle spoke). `keep_lines=true` moves an interior vertex on
+a straight block line (two opposite straight edges, collinear) only along
+it, and one on two lines not at all. It is off by default: it also holds
+every straight spoke of a ring or band, and once sized it cost 4-16 deg
+on three of ten sessions (README, `smooth`). Turn it on where straight
+lines are the design and few spokes are straight, else hold the line's
+vertices. (Engine square cylinder: real counts 87.7 -> 56.9 deg, 1344 -> 0
+faces above 70; sized and polished, checkMesh 52.2.)
 
 ## Step 5 - Size
 

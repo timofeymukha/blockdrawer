@@ -225,3 +225,95 @@ class ShapeModeTests(unittest.TestCase):
         result = apply_commands(two_by_two(), ["smooth mode=shape"]).results[0].result
         self.assertEqual(result["mode"], "shape")
         self.assertTrue(result["applied"])
+
+
+def vertex_at(model: MeshModel, x: float, y: float) -> str:
+    (found,) = [
+        vertex.id for vertex in model.vertices.values()
+        if abs(vertex.x - x) < 1e-9 and abs(vertex.y - y) < 1e-9
+    ]
+    return found
+
+
+class ShapeLengthFloorTests(unittest.TestCase):
+    def test_no_edge_ends_shorter_than_the_floor(self) -> None:
+        base = two_by_two((0.7, 0.65))
+        lengths = {current: base.edge_length(current) for current in base.edges()}
+        # Unbounded, the count-free optimum shortens an edge past 0.9 of its length.
+        free = two_by_two((0.7, 0.65))
+        unbounded = smooth_model(free, options=SmoothOptions(mode="shape", shape_length_ratio=0.0))
+        self.assertTrue(unbounded.applied, unbounded.reason)
+        self.assertLess(unbounded.min_edge_ratio, 0.9)
+        shortest = min(free.edge_length(current) / length for current, length in lengths.items())
+        self.assertAlmostEqual(unbounded.min_edge_ratio, shortest)
+        # With the floor at 0.9 every edge keeps 0.9 of its length, and the
+        # result and its reason say how close it came.
+        limited = two_by_two((0.7, 0.65))
+        result = smooth_model(limited, options=SmoothOptions(mode="shape", shape_length_ratio=0.9))
+        self.assertTrue(result.applied, result.reason)
+        for current, length in lengths.items():
+            self.assertGreaterEqual(limited.edge_length(current) / length, 0.9 - 1e-9)
+        self.assertGreaterEqual(result.min_edge_ratio, 0.9 - 1e-9)
+        self.assertGreater(result.max_edge_ratio, 1.0)
+        data = result.to_data()
+        self.assertEqual(data["min_edge_ratio"], result.min_edge_ratio)
+        self.assertIn(data["min_edge"], {f"{a}-{b}" for a, b in lengths})
+        self.assertIn(f"edge lengths {result.min_edge_ratio:.3g} ({result.min_edge})", result.reason)
+        self.assertIn("(floor 0.9)", result.reason)
+
+    def test_the_command_applies_the_default_floor_and_the_digest_shows_it(self) -> None:
+        model = two_by_two((0.7, 0.65))
+        batch = apply_commands(model, ["smooth mode=shape"])
+        result = batch.results[0].result
+        self.assertTrue(result["applied"])
+        self.assertGreaterEqual(result["min_edge_ratio"], smooth_module.SHAPE_LENGTH_RATIO - 1e-9)
+        (note,) = batch_digest(model, batch)["notes"]
+        self.assertEqual(note["min_edge_ratio"], result["min_edge_ratio"])
+        self.assertIn("edge lengths", note["reason"])
+        with self.assertRaises(Exception):
+            apply_commands(two_by_two(), ["smooth mode=shape shape_length_ratio=1.5"])
+
+
+def kinked_cross() -> MeshModel:
+    """Four blocks whose centre lies on a straight horizontal block line
+    (left side - centre - right side) while the vertical one is kinked by
+    the top side's vertex moved to the right."""
+    model = two_by_two((0.5, 0.5))
+    model.move_vertex(vertex_at(model, 0.5, 1.0), 0.85, 1.0)
+    return model
+
+
+class StraightLineTests(unittest.TestCase):
+    def test_lines_are_found_through_opposite_straight_edges(self) -> None:
+        model = kinked_cross()
+        centre = vertex_at(model, 0.5, 0.5)
+        lines = smooth_module.straight_lines(model, [centre])
+        self.assertAlmostEqual(abs(lines[centre].imag), 0.0)
+        # On two lines a vertex is fixed; a curved edge is no line.
+        self.assertIsNone(smooth_module.straight_lines(two_by_two((0.5, 0.5)), [centre])[centre])
+        curved = kinked_cross()
+        curved.set_edge_type(edge_key(centre, vertex_at(curved, 1.0, 0.5)), "arc")
+        self.assertNotIn(centre, smooth_module.straight_lines(curved, [centre]))
+
+    def test_a_vertex_on_a_straight_line_moves_only_along_it(self) -> None:
+        centre = vertex_at(kinked_cross(), 0.5, 0.5)
+        for mode in ("shape", "real"):
+            with self.subTest(mode=mode):
+                free = kinked_cross()
+                smooth_model(free, options=SmoothOptions(mode=mode))
+                # Free, the optimum leaves the line.
+                self.assertGreater(abs(free.vertices[centre].y - 0.5), 1e-3)
+                kept = kinked_cross()
+                result = smooth_model(kept, options=SmoothOptions(mode=mode, keep_lines=True))
+                self.assertTrue(result.applied, result.reason)
+                self.assertEqual((result.line_vertices, result.line_fixed), (1, 0))
+                self.assertAlmostEqual(kept.vertices[centre].y, 0.5, places=12)
+                self.assertGreater(abs(kept.vertices[centre].x - 0.5), 1e-3)
+                self.assertIn("1 vertices on a straight block line", result.reason)
+
+    def test_a_vertex_on_two_lines_stays(self) -> None:
+        model = two_by_two((0.5, 0.5))
+        result = apply_commands(model, ["smooth mode=shape keep_lines=true"]).results[0].result
+        self.assertFalse(result["applied"])
+        self.assertEqual(result["line_fixed"], 1)
+        self.assertIn("on two straight block lines", result["reason"])

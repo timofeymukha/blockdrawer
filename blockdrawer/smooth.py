@@ -31,6 +31,13 @@ about the wall vertex - the spoke may swing towards the wall normal but not
 shorten. Grading is stored as a ratio, so a spoke's first cell keeps its
 width with its length.
 
+With ``keep_lines`` an interior vertex on a straight block line (two
+opposite ``line`` edges, collinear) is searched along that line only, and
+one on two such lines does not move, so prescribed wake lines and grid rows
+stay straight. In shape mode every edge keeps ``shape_length_ratio`` of its
+input length. The result reports the shortest and longest edge over its
+input length in both modes.
+
 The result is verified at full resolution (:func:`sample_model`) and
 applied only when the model stays untangled, its severe-face count does not
 rise and its maximum non-orthogonality does not rise; otherwise the
@@ -60,6 +67,11 @@ VERIFY_CELLS = 256
 MIN_CORNER_SINE = math.sin(math.radians(20.0))
 # Displacement scales tried when the full verification refuses the result.
 FALLBACK_SCALES = (0.5, 0.25, 0.125)
+# Shape mode's default floor on an edge's length over its input length.
+SHAPE_LENGTH_RATIO = 0.1
+# Two straight edges at a vertex are one block line when their directions
+# differ by at most this (degrees).
+LINE_ANGLE = 1.0
 
 
 @dataclass(frozen=True)
@@ -91,15 +103,24 @@ class SmoothOptions:
     # ``real`` judges the mesh the stored counts and grading define;
     # ``shape`` judges the count-free block map - every block at
     # ``shape_cells`` even parameter fractions a side, untangled at
-    # ``fold_cells`` - with no length or size limits (there are no cells to
-    # keep), the wall-band rule kept. Its result leaves the counts and
-    # grading stale: sizing has to follow.
+    # ``fold_cells`` - with no size limits (there are no cells to keep) and
+    # only ``shape_length_ratio`` on the lengths, the wall-band rule kept.
+    # Its result leaves the counts and grading stale: sizing has to follow.
     mode: str = "real"
     shape_cells: int = 8
     fold_cells: int = 32
     # A shape result whose stored counts and grading would fold a real cell
     # is refused unless this is set (because ``size`` will follow).
     allow_stale_fold: bool = False
+    # In shape mode every edge keeps at least this fraction of its input
+    # length (0: unbounded): with no cells to protect, the count-free
+    # optimum can still collapse an edge, and sizing then has to resolve
+    # the sliver with a forced-fine count.
+    shape_length_ratio: float = SHAPE_LENGTH_RATIO
+    # An interior vertex on a straight block line - two internal edges at it
+    # that share no block, both ``line`` and collinear within ``LINE_ANGLE``
+    # degrees - moves only along that line; on two such lines it stays.
+    keep_lines: bool = False
     # Boundary vertices on a smooth path of one patch slide along it
     # (:mod:`blockdrawer.slide`): corners, patch junctions and held vertices
     # stay; a wall vertex carries its band spoke's free end with it.
@@ -137,6 +158,15 @@ class SmoothResult:
     max_slide: float = 0.0
     boundary_deviation: float = 0.0
     boundary_deviation_relative: float = 0.0
+    # The shortest and longest edge over its input length, and those edges.
+    min_edge_ratio: float = 1.0
+    min_edge: str | None = None
+    max_edge_ratio: float = 1.0
+    max_edge: str | None = None
+    # With keep_lines: free vertices moved only along their straight block
+    # line, and those that stayed because they sit on two.
+    line_vertices: int = 0
+    line_fixed: int = 0
 
     def to_data(self) -> dict[str, Any]:
         extra: dict[str, Any] = {}
@@ -163,6 +193,12 @@ class SmoothResult:
             "band_spokes": self.band_spokes,
             "max_band_change": self.max_band_change,
             "max_edge_change": self.max_edge_change,
+            "min_edge_ratio": self.min_edge_ratio,
+            "min_edge": self.min_edge,
+            "max_edge_ratio": self.max_edge_ratio,
+            "max_edge": self.max_edge,
+            "line_vertices": self.line_vertices,
+            "line_fixed": self.line_fixed,
             "scale": self.scale,
             "sweeps": self.sweeps,
             "minmax_rounds": self.minmax_rounds,
@@ -885,6 +921,55 @@ def select_free(
     ]
 
 
+def straight_lines(model: MeshModel, vertices: Iterable[str]) -> dict[str, complex | None]:
+    """The straight block lines through the given vertices.
+
+    A vertex lies on a block line when two of its edges share no block (the
+    opposite edges of a four-block vertex), are both ``line`` and are
+    collinear within ``LINE_ANGLE`` degrees. Returned per vertex on one line:
+    the line's unit direction; on two or more distinct lines: ``None`` (it
+    cannot move). Vertices on no line are left out."""
+    edge_blocks: dict[EdgeKey, set[int]] = {}
+    vertex_edges: dict[str, list[EdgeKey]] = {}
+    for position, block in enumerate(model.blocks):
+        for index in range(4):
+            current = edge_key(*block.directed_edge(index))
+            owners = edge_blocks.setdefault(current, set())
+            if not owners:
+                for vertex_id in current:
+                    vertex_edges.setdefault(vertex_id, []).append(current)
+            owners.add(position)
+    tolerance = math.sin(math.radians(LINE_ANGLE))
+    found: dict[str, complex | None] = {}
+    for vertex_id in vertices:
+        here = model.vertices[vertex_id]
+        origin = complex(here.x, here.y)
+        rays = []
+        for current in vertex_edges.get(vertex_id, ()):
+            if len(edge_blocks[current]) != 2 or model.edge_geometry.get(current) is not None:
+                continue
+            other = model.vertices[current[1] if current[0] == vertex_id else current[0]]
+            offset = complex(other.x, other.y) - origin
+            if abs(offset) > 0.0:
+                rays.append((current, offset / abs(offset)))
+        directions: list[complex] = []
+        for k, (first, a) in enumerate(rays):
+            for second, b in rays[k + 1:]:
+                if edge_blocks[first] & edge_blocks[second]:
+                    continue
+                # Opposite rays: a is close to -b.
+                if (a.conjugate() * b).real >= 0.0 or abs((a.conjugate() * b).imag) > tolerance:
+                    continue
+                direction = (a - b) / abs(a - b)
+                if not any(abs((direction.conjugate() * known).imag) <= tolerance for known in directions):
+                    directions.append(direction)
+        if len(directions) == 1:
+            found[vertex_id] = directions[0]
+        elif directions:
+            found[vertex_id] = None
+    return found
+
+
 # ---------------------------------------------------------------------------
 # The optimiser
 # ---------------------------------------------------------------------------
@@ -933,8 +1018,10 @@ def _project(
 def _optimise(
     model: MeshModel, free: list[str], spokes: dict[str, list[Spoke]],
     options: SmoothOptions, chains: dict | None = None,
+    lines: dict[str, complex] | None = None,
 ) -> tuple[dict[str, tuple[float, float]], int, int, dict[str, float]]:
     state = _State(model, options)
+    lines = lines or {}
     chains = chains or {}
     state.attach_slides(model, chains)
     sliders = [vertex_id for vertex_id in chains]
@@ -1023,12 +1110,20 @@ def _optimise(
                     options.aspect_cap,
                 )
 
+    floor = options.shape_length_ratio
+
     def lengths_hold(vertex_ids) -> bool:
         """The length and size limits for the edges of the given vertices,
         where they are now in the sampled state."""
-        if options.mode == "shape":
-            return True  # no cells yet: sizing follows the shape
         incident = {current for v in vertex_ids for current in state.vertex_edges.get(v, ())}
+        if options.mode == "shape":
+            # No cells yet, so no size limits: only the floor on each
+            # edge's length (a similarity scales a curve with its chord).
+            if floor > 0.0:
+                for current in incident:
+                    if abs(state.coords[current[0]] - state.coords[current[1]]) < floor * chords[current]:
+                        return False
+            return True
         if options.length_tolerance > 0.0:
             for current in incident:
                 ratio = abs(state.coords[current[0]] - state.coords[current[1]]) / chords[current]
@@ -1047,7 +1142,7 @@ def _optimise(
         return True
 
     def keeps_lengths(vertex_id: str, target: complex) -> bool:
-        if options.mode == "shape":
+        if options.mode == "shape" and floor <= 0.0:
             return True
         old = state.coords[vertex_id]
         state.coords[vertex_id] = target
@@ -1063,8 +1158,16 @@ def _optimise(
         cost, worst = state.current_local(vertex_id)
         base = state.coords[vertex_id]
         best = None
-        for direction in _DIRECTIONS:
+        axis = lines.get(vertex_id)
+        for direction in (_DIRECTIONS if axis is None else (axis, -axis)):
             target = _project(base + h * direction, anchors(vertex_id), options.band_tolerance)
+            if target is not None and axis is not None:
+                # A vertex on a straight block line stays on it: a band
+                # spoke's projection may only slide it along the line.
+                along = (target - base) * axis.conjugate()
+                if abs(along.imag) > 1.0e-9 * h:
+                    continue
+                target = base + axis * along.real
             if target is None or target == base or not keeps_lengths(vertex_id, target):
                 continue
             saved = state._move(vertex_id, target)
@@ -1100,8 +1203,12 @@ def _optimise(
         low, high = state.slide_bounds(vertex_id)
         margin = 0.05 * (high - low)
         here = state.s[vertex_id]
-        carried = [front for front in fronts.get(vertex_id, ()) if front in free_set_all]
-        pinned_fronts = [front for front in fronts.get(vertex_id, ()) if front not in free_set_all]
+        # A front on a straight block line is not carried off it.
+        carried = [
+            front for front in fronts.get(vertex_id, ())
+            if front in free_set_all and front not in lines
+        ]
+        pinned_fronts = [front for front in fronts.get(vertex_id, ()) if front not in carried]
         moving = [vertex_id] + carried
         cost, worst = state.current_local_many(moving)
         best = None
@@ -1280,6 +1387,24 @@ def _slid(chains: dict, slides: dict, scale: float):
     return recut, points
 
 
+def _edge_ratios(
+    working: MeshModel, lengths_before: dict[EdgeKey, float], moved: Iterable[str]
+) -> tuple[float, str | None, float, str | None]:
+    """The smallest and largest length over input length of the edges with a
+    moved end, and those edges (``a-b``)."""
+    moved = set(moved)
+    low, low_edge, high, high_edge = 1.0, None, 1.0, None
+    for current, length in lengths_before.items():
+        if length <= 0.0 or not (current[0] in moved or current[1] in moved):
+            continue
+        ratio = working.edge_length(current) / length
+        if ratio < low:
+            low, low_edge = ratio, f"{current[0]}-{current[1]}"
+        if ratio > high:
+            high, high_edge = ratio, f"{current[0]}-{current[1]}"
+    return low, low_edge, high, high_edge
+
+
 def _boundary_deviation(model: MeshModel, chains: dict, recut: dict) -> tuple[float, float]:
     """The largest distance of a re-cut edge from the input boundary, and
     the largest such distance over its chain's length."""
@@ -1314,8 +1439,17 @@ def smooth_model(
         raise TopologyError("smooth needs samples >= 1, power > 0 and band_tolerance >= 0")
     if options.mode not in ("real", "shape"):
         raise TopologyError(f"smooth mode must be real or shape, got {options.mode!r}")
+    if options.shape_length_ratio < 0.0 or options.shape_length_ratio >= 1.0:
+        raise TopologyError("smooth needs 0 <= shape_length_ratio < 1")
     model.validate()
     free = select_free(model, blocks=blocks, bbox=bbox, hold=hold)
+    lines: dict[str, complex] = {}
+    line_fixed = 0
+    if options.keep_lines:
+        on_lines = straight_lines(model, free)
+        line_fixed = sum(1 for direction in on_lines.values() if direction is None)
+        free = [vertex_id for vertex_id in free if on_lines.get(vertex_id, 0) is not None]
+        lines = {vertex_id: direction for vertex_id, direction in on_lines.items() if direction is not None}
     spokes = band_spokes(model, free)
     shape = options.mode == "shape"
     chains = _slide_chains(model, blocks, bbox, hold) if options.slide else {}
@@ -1343,7 +1477,9 @@ def smooth_model(
         )
         band = 0.0
         edges_change = 0.0
+        ratios = (1.0, None, 1.0, None)
         if working is not None:
+            ratios = _edge_ratios(working, lengths_before, positions)
             for vertex_id, items in spokes.items():
                 for spoke in items:
                     a = working.vertices[spoke.wall]
@@ -1362,6 +1498,7 @@ def smooth_model(
             options.mode, real_before, real_after if applied else real_before,
             len(chains), slid_count if applied else 0, max_slide if applied else 0.0,
             boundary[0] if applied else 0.0, boundary[1] if applied else 0.0,
+            *ratios, len(lines), line_fixed,
         )
 
     real_after: dict[str, Any] | None = None
@@ -1372,14 +1509,15 @@ def smooth_model(
     model_before = {vertex_id: (vertex.x, vertex.y) for vertex_id, vertex in model.vertices.items()}
     lengths_before = {current: model.edge_length(current) for current in model.edges()}
     if not free and not chains:
-        return result(False, "nothing to gain: no free vertex (every vertex in scope is on a boundary or held)")
+        return result(False, "nothing to gain: no free vertex (every vertex in scope is on a boundary, "
+                      "held" + (f" or on two straight block lines ({line_fixed})" if line_fixed else "") + ")")
     if before["folded_cells"]:
         return result(
             False,
             f"not smoothed: {before['folded_cells']} sampled cell(s) already fold; untangle "
             "the topology first (repair_block, split_edge or new vertex positions)",
         )
-    positions, sweeps, rounds, slides = _optimise(model, free, spokes, options, chains)
+    positions, sweeps, rounds, slides = _optimise(model, free, spokes, options, chains, lines)
     if not positions and not slides:
         return result(
             False,
@@ -1405,6 +1543,9 @@ def smooth_model(
             working.move_vertices(scaled, carry_curves=True, edge_geometry=recut)
         except (TopologyError, ValueError):
             continue
+        ratios = _edge_ratios(working, lengths_before, scaled)
+        if shape and ratios[0] < options.shape_length_ratio * (1.0 - 1.0e-6):
+            continue  # a scaled path can pass closer than either end
         boundary = _boundary_deviation(working, chains, recut)
         if boundary[1] > SLIDE_TOLERANCE:
             deviation_refusals.append(scale)
@@ -1448,6 +1589,16 @@ def smooth_model(
                 f"{real_before['severe_faces']} -> {real_after['severe_faces']} faces above "
                 f"{SEVERE_NON_ORTHOGONALITY:g} degrees, {real_after['folded_cells']} folded cells: they "
                 "were chosen for the old shape - run size next"
+            )
+        reason += (
+            f"; edge lengths {ratios[0]:.3g} ({ratios[1]}) to {ratios[2]:.3g} ({ratios[3]}) "
+            "of their input"
+            + (f" (floor {options.shape_length_ratio:g})" if shape and options.shape_length_ratio > 0.0 else "")
+        )
+        if options.keep_lines:
+            reason += (
+                f"; {len(lines)} vertices on a straight block line moved only along it, "
+                f"{line_fixed} on two stayed"
             )
         return result(True, reason, after, scaled, scale, sweeps, rounds, working)
     if deviation_refusals:

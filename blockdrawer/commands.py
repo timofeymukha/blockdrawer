@@ -29,6 +29,7 @@ from .projection import (
     PROJECTION_DIRECTIONS,
 )
 from .session import from_data, to_data
+from .smooth import SHAPE_LENGTH_RATIO
 
 
 EDGE_SEPARATOR = "-"
@@ -678,6 +679,8 @@ def _run_smooth(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
         mode=args["mode"],
         allow_stale_fold=args["allow_stale_fold"],
         slide=args["slide"],
+        shape_length_ratio=args["shape_length_ratio"],
+        keep_lines=args["keep_lines"],
     )
     result = smooth_model(
         model,
@@ -1133,8 +1136,11 @@ _register(CommandSpec(
         "length_tolerance, and no interface size jump crosses size_cap. The "
         "result is applied only when the full sampled check stays untangled "
         "with no more severe faces and no higher maximum. mode=shape optimises "
-        "the count-free block shape instead, before size sets counts and grading. "
-        "slide=true also slides boundary vertices along their boundary."
+        "the count-free block shape instead, before size sets counts and grading, "
+        "every edge keeping shape_length_ratio of its length. keep_lines=true "
+        "moves a vertex on a straight block line only along it. "
+        "slide=true also slides boundary vertices along their boundary. The "
+        "reason gives the shortest and longest edge over its input length."
     ),
     (
         Parameter(
@@ -1167,9 +1173,21 @@ _register(CommandSpec(
         Parameter(
             "mode", "choice",
             "real judges the mesh the stored counts and grading define; shape the "
-            "count-free block map, without length or size limits, leaving the counts "
+            "count-free block map, without size limits, leaving the counts "
             "and grading stale for size to set",
             required=False, default="real", choices=("real", "shape"),
+        ),
+        Parameter(
+            "shape_length_ratio", "float",
+            "in shape mode, every edge keeps at least this fraction of its input "
+            "length (0: unbounded)",
+            required=False, default=SHAPE_LENGTH_RATIO,
+        ),
+        Parameter(
+            "keep_lines", "bool",
+            "an interior vertex on a straight block line (two opposite line edges, "
+            "collinear) moves only along it; on two such lines it stays",
+            required=False, default=False,
         ),
         Parameter(
             "allow_stale_fold", "bool",
@@ -1915,6 +1933,8 @@ def _note(result: CommandResult) -> dict[str, Any] | None:
             "slid": data.get("slid"),
             "boundary_deviation": data.get("boundary_deviation"),
             "max_band_change": data.get("max_band_change"),
+            "min_edge_ratio": data.get("min_edge_ratio"),
+            "min_edge": data.get("min_edge"),
             "reason": data.get("reason"),
         }
     if result.name == "slide_vertex":

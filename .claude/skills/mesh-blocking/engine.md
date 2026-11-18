@@ -33,7 +33,9 @@ python experiments/agentic_topology/research_cli.py run \
 - `--smooth` runs `smooth mode=shape` before the engine sizes and `smooth`
   after: on the corpus it lowered checkMesh's maximum on every run it moved,
   turned `hull_tandem15` resolved and dropped `wake_blunt` from resolved to
-  admissible (engine README, "Production smoother") - compare both verdicts.
+  admissible (engine README, "Production smoother"; measured before shape
+  mode's edge-length floor, `shape_length_ratio`, which now applies there
+  too) - compare both verdicts.
   After the engine, the production steps (`SKILL.md` Steps 4-7) apply to its
   session like any other.
 

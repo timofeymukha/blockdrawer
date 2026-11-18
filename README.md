@@ -674,15 +674,61 @@ polish.
 
 `smooth mode=shape` optimises the layout before its cells exist: every block
 is judged at eight even parameter fractions a side (untangled at 32),
-ignoring the stored counts and grading, with no length or size limits and
-the wall-band rule kept. It is applied when that count-free verdict is no
+ignoring the stored counts and grading, with no size limits and the
+wall-band rule kept. It is applied when that count-free verdict is no
 worse, and reports the mesh the stored counts and grading now give, before
 and after - they were chosen for the old shape, so `size` should follow. A
 shape whose stale counts would fold a real cell is refused unless
 `allow_stale_fold=true` (what the shape-size-polish sequence passes), so a
 session is never left tangled by a command that did not say so. On the
-engine's square cylinder it took the count-free maximum from 87.6 to 51.1
-degrees, where the real-count smoother is held at 86.7 by the cell sizes.
+engine's square cylinder it took the count-free maximum from 87.6 to 55.6
+degrees (51.1 without the length floor below), where the real-count
+smoother is held at 86.7 by the cell sizes.
+
+Shape mode's one length limit: no edge ends shorter than
+`shape_length_ratio` (default 0.1) of its input length. Unlimited, the
+count-free optimum collapsed edges that `size` then had to resolve - a ring
+edge of the three-cylinder engine session went from 0.2995 to 0.00073
+(ratio 0.0024) and the sizing left a jump of 269; the high-lift hand build's
+slat trailing-edge fan kite went to 0.030 of its length and left a jump of
+28. The square cylinder's gain, though, is itself a large shrink: its
+corner kites' diagonals go to 0.089 of their length. A tenth stops both
+collapses and costs the square cylinder 1.3 degrees once sized; 0.05 kept
+the square cylinder whole but left the three cylinders a jump of 10. Both
+modes report the shortest and longest edge over its input length, with the
+edges, in the result (`min_edge_ratio`, `min_edge`, `max_edge_ratio`,
+`max_edge`), its `reason` and the batch digest; one at the floor is an
+edge the optimum wanted shorter still.
+
+`keep_lines=true` (both modes) keeps straight block lines straight: an
+interior vertex with two opposite edges (sharing no block) that are both
+`line` and collinear within 1 degree moves only along that line, and one on
+two such lines does not move. It does what the benchmark agents did with
+`hold=` (the blunt plate's wake-line vertices and the cascade's wake vertex
+are all on two lines and stay; free, the cascade's moved 0.14), but it also
+holds every straight spoke of a polar patch, ring or band, and once sized
+it cost more than 3 degrees on three of the ten sessions measured, so it is
+off by default; use it where the straight lines are the design (an H-grid,
+a channel) and few spokes are straight, or hold the line's vertices.
+Measured with shape (each variant), the session's `size` line, `smooth`
+and checkMesh; the count-free maximum before -> after the shape step and
+the smallest edge ratio, then checkMesh cells / faces above 70 / maximum
+non-orthogonality / worst interface jump (quality screen). "Same" where the
+floor never bound and the shape result is the free one; the benchmark
+sessions without the agents' `hold=` lists and after-size fixes:
+
+| session | free (before this change) | floor 0.1 (default) | floor 0.1 + `keep_lines` |
+|---|---|---|---|
+| backward step (example) | nothing to gain; 21,750 / 0 / 0 / 1.07 | same | same |
+| grooved tandem (example) | 43.8 -> 23.3, 0.59; 47,616 / 0 / 20.51 / 3.42 | same | 43.8 -> 43.1, 0.21; 57,167 / 0 / 35.56 / 4.93 |
+| NACA 0012 (example) | 56.2 -> 48.2, 0.27; 59,908 / 0 / 48.60 / 4.36 | same | 56.2 -> 49.3, 0.25; 57,022 / 0 / 49.02 / 5.13 |
+| cylinder in a channel | 42.1 -> 38.9, 0.60; 21,824 / 0 / 35.62 / 1.84 | same | 42.1 -> 42.1, 0.95; 24,228 / 0 / 38.61 / 1.75 |
+| blunt plate | 51.3 -> 25.6, 0.63; 88,942 / 0 / 29.53 / 10 | same | 51.3 -> 49.1, 0.29; 86,766 / 0 / 45.66 / 8.06 |
+| U-bend | 41.7 -> 19.2, 0.48; 24,010 / 0 / 20.88 / 1.97 | same | 41.7 -> 41.6, 0.95; 20,998 / 0 / 21.70 / 1.49 |
+| cascade (cyclic pairs matched) | 70.4 -> 59.8, 0.20; 60,130 / 0 / 60.80 / 10.3 | same | 70.4 -> 68.9, 0.64; 65,034 / 0 / 64.93 / 5.04 |
+| high-lift (hand) | 81.8 -> 60.8, 0.030; 332,922 / 0 / 61.27 / 28 | 81.8 -> 60.8, 0.10; 331,921 / 0 / 61.41 / 6.54 | 81.8 -> 80.5, 0.10; 372,346 / 0 / 61.95 / 4.88 |
+| three cylinders (engine) | 70.8 -> 62.8, 0.0024; 56,043 / 0 / 64.65 / 269 | 70.8 -> 63.0, 0.10; 56,069 / 0 / 64.83 / 6.15 | 70.8 -> 62.7, 0.10; 55,982 / 0 / 64.38 / 7.75 |
+| square cylinder (engine) | 87.6 -> 51.1, 0.089; 4,452 / 0 / 50.86 / 2.13 | 87.6 -> 55.6, 0.10; 5,184 / 0 / 52.16 / 2.05 | same as floor 0.1 |
 
 `size` sets every cell count and grading from a few physical inputs
 (`first_width`, `core_size`, `growth`, optional `wall_aspect`,
