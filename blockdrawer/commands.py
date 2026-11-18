@@ -1342,6 +1342,16 @@ def _run_add_ring(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
     ).to_data()
 
 
+def _run_add_stations(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
+    from .construct import add_stations
+
+    return add_stations(
+        model, args["curve"], count=args["count"], between=args["between"],
+        fractions=args["fractions"], xs=args["xs"], ys=args["ys"],
+        offset=args["offset"], prefix=args["id"],
+    ).to_data()
+
+
 def _run_add_fill(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
     from .construct import add_fill
 
@@ -1452,6 +1462,34 @@ _register(CommandSpec(
         _ID,
     ),
     _run_add_ring,
+))
+_register(CommandSpec(
+    "add_stations",
+    (
+        "Add standalone vertices on a reference curve, ordered along it (on "
+        "the polyline through its points, where add_ring puts its stations): "
+        "count of them spread by arc length over the curve or over between "
+        "(two fractions, or two points taken to the curve; forward round a "
+        "closed curve), the arc-length fractions of the whole curve, and "
+        "where it crosses each xs and ys (exactly one crossing, else "
+        "refused). offset=DX,DY translates them all: the stations of a "
+        "periodic partner chain, node for node. id=NAME names station k "
+        "NAME_k; a station on an existing vertex reuses it."
+    ),
+    (
+        Parameter("curve", "curve", "reference curve (ID or name)"),
+        Parameter("count", "int", "stations spread by arc length, ends included (0: none)",
+                  required=False, default=0),
+        Parameter("between", "numbers", "section: two fractions, or x0,y0,x1,y1",
+                  required=False, default=()),
+        Parameter("fractions", "numbers", "arc-length fractions of the curve", required=False, default=()),
+        Parameter("xs", "numbers", "stations where the curve crosses these x", required=False, default=()),
+        Parameter("ys", "numbers", "stations where the curve crosses these y", required=False, default=()),
+        Parameter("offset", "numbers", "dx,dy added to every station", required=False, default=()),
+        Parameter("id", "optional_str", "name station k ID_k (default: next vN)",
+                  required=False, default=None),
+    ),
+    _run_add_stations,
 ))
 _register(CommandSpec(
     "add_fill",
@@ -2081,6 +2119,8 @@ def _note(result: CommandResult) -> dict[str, Any] | None:
         return note
     if result.name == "set_boundary_by":
         return {**base, "edges": data.get("edges")}
+    if result.name == "add_stations":
+        return {**base, "stations": compress_ids(data.get("stations") or []), "note": data.get("note")}
     if result.name == "split_edge":
         return {
             **base,

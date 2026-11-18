@@ -379,8 +379,8 @@ them in the canvas widgets.
   the cascade (an oblique trailing-edge spoke takes the field's directional
   size, widening the reported first-width range).
 - `blockdrawer/construct.py`: construction operators behind the registry
-  commands `add_grid`, `add_band`, `add_ring`, `add_fill` and
-  `set_boundary_by`, derived
+  commands `add_grid`, `add_band`, `add_ring`, `add_stations`, `add_fill`
+  and `set_boundary_by`, derived
   from what the two hand builds coded themselves (coordinate-deduplicated
   vertices, polar points, ray-square hits, offset circles, arcs, edge
   marking). Each runs on a copy (`_atomic`) through `_Build`: vertices
@@ -434,7 +434,19 @@ them in the canvas widgets.
   curves=` agrees: an edge along the closing segment is taken when its
   block lies outside the closed curve (the curve bounds a body: a blunt
   base whose corners are not repeated), not when inside (an open wall whose
-  chord bounds the domain, a cavity lid). `add_fill` fills a four-sided
+  chord bounds the domain, a cavity lid). `add_stations` places standalone
+  vertices on a `_CurvePath` (the polyline `add_ring` stations lie on):
+  `count` spread by arc length over the curve or a `between` section (two
+  fractions, or two points taken to the curve; forward round a closed
+  curve), arc-length `fractions`, and single crossings of `xs`/`ys`
+  (refused unless exactly one in the section); ordered along the section,
+  station k named `ID_k` (`_Build.vertex(name=...)`; a reused vertex keeps
+  its ID and leaves its k unused), `offset` adding a translation so a
+  periodic partner chain gets the same stations node for node. A spline
+  edge along a curve keeps at most `MAX_SPLINE_POINTS` of its points picked
+  symmetrically from both ends (`_symmetric_picks`), so the two chains of a
+  periodic pair, cut in opposite directions, keep the same points and
+  export as a node-for-node cyclic pair. `add_fill` fills a four-sided
   region (corners in order round it, side k from corner k to k+1): a side
   is its given vertex list, else a chain of exterior edges joining its
   corners (`_exterior_walks`: through vertices with two exterior edges,

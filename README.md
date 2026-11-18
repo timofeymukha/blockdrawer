@@ -473,7 +473,7 @@ blockdrawer-cli commands                           # lists every editing command
 
 ### Construction operators
 
-Five registry commands build whole rows and patches of blocks so a layout is
+Six registry commands build whole rows and patches of blocks so a layout is
 stated, not computed (every one atomic, one history entry, a non-convex block
 refused by name; `id=PREFIX` names new vertices `PREFIX_0, ...` and blocks
 `PREFIX_b0, ...`):
@@ -510,6 +510,24 @@ refused by name; `id=PREFIX` names new vertices `PREFIX_0, ...` and blocks
   For `to_box`, aim ring stations at the box corners with `normals=`; a
   band block that would fold against the box is refused with the spokes and
   corners named.
+- `add_stations CURVE count=N [between=F0,F1 | between=X0,Y0,X1,Y1] |
+  fractions=... | xs=... | ys=... [offset=DX,DY] [id=NAME]` - standalone
+  vertices on a reference curve (on the polyline through its points, where
+  `add_ring` puts its stations), ordered along it and named `NAME_0, ...`:
+  a count spread by arc length over the curve or a section of it, the given
+  arc-length fractions, or where it crosses each x or y (exactly one
+  crossing in the section, else refused). `offset` translates every station,
+  so the partner chain of a translational periodic pair gets matching
+  stations in one command; `add_fill` then takes them as a side's stations.
+  A spline edge along a curve keeps its points symmetrically from both ends,
+  so the two chains, cut in opposite directions, export as a node-for-node
+  cyclic pair. On the round-1 cascade build the periodic stations, the
+  passage round the blade, the inlet and the wake region (16 `add_vertex`,
+  4 `project`, 12 more `add_vertex` and 24 `add_block_from_vertices`) are
+  two `add_stations`, four `add_vertex` and four `add_fill`: same blocks,
+  vertices within 1.3e-5; with the trial's shape, size and polish, 59,696
+  cells, Mesh OK, max 65.1 degrees, skewness 3.26 (the original batch on
+  the same code: 64.4, 3.25).
 - `add_fill A,B,C,D [sideK=A,...,B] [curveK=CURVE]` - blocks filling a
   four-sided region between existing vertices, corners in order round it
   (side k from corner k to k+1). A side not given is the chain of exterior

@@ -449,6 +449,112 @@ class FillTests(unittest.TestCase):
         second.model.validate()
 
 
+class StationTests(unittest.TestCase):
+    def wavy(self, offset=0.0, reverse=False, steps=20):
+        points = [(2.0 * k / steps, offset - 0.5 + 0.1 * math.sin(2.0 * math.pi * k / steps))
+                  for k in range(steps + 1)]
+        if reverse:
+            points.reverse()
+        return ";".join(f"{x},{y}" for x, y in points)
+
+    def test_stations_by_count_fraction_and_crossing_are_ordered_and_named(self) -> None:
+        model = apply_commands(MeshModel(box=(5, 5, 6, 6)), [
+            f"add_curve {self.wavy()} name=lower",
+            "add_stations lower count=5 id=c",
+            "add_stations lower fractions=0.5,0.1 xs=1.55 id=f",
+            f"add_stations lower count=3 between=0.2,{-0.5 + 0.1 * math.sin(0.2 * math.pi)},1.8,{-0.5 + 0.1 * math.sin(1.8 * math.pi)} id=b",
+        ])
+        c = model.results[1].result
+        self.assertEqual(c["stations"], ["c_0", "c_1", "c_2", "c_3", "c_4"])
+        self.assertEqual(c["created_vertices"], c["stations"])
+        vertices = model.model.vertices
+        self.assertAlmostEqual(vertices["c_0"].x, 0.0, places=12)
+        self.assertAlmostEqual(vertices["c_4"].x, 2.0, places=12)
+        # Ordered along the curve, whatever order they were asked in; the
+        # fraction 0.5 is the middle station already there, reused.
+        f = model.results[2].result
+        self.assertEqual(f["stations"][1], "c_2")
+        self.assertEqual(f["created_vertices"], ["f_0", "f_2"])
+        self.assertAlmostEqual(vertices["f_2"].x, 1.55, places=12)
+        # Every station is on the polyline through the curve's points.
+        for name in ("f_0", "f_2", "b_0", "b_2"):
+            x, y = vertices[name].x, vertices[name].y
+            k = min(int(x * 10.0), 19)
+            a = (k / 10.0, -0.5 + 0.1 * math.sin(math.pi * k / 10.0))
+            b = ((k + 1) / 10.0, -0.5 + 0.1 * math.sin(math.pi * (k + 1) / 10.0))
+            self.assertAlmostEqual(y, a[1] + (x - a[0]) / (b[0] - a[0]) * (b[1] - a[1]), places=12)
+        # between by two points, each taken to its nearest curve point; the
+        # middle station is the curve's middle, c_2 again.
+        self.assertEqual(model.results[3].result["stations"], ["b_0", "c_2", "b_2"])
+        self.assertLess(vertices["b_0"].x, vertices["b_2"].x)
+        self.assertAlmostEqual(vertices["b_0"].x, 0.2, places=9)
+        self.assertAlmostEqual(vertices["b_2"].x, 1.8, places=9)
+
+    def test_a_crossing_must_be_unique(self) -> None:
+        model = MeshModel(box=(5, 5, 6, 6))
+        with self.assertRaises(Exception) as caught:
+            apply_commands(model, [f"add_curve {circle_points(1.0, 32)} name=disc",
+                                   "add_stations disc ys=0.5"])
+        self.assertIn("crosses y = 0.5 2 times", str(caught.exception))
+        # A section with one crossing is enough: forward from 270 degrees to 90.
+        batch = apply_commands(model, [f"add_curve {circle_points(1.0, 32)} name=disc",
+                                       "add_stations disc ys=0.5 between=0.75,0.25 id=s"])
+        self.assertGreater(batch.model.vertices["s_0"].x, 0.0)
+
+    def test_matched_stations_on_a_periodic_pair_fill_and_export_as_cyclic(self) -> None:
+        from blockdrawer.foam import block_mesh_dict
+
+        # Dense curves: each edge keeps a spread of MAX_SPLINE_POINTS of their
+        # points, the same ones whichever way the fill cuts the edge.
+        commands = [
+            f"add_curve {self.wavy(steps=400)} name=lower",
+            f"add_curve {self.wavy(1.0, reverse=True, steps=400)} name=upper",
+            "add_stations lower xs=0,0.3,0.7,1.2,2 id=l",
+            "add_stations lower xs=0,0.3,0.7,1.2,2 offset=0,1 id=u",
+            "add_fill l_0,l_4,u_4,u_0 curve1=lower curve3=upper",
+            "remove_edge v0-v1",
+            "set_boundary_by lower curves=lower",
+            "set_boundary_by upper curves=upper",
+            "set_boundary_type lower cyclic neighbour_patch=upper",
+            "set_boundary_by inlet bbox=-0.01,-1,0.01,1",
+            "set_boundary_by outlet bbox=1.99,-1,2.01,1",
+            "set_edge_cells l_0-l_1 40",
+            "set_edge_grading l_0-l_1 total_ratio 4",
+            "set_edge_grading u_0-u_1 total_ratio 4",
+        ]
+        first = apply_commands(MeshModel(box=(5, 5, 6, 6)), commands)
+        model = first.model
+        self.assertIn("4 x 1 blocks", first.results[4].result["note"])
+        for k in range(5):
+            lower, upper = model.vertices[f"l_{k}"], model.vertices[f"u_{k}"]
+            self.assertAlmostEqual(upper.x, lower.x, places=12)
+            self.assertAlmostEqual(upper.y, lower.y + 1.0, places=12)
+        for k in range(4):
+            lower = model.edge_geometry[edge_key(f"l_{k}", f"l_{k + 1}")]
+            upper = model.edge_geometry[edge_key(f"u_{k}", f"u_{k + 1}")]
+            self.assertEqual(lower.kind, "spline")
+            self.assertEqual(len(lower.points), len(upper.points))
+            for a, b in zip(lower.points, upper.points):
+                self.assertAlmostEqual(b[0], a[0], places=9)
+                self.assertAlmostEqual(b[1], a[1] + 1.0, places=9)
+        self.assertEqual(len(model.edge_boundaries), 10)
+        text = block_mesh_dict(model)
+        self.assertIn("neighbourPatch upper;", text)
+        second = apply_commands(MeshModel(box=(5, 5, 6, 6)), commands).model
+        self.assertEqual(to_data(second), to_data(model))
+
+    def test_stations_refuse_a_used_name_and_report_a_reused_vertex(self) -> None:
+        model = apply_commands(MeshModel(box=(0, -0.6, 0.5, -0.5)), [f"add_curve {self.wavy()} name=lower"]).model
+        # The curve starts on the block's corner v3: station 0 is v3, so
+        # s_0 is not made and station 1 is still s_1.
+        batch = apply_commands(model, ["add_stations lower count=3 id=s"])
+        self.assertEqual(batch.results[0].result["stations"], ["v3", "s_1", "s_2"])
+        self.assertEqual(batch.results[0].result["reused_vertices"], 1)
+        with self.assertRaises(Exception) as caught:
+            apply_commands(model, ["add_vertex 9 9 id=s_1", "add_stations lower count=3 id=s"])
+        self.assertIn("Vertex ID s_1 is already used", str(caught.exception))
+
+
 class OperatorContractTests(unittest.TestCase):
     def test_one_history_entry_and_determinism(self) -> None:
         commands = [

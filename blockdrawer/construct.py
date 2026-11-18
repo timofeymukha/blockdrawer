@@ -25,6 +25,11 @@ computed:
     has given angles, optionally at rounded convex corners (``tips``), and
     by a count spread between them; wall edges as splines through the
     curve's own points, then the band as ``add_band`` builds it.
+``add_stations``
+    Standalone vertices on a reference curve: a count spread over it or a
+    section of it, arc-length fractions, or where it crosses given x or y;
+    an ``offset`` copy gives a translated periodic partner matching
+    stations.
 ``add_fill``
     Blocks filling a four-sided region between existing vertices - band
     fronts, grid sides, standalone stations on a curve - its interior
@@ -88,6 +93,7 @@ class ConstructResult:
     skipped_cells: int = 0
     edges: int = 0
     note: str = ""
+    stations: list[str] = field(default_factory=list)
 
     def to_data(self) -> dict[str, Any]:
         data = {
@@ -100,6 +106,8 @@ class ConstructResult:
             data["skipped_cells"] = self.skipped_cells
         if self.operation == "set_boundary_by":
             data["edges"] = self.edges
+        if self.operation == "add_stations":
+            data["stations"] = self.stations
         if self.note:
             data["note"] = self.note
         return data
@@ -1477,7 +1485,8 @@ class _CurvePath:
         segments = [math.dist(a, b) for a, b in zip(points, points[1:])]
         self.name = curve.name or curve_id
         self.points = points
-        self.closed = repeated or (len(points) >= 3 and math.dist(points[-1], points[0]) <= max(segments))
+        self.closed = repeated or (
+            len(points) >= 3 and math.dist(points[-1], points[0]) <= max(segments) * (1.0 + 1.0e-6))
         self.lengths = [0.0]
         for length in segments:
             self.lengths.append(self.lengths[-1] + length)
@@ -1554,11 +1563,21 @@ class _CurvePath:
         gap = 1.0e-3 * max(math.dist(a, b), tol)
         inside = [p for p in self.inside(start, length) if math.dist(p, a) > gap and math.dist(p, b) > gap]
         if len(inside) > MAX_SPLINE_POINTS:
-            step = len(inside) / MAX_SPLINE_POINTS
-            inside = [inside[int(i * step)] for i in range(MAX_SPLINE_POINTS)]
+            inside = [inside[k] for k in _symmetric_picks(len(inside), MAX_SPLINE_POINTS)]
         if all(_segment_distance(p, a, b) <= tol * 10 for p in inside):
             return ()
         return tuple(inside)
+
+
+def _symmetric_picks(available: int, wanted: int) -> list[int]:
+    """``wanted`` indices spread evenly over ``available``, the same set
+    read from either end: an edge and its reversed partner (the two chains
+    of a periodic pair, cut in opposite directions) keep the same points.
+    An odd count over an even number has no middle index and drops one."""
+    if wanted % 2 and not available % 2:
+        wanted -= 1
+    half = [int(k * (available - 1) / (wanted - 1) + 0.5) for k in range((wanted + 1) // 2)]
+    return sorted(set(half) | {available - 1 - k for k in half[: wanted // 2]})
 
 
 def _polyline_lengths(points: Sequence[Point]) -> list[float]:
@@ -1587,6 +1606,137 @@ def _polyline_locate(points: Sequence[Point], lengths: Sequence[float], point: P
         if distance < best_distance:
             best_distance, best_s = distance, lengths[k] + t * (lengths[k + 1] - lengths[k])
     return best_s, best_distance
+
+
+# ---------------------------------------------------------------------------
+# add_stations
+# ---------------------------------------------------------------------------
+
+
+def add_stations(
+    model: MeshModel,
+    curve: str,
+    *,
+    count: int = 0,
+    between: Sequence[float] = (),
+    fractions: Sequence[float] = (),
+    xs: Sequence[float] = (),
+    ys: Sequence[float] = (),
+    offset: Sequence[float] = (),
+    prefix: str | None = None,
+) -> ConstructResult:
+    """Standalone vertices on a reference curve, ordered along it.
+
+    The section is the whole curve, or with ``between`` the part from its
+    first to its second end - two arc-length fractions, or two points taken
+    to their nearest curve points - running forward round a closed curve.
+    Stations: ``count`` of them spread by arc length over the section (both
+    ends included; round a closed curve without ``between`` they start at
+    its first point), the arc-length ``fractions`` of the whole curve, and
+    where the section crosses each of ``xs`` and ``ys`` (refused unless it
+    crosses exactly once).  ``offset`` translates every station after it is
+    placed, so the translated partner of a periodic chain gets stations
+    matching this chain's node for node.  With ``id=NAME`` station k along
+    the section is ``NAME_k``; a station on an existing vertex reuses it."""
+    if count < 0 or count == 1:
+        raise TopologyError("count is the number of stations, at least 2 (0: none)")
+    if not (count or fractions or xs or ys):
+        raise TopologyError("give count, fractions, xs or ys")
+    if between and len(between) not in (2, 4):
+        raise TopologyError("between takes two fractions or two points (x0,y0,x1,y1)")
+    if offset and len(offset) != 2:
+        raise TopologyError("offset takes dx,dy")
+
+    def work(working: MeshModel) -> ConstructResult:
+        path = _CurvePath(working, curve)
+        build = _Build(working, prefix)
+        build.scale(path.extent + max(abs(c) for p in path.points for c in p))
+        total = path.total
+        if between:
+            if len(between) == 2:
+                for f in between:
+                    if not path.closed and not -1.0e-12 <= f <= 1.0 + 1.0e-12:
+                        raise TopologyError(f"fraction {f:g} is not on the open curve {path.name} (0 to 1)")
+                s0, s1 = between[0] * total, between[1] * total
+            else:
+                s0 = path.locate((between[0], between[1]))[0]
+                s1 = path.locate((between[2], between[3]))[0]
+            length = ((s1 - s0) % total if path.closed else s1 - s0)
+            if abs(length) <= 1.0e-12 * total:
+                raise TopologyError("between names one point of the curve")
+        else:
+            s0, length = 0.0, total
+        whole_loop = path.closed and not between
+
+        def section_u(s: float, what: str) -> float:
+            u = (((s - s0) % total) if path.closed else (s - s0)) / length
+            if whole_loop:
+                return u % 1.0
+            if not -1.0e-9 <= u <= 1.0 + 1.0e-9:
+                raise TopologyError(f"{what} is outside the section given by between")
+            return min(1.0, max(0.0, u))
+
+        found: list[float] = []
+        if count:
+            found += [k / count if whole_loop else k / (count - 1) for k in range(count)]
+        for f in fractions:
+            if not path.closed and not -1.0e-12 <= f <= 1.0 + 1.0e-12:
+                raise TopologyError(f"fraction {f:g} is not on the open curve {path.name} (0 to 1)")
+            found.append(section_u(path.wrap(f * total) if path.closed else f * total, f"fraction {f:g}"))
+        samples = [0.0, *[u for u, _p in path.inside_with_parameters(s0, length)], 1.0]
+        for axis, values in ((0, xs), (1, ys)):
+            for value in values:
+                hits = _crossings(path, s0, length, samples, axis, value)
+                if whole_loop:
+                    hits = sorted({round(u % 1.0, 12) for u in hits})
+                if len(hits) != 1:
+                    name = "x" if axis == 0 else "y"
+                    where = ", ".join(f"{(path.wrap(s0 + u * length)) / total:.4g}" for u in hits[:6])
+                    raise TopologyError(
+                        f"the section of {path.name} crosses {name} = {value:g} "
+                        + (f"{len(hits)} times (fractions {where})" if hits else "nowhere")
+                        + ": a station needs exactly one crossing; narrow it with between="
+                    )
+                found.append(hits[0])
+        ordered: list[float] = []
+        for u in sorted(found):
+            if not ordered or abs(u - ordered[-1]) * abs(length) > build.tol:
+                ordered.append(u)
+        dx, dy = (offset[0], offset[1]) if offset else (0.0, 0.0)
+        ids = []
+        for k, u in enumerate(ordered):
+            x, y = path.at(s0 + u * length)
+            name = f"{prefix}_{k}" if prefix is not None else None
+            ids.append(build.vertex((x + dx, y + dy), name=name))
+        working.validate()
+        result = build.result("add_stations")
+        result.stations = ids
+        span = (f" from fraction {path.wrap(s0) / total:.6g} to {path.wrap(s0 + length) / total:.6g}"
+                if between else "")
+        result.note = f"{len(ids)} stations on {path.name}{span}" + (
+            f", offset by ({dx:g}, {dy:g})" if offset else "")
+        return result
+
+    return _atomic(model, work)
+
+
+def _crossings(path: _CurvePath, s0: float, length: float, samples: Sequence[float],
+               axis: int, value: float) -> list[float]:
+    """Section parameters where the section's polyline crosses the line
+    ``x = value`` (axis 0) or ``y = value`` (axis 1)."""
+    points = [path.at(s0 + u * length)[axis] - value for u in samples]
+    hits: list[float] = []
+    for k in range(len(samples) - 1):
+        a, b = points[k], points[k + 1]
+        if a == 0.0:
+            hit = samples[k]
+        elif a * b < 0.0 or (b == 0.0 and k + 1 == len(samples) - 1):
+            hit = samples[k] + (samples[k + 1] - samples[k]) * a / (a - b)
+        else:
+            continue
+        if not hits or abs(hit - hits[-1]) > 1.0e-12:
+            hits.append(hit)
+    return hits
 
 
 # ---------------------------------------------------------------------------

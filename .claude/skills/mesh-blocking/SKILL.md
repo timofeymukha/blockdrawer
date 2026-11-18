@@ -87,9 +87,8 @@ Rules that follow from the table; the first that matches decides:
 3. **Multi-element, cove, groove** - the engine builds 30P30N with defects
    left; by hand it took an hour and two vertex scripts; a groove or pocket the
    operators can state goes by hand.
-4. **Anything else the operators can state** (stations, polar patches, bands
-   along walls, rings round curves, boxes, fills between fronts) - by hand:
-   minutes.
+4. **Anything else the operators can state** (stations on curves, polar
+   patches, bands, rings, boxes, fills between fronts) - by hand: minutes.
 5. A layout script that computes vertices is the last resort, when no operator
    can express a region (two-way conform across a box whose sides carry
    different stations; a curve no operator makes, e.g. an offset hull).
@@ -114,6 +113,8 @@ Rules that follow from the table; the first that matches decides:
      exterior edges in a box; `add_band bbox=... to_box=...` - carry them to
      a rectangle (spokes at its corners: ring stations by `normals=` aimed
      at them).
+   - `add_stations CURVE xs=... id=x` (`count=`, `between=`, `fractions=`):
+     standalone stations; `offset=DX,DY` copies them onto a periodic partner.
    - `add_fill A,B,C,D` - blocks between what is built (a slot, a pocket,
      half an annulus), corners in order round it: a side is the exterior
      chain joining its corners, else open (straight or along `curve3=CURVE`)
@@ -241,8 +242,6 @@ count and maximum, and for engine output `admissible`/`resolved` - never
 
 ## Where things are
 
-- Commands: `blockdrawer-cli commands`, MCP `list_commands`. Batches are
-  atomic.
 - Engine: `experiments/agentic_topology/README.md` (algorithm, measured
   tables, open limits) and `engine.md` here.
 - Earlier hand-built cases, when present in the repository root `cases/`:
