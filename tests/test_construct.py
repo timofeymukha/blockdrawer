@@ -310,6 +310,145 @@ class BoundaryTests(unittest.TestCase):
         self.assertNotIn(lid, cavity.edge_boundaries)
 
 
+def vertex_at(model, x, y):
+    return min(model.vertices.values(), key=lambda v: math.hypot(v.x - x, v.y - y)).id
+
+
+def bump(x):
+    return 1.0 + 0.2 * math.sin(math.pi * x)
+
+
+class FillTests(unittest.TestCase):
+    def arcs(self):
+        model = MeshModel(box=(5, 5, 6, 6))
+        return apply_commands(model, [
+            "add_grid center=0,0 rs=1,1.2 thetas=0,30,60,90 id=a",
+            "add_grid center=0,0 rs=2,2.4 thetas=0,30,60,90 id=c",
+        ]).model
+
+    def test_a_fill_between_two_arcs_and_two_straight_sides(self) -> None:
+        model = self.arcs()
+        # A standalone station on the first straight side; the opposite one
+        # gets a new station facing it.
+        model = apply_commands(model, ["add_vertex 1.5 0 id=s"]).model
+        corners = [vertex_at(model, *p) for p in ((1.2, 0), (2, 0), (0, 2), (0, 1.2))]
+        batch = apply_commands(model, [f"add_fill {','.join(corners)} id=f"])
+        data = batch.results[0].result
+        filled = batch.model
+        self.assertEqual(len(data["created_blocks"]), 6)
+        self.assertIn("2 x 3 blocks", data["note"])
+        self.assertIn("the exterior chain", data["note"])
+        self.assertIn("through standalone stations", data["note"])
+        self.assertIn("new stations facing", data["note"])
+        # The matched station mirrors s: fraction 0.375 from the inner arc.
+        self.assertEqual(vertex_at(filled, 0, 1.5), "f_0")
+        self.assertAlmostEqual(filled.vertices["f_0"].y, 1.5, places=12)
+        # Two interior vertices, between the arcs, in the middle row.
+        interior = data["created_vertices"][1:]
+        self.assertEqual(len(interior), 2)
+        for vertex in interior:
+            radius = math.hypot(filled.vertices[vertex].x, filled.vertices[vertex].y)
+            self.assertTrue(1.4 < radius < 1.6, radius)
+        # Opposite edges share counts across the old and new blocks alike.
+        filled.validate()
+        self.assertEqual(filled.edge_cells[edge_key(corners[0], "s")],
+                         filled.edge_cells[edge_key(corners[3], "f_0")])
+        # Either corner order builds the same blocks.
+        reverse = apply_commands(model, [f"add_fill {','.join(reversed(corners))} id=f"]).model
+        def shapes(result):
+            return sorted(sorted((round(result.vertices[v].x, 9), round(result.vertices[v].y, 9))
+                                 for v in block.vertices) for block in result.blocks)
+        self.assertEqual(shapes(reverse), shapes(filled))
+        # Deterministic, and the quiet digest carries the note.
+        again = apply_commands(model, [f"add_fill {','.join(corners)} id=f"])
+        self.assertEqual(to_data(again.model), to_data(filled))
+        note = batch_digest(model, batch)["notes"][0]
+        self.assertEqual((note["op"], note["blocks"]), ("add_fill", 6))
+        self.assertIn("2 x 3 blocks", note["note"])
+
+    def front_and_curve(self, xs=(0.25, 0.5, 0.75)):
+        model = MeshModel(box=(0, 0, 0.25, 0.2))
+        curve = ";".join(f"{x / 20.0},{bump(x / 20.0)}" for x in range(-4, 25))
+        commands = [
+            "add_grid xs=0,0.25,0.5,0.75,1 ys=0,0.2",
+            f"add_curve {curve} name=top",
+        ]
+        commands += [f"add_vertex {x} {bump(x)} id=t{k}" for k, x in enumerate((0.0, *xs, 1.0))]
+        return apply_commands(model, commands).model
+
+    def test_a_fill_from_a_front_to_standalone_stations_on_a_curve(self) -> None:
+        model = self.front_and_curve()
+        corners = f"{vertex_at(model, 0, 0.2)},{vertex_at(model, 1, 0.2)},t4,t0"
+        batch = apply_commands(model, [f"add_fill {corners} curve3=top id=f"])
+        filled = batch.model
+        self.assertIn("4 x 1 blocks", batch.results[0].result["note"])
+        self.assertEqual(len(filled.blocks), 8)
+        # The new top edges follow the curve: splines through its points.
+        for k in range(4):
+            geometry = filled.edge_geometry.get(edge_key(f"t{k}", f"t{k + 1}"))
+            self.assertIsNotNone(geometry)
+            self.assertEqual(geometry.kind, "spline")
+            for x, y in geometry.points:
+                self.assertAlmostEqual(y, bump(x), places=12)
+        # The straight sides stay lines.
+        self.assertNotIn(edge_key(vertex_at(model, 1, 0.2), "t4"), filled.edge_geometry)
+
+    def test_opposite_sides_with_different_station_counts_are_refused_with_the_fix(self) -> None:
+        model = self.front_and_curve(xs=(0.25, 0.75))
+        corners = f"{vertex_at(model, 0, 0.2)},{vertex_at(model, 1, 0.2)},t3,t0"
+        with self.assertRaises(Exception) as caught:
+            apply_commands(model, [f"add_fill {corners} curve3=top"])
+        text = str(caught.exception)
+        self.assertIn("side1", text)
+        self.assertIn("4 edge(s)", text)
+        self.assertIn("side3", text)
+        self.assertIn("3 edge(s)", text)
+        # The missing station faces x = 0.5, half way from t2 to t1.
+        self.assertIn("a station at 0.5 of the way from t2 to t1", text)
+        # A chain short of stations is pointed at split_edge.
+        model = apply_commands(self.front_and_curve(), [f"add_vertex 0.125 {bump(0.125)} id=extra"]).model
+        sides = "t4,t3,t2,t1,extra,t0"
+        with self.assertRaises(Exception) as caught:
+            apply_commands(model, [f"add_fill {corners.replace('t3', 't4')} side3={sides}"])
+        self.assertIn(f"split_edge {vertex_at(model, 0, 0.2)}-{vertex_at(model, 0.25, 0.2)} 0.",
+                      str(caught.exception))
+
+    def test_a_fill_whose_block_would_not_be_convex_is_refused_by_name(self) -> None:
+        model = apply_commands(MeshModel(box=(5, 5, 6, 6)), [
+            "add_vertex 0 0 id=a", "add_vertex 2 0 id=b", "add_vertex 1 0.5 id=c", "add_vertex 1 2 id=d",
+        ]).model
+        before = to_data(model)
+        with self.assertRaises(Exception) as caught:
+            apply_commands(model, ["add_fill a,b,c,d id=f"])
+        text = str(caught.exception)
+        self.assertIn("fill block f_b0", text)
+        self.assertIn("would not be strictly convex at its corner c (1, 0.5)", text)
+        self.assertEqual(to_data(model), before)
+
+    def test_an_annulus_in_two_fills_takes_each_half_of_the_ring_front(self) -> None:
+        model = apply_commands(MeshModel(box=(5, 5, 6, 6)), [
+            f"add_curve {circle_points(0.5, 64)} name=body",
+            "add_ring body 0.1 count=8 id=r",
+            f"add_curve {circle_points(2.0, 64)} name=outer",
+        ]).model
+        front = [v for v in model.vertices.values() if abs(math.hypot(v.x, v.y) - 0.6) < 0.01]
+        self.assertEqual(len(front), 8)
+        outer = []
+        for k, vertex in enumerate(sorted(front, key=lambda v: math.atan2(v.y, v.x))):
+            angle = math.atan2(vertex.y, vertex.x)
+            model = apply_commands(model, [
+                f"add_vertex {2 * math.cos(angle)} {2 * math.sin(angle)} id=o{k}"]).model
+            outer.append((vertex.id, f"o{k}"))
+        (f0, o0), (f4, o4) = outer[0], outer[4]
+        # Both halves of the front join f0 and f4; the orientation decides.
+        first = apply_commands(model, [f"add_fill {f0},{f4},{o4},{o0} curve3=outer"])
+        self.assertIn("4 x 1 blocks", first.results[0].result["note"])
+        second = apply_commands(first.model, [f"add_fill {f4},{f0},{o0},{o4} curve3=outer"])
+        self.assertIn("side2", second.results[0].result["note"])
+        self.assertEqual(len(second.model.blocks), len(model.blocks) + 8)
+        second.model.validate()
+
+
 class OperatorContractTests(unittest.TestCase):
     def test_one_history_entry_and_determinism(self) -> None:
         commands = [

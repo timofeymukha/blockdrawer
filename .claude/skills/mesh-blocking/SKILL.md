@@ -47,9 +47,8 @@ changes, the table below.**
   z_max_patch_type=empty` (with `patch` z faces checkMesh's aspect ratio
   includes the span) - or a periodic slab with reciprocal `cyclic` z patches.
 
-The brief's far field, patch names, first cell and band height are inputs,
-not choices. Where it leaves something open, choose, and say so in the
-deliverable.
+The brief's far field, patch names, first cell and band height are inputs, not
+choices. Where it leaves something open, choose, and say so in the deliverable.
 
 ## Step 2 - Choose the route
 
@@ -76,32 +75,31 @@ Choose by what has been measured, not by what a route intends:
 Rules that follow from the table; the first that matches decides:
 
 1. **A periodic (`cyclic`) passage with a body in it, internal flow with a
-   body, a junction** - build it by hand with the operators. The
-   engine refuses a `cyclic` pair from the command line and a reflex corner
-   on a guide wall; every such case above came out Mesh OK by hand.
-2. **A single body, a cluster of smooth bodies, a simple internal domain
-   with no body and no periodic pair, a sharp airfoil in a C-shaped far
-   field** - try the engine first (`engine.md`), in the background (a
-   C-grid run took 8 minutes on two cores); fall back to the operators on a
-   refusal. A blunt base wider than about two percent of the perimeter has
-   no template there (`engine.md`).
+   body, a junction** - build it by hand with the operators. The engine refuses
+   a `cyclic` pair from the command line and a reflex corner on a guide wall;
+   every such case above came out Mesh OK by hand.
+2. **A single body, a cluster of smooth bodies, a simple internal domain with
+   no body and no periodic pair, a sharp airfoil in a C-shaped far field** -
+   try the engine first (`engine.md`), in the background (a C-grid run took 8
+   minutes on two cores); fall back to the operators on a refusal. A blunt base
+   wider than about two percent of the perimeter has no template there
+   (`engine.md`).
 3. **Multi-element, cove, groove** - the engine builds 30P30N with defects
-   left; by hand it took an hour and two vertex scripts; a groove or pocket
-   the operators can state goes by hand.
-4. **Anything else the operators can state** (stations, polar patches,
-   bands along walls, rings round curves, boxes) - by hand: minutes.
-5. A session written by a layout script that computes vertices is the last
-   resort, when no operator can express a region (two-way conform across a
-   box whose sides carry different stations, a fill between existing
-   fronts - neither exists).
+   left; by hand it took an hour and two vertex scripts; a groove or pocket the
+   operators can state goes by hand.
+4. **Anything else the operators can state** (stations, polar patches, bands
+   along walls, rings round curves, boxes, fills between fronts) - by hand:
+   minutes.
+5. A layout script that computes vertices is the last resort, when no operator
+   can express a region (two-way conform across a box whose sides carry
+   different stations; a curve no operator makes, e.g. an offset hull).
 
 ## Step 3 - Build
 
 **By hand** (`examples/README.md` has three complete batches):
 
-1. `blockdrawer-cli new SESSION --box XMIN YMIN XMAX YMAX` (MCP
-   `new_session` with `box`) - every session has one block; put it where a grid cell will reuse it, or remove it at
-   the end with `remove_edge`.
+1. `blockdrawer-cli new SESSION --box XMIN YMIN XMAX YMAX` (MCP `new_session`
+   with `box`): one block; put it where a grid cell reuses it, or `remove_edge` it.
 2. `import_curve FILE name=NAME` for every body and chain.
 3. The layout, from the wall outwards:
    - `add_grid xs=... ys=... skip=...` - Cartesian stations, cells in skip
@@ -116,51 +114,55 @@ Rules that follow from the table; the first that matches decides:
      exterior edges in a box; `add_band bbox=... to_box=...` - carry them to
      a rectangle (spokes at its corners: ring stations by `normals=` aimed
      at them).
+   - `add_fill A,B,C,D` - blocks between what is built (a slot, a pocket,
+     half an annulus), corners in order round it: a side is the exterior
+     chain joining its corners, else open (straight or along `curve3=CURVE`)
+     through the standalone vertices on it or new stations facing the
+     opposite side's; `side2=B,...,C` names one. A station mismatch or a
+     non-convex block is refused, saying where to split or add a station.
    - `add_grid xs=... ys=... outside=BODIES` again for the H-grid round what
      is built: existing vertices on its cell sides become stations.
 4. `set_boundary_by NAME type=wall curves=BODY`, `set_boundary_by NAME
    type=patch bbox=...` per far-field side; `between=A,B` for a chain.
 5. `set_export_settings z_min_patch_type=empty z_max_patch_type=empty`.
 
-Run the batch with `blockdrawer-cli apply SESSION --in-place --quiet -f
-build.txt` (MCP: `edit_session commands_file=... in_place=true`). It is
-atomic. Go on when the digest lists the blocks and patches you meant and
-`describe SESSION --unassigned --section summary` (MCP `describe_session`
-with `unassigned=true`) shows no unassigned exterior edge. A refusal names
-the block or edge: change a station, not the tool. Look at every corner and
-gap: `render SESSION -o x.png --bounds ...` (MCP `render_session`).
+Run the batch with `blockdrawer-cli apply SESSION --in-place --quiet -f build.txt`
+(MCP: `edit_session commands_file=... in_place=true`). It is atomic. Go on
+when the digest lists the blocks and patches you meant and `describe SESSION
+--unassigned --section summary` (MCP `describe_session` with
+`unassigned=true`) shows no unassigned exterior edge. A refusal names the
+block or edge: change a station, not the tool. Look at every corner and gap:
+`render SESSION -o x.png --bounds ...` (MCP `render_session`).
 
 **By the engine**: `engine.md` - the command, the options the brief maps
 to, and the report terms. Go on when `admissible` is true; `resolved` is
 better. The engine writes `empty` z patches and its own patch names (merge
 with `set_edge_boundary`, rename with `rename_boundary`).
 
-Reading cost: `describe` and `quality_report` answer compactly by default;
-on a session of hundreds of blocks ask for a region (`--bbox`, MCP `bbox`),
-one block (`--only`), or one edge's count component (`--component EDGE`)
-instead of the whole description.
+Reading cost: `describe` and `quality_report` answer compactly by default; on
+hundreds of blocks ask for a region (`--bbox`, MCP `bbox`), one block
+(`--only`) or one edge's count component (`--component EDGE`).
 
 ## Step 4 - Shape
 
-`smooth mode=shape allow_stale_fold=true` moves the free interior vertices
-on the count-free block map (all faces real) before any count exists;
-wall-band spokes keep their length and do not turn from the wall normal,
-and no edge ends shorter than a tenth of its input length
-(`shape_length_ratio`; unlimited, a ring edge collapsed to 0.002 of its
-length and `size` then left a jump of 269). Read `reason`: the count-free
-maximum non-orthogonality before and after, and "edge lengths A (EDGE) to
-B (EDGE) of their input" - an A at the floor is an edge the optimum wanted
-shorter still: render it before sizing. It is applied only when that
-verdict is no worse; "nothing to gain" is normal on an H-grid of
-rectangles. `hold=V1,V2` keeps vertices you placed on purpose (a wake
-line, a fan's middle spoke). `keep_lines=true` moves an interior vertex on
-a straight block line (two opposite straight edges, collinear) only along
-it, and one on two lines not at all. It is off by default: it also holds
-every straight spoke of a ring or band, and once sized it cost 4-16 deg
-on three of ten sessions (README, `smooth`). Turn it on where straight
-lines are the design and few spokes are straight, else hold the line's
-vertices. (Engine square cylinder: real counts 87.7 -> 56.9 deg, 1344 -> 0
-faces above 70; sized and polished, checkMesh 52.2.)
+`smooth mode=shape allow_stale_fold=true` moves the free interior vertices on
+the count-free block map (all faces real) before any count exists; wall-band
+spokes keep their length and do not turn from the wall normal, and no edge ends
+shorter than a tenth of its input length (`shape_length_ratio`; unlimited, a
+ring edge collapsed to 0.002 of its length and `size` then left a jump of 269).
+Read `reason`: the count-free maximum non-orthogonality before and after, and
+"edge lengths A (EDGE) to B (EDGE) of their input" - an A at the floor is an
+edge the optimum wanted shorter still: render it before sizing. It is applied
+only when that verdict is no worse; "nothing to gain" is normal on an H-grid of
+rectangles. `hold=V1,V2` keeps vertices you placed on purpose (a wake line, a
+fan's middle spoke). `keep_lines=true` moves an interior vertex on a straight
+block line (two opposite straight edges, collinear) only along it, and one on
+two lines not at all. It is off by default: it also holds every straight spoke
+of a ring or band, and once sized it cost 4-16 deg on three of ten sessions
+(README, `smooth`). Turn it on where straight lines are the design and few
+spokes are straight, else hold the line's vertices. (Engine square cylinder:
+real counts 87.7 -> 56.9 deg, 1344 -> 0 faces above 70; sized and polished,
+checkMesh 52.2.)
 
 ## Step 5 - Size
 
@@ -181,30 +183,30 @@ on continuity. Read:
 
 Go on when `verification.result` has no face above 70. Faces above 70 in
 `verification.field` may go in the polish (Step 6; they did on three
-cylinders): polish and `check` first. Where `check` still finds them, locate the block (`check`
-maps the set) and use `failures.md`. `method=distance` is not a general
-retry: it helped on one session (fine 30P30N: 0 faces above 70 at 68.8 deg
-against 6 at 85.8) and was worse on both others measured (NACA 4412 C-grid:
-2,088 faces above 70, max 81.5; three cylinders: skewness 3.85 and a jump
-of 19.2 where the default's polish had already cleared the faces). Try it
-only as a comparison kept when `check` says so. A `size refused` error
-means the counts would take checkMesh's skewness past 4 in a tapered block:
-split that block or keep the counts. Jumps that spending leaves are mostly
+cylinders): polish and `check` first. Where `check` still finds them, locate
+the block (`check` maps the set) and use `failures.md`. `method=distance` is
+not a general retry: it helped on one session (fine 30P30N: 0 faces above 70 at
+68.8 deg against 6 at 85.8) and was worse on both others measured (NACA 4412
+C-grid: 2,088 faces above 70, max 81.5; three cylinders: skewness 3.85 and a
+jump of 19.2 where the default's polish had already cleared the faces). Try it
+only as a comparison kept when `check` says so. A `size refused` error means
+the counts would take checkMesh's skewness past 4 in a tapered block: split
+that block or keep the counts. Jumps that spending leaves are mostly
 topological (`sizing.md`).
 
 ## Step 6 - Polish
 
 `smooth` - the real-count polish: interior vertices move to lower the face
 non-orthogonality checkMesh measures, never raising a block's worst face,
-wall-band spokes within 5 percent of their length, edges within 50 percent,
-no size jump past 2.5 created; applied only when the sampled check at 256
-cells a side is no worse. `hold=V1,V2` keeps vertices you placed on purpose;
-`blocks=`/`bbox=` limit it. Read `reason`. `slide=true` also slides
-boundary vertices along their smooth boundary (corners, patch junctions and
-cyclic patches stay; edges re-cut from the input boundary, the deviation
-reported); measured it changed little (README, `smooth slide=true`), so try
-it in the polish and keep it when `check` agrees - not in Step 4, where it
-made sized meshes worse.
+wall-band spokes within 5 percent of their length, edges within 50 percent, no
+size jump past 2.5 created; applied only when the sampled check at 256 cells a
+side is no worse. `hold=V1,V2` keeps vertices you placed on purpose;
+`blocks=`/`bbox=` limit it. Read `reason`. `slide=true` also slides boundary
+vertices along their smooth boundary (corners, patch junctions and cyclic
+patches stay; edges re-cut from the input boundary, the deviation reported);
+measured it changed little (README, `smooth slide=true`), so try it in the
+polish and keep it when `check` agrees - not in Step 4, where it made sized
+meshes worse.
 
 ## Step 7 - Judge
 

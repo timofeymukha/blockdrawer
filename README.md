@@ -473,7 +473,7 @@ blockdrawer-cli commands                           # lists every editing command
 
 ### Construction operators
 
-Four registry commands build whole rows and patches of blocks so a layout is
+Five registry commands build whole rows and patches of blocks so a layout is
 stated, not computed (every one atomic, one history entry, a non-convex block
 refused by name; `id=PREFIX` names new vertices `PREFIX_0, ...` and blocks
 `PREFIX_b0, ...`):
@@ -510,6 +510,23 @@ refused by name; `id=PREFIX` names new vertices `PREFIX_0, ...` and blocks
   For `to_box`, aim ring stations at the box corners with `normals=`; a
   band block that would fold against the box is refused with the spokes and
   corners named.
+- `add_fill A,B,C,D [sideK=A,...,B] [curveK=CURVE]` - blocks filling a
+  four-sided region between existing vertices, corners in order round it
+  (side k from corner k to k+1). A side not given is the chain of exterior
+  edges joining its corners with their blocks outside the region (a band
+  front, a grid's side), else open: straight, or along `curveK`, through
+  the standalone vertices lying on it, or with none through new stations
+  facing the opposite side's (a single edge when both are open). Interior
+  vertices are blockMesh's transfinite interpolation of the four sides; new
+  side edges between points on `curveK` follow it as splines. Opposite
+  sides need as many edges, else it is refused naming the sides and where
+  a `split_edge` or a station would match them; a block that would not be
+  strictly convex is refused with its corners, as is a block over an
+  existing block or vertex. Where both readings of the corners bound a
+  region (half an annulus between two loops) the counter-clockwise one is
+  taken. On the round-1 high-lift build the cove pocket (20 `add_vertex`,
+  24 `add_block_from_vertices` and a script) is one `add_fill`, and the
+  slot strips three; same blocks, vertices within 1.3e-4 of the script's.
 - `set_boundary_by NAME [type=T] [curves=...] [bbox=...] [between=A,B]
   [unassigned=true]` - every exterior edge all given selectors choose, the
   patch created when missing. A curve whose end point is not repeated is

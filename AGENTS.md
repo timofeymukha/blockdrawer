@@ -379,7 +379,8 @@ them in the canvas widgets.
   the cascade (an oblique trailing-edge spoke takes the field's directional
   size, widening the reported first-width range).
 - `blockdrawer/construct.py`: construction operators behind the registry
-  commands `add_grid`, `add_band`, `add_ring` and `set_boundary_by`, derived
+  commands `add_grid`, `add_band`, `add_ring`, `add_fill` and
+  `set_boundary_by`, derived
   from what the two hand builds coded themselves (coordinate-deduplicated
   vertices, polar points, ray-square hits, offset circles, arcs, edge
   marking). Each runs on a copy (`_atomic`) through `_Build`: vertices
@@ -433,7 +434,29 @@ them in the canvas widgets.
   curves=` agrees: an edge along the closing segment is taken when its
   block lies outside the closed curve (the curve bounds a body: a blunt
   base whose corners are not repeated), not when inside (an open wall whose
-  chord bounds the domain, a cavity lid). No engine code.
+  chord bounds the domain, a cavity lid). `add_fill` fills a four-sided
+  region (corners in order round it, side k from corner k to k+1): a side
+  is its given vertex list, else a chain of exterior edges joining its
+  corners (`_exterior_walks`: through vertices with two exterior edges,
+  never through another corner), else open - straight or along `curveK`
+  (`_CurvePath`: the curve's polyline, closed when its end point repeats
+  or its closing chord is no longer than its longest segment; both ways
+  round a closed one are candidates) - through the standalone vertices
+  within a thousandth of its length (or of the curve's size) or, with
+  none, new stations at the opposite side's arc-length fractions.
+  `_choose_sides` takes the candidates bounding a region with every
+  existing side edge's block outside it and no existing vertex inside,
+  most existing sides first, then the counter-clockwise reading (a half
+  annulus), else refuses as ambiguous. Opposite sides must have as many
+  edges (`_mismatch_message` names the short side's segments facing the
+  long side's extra stations: `split_edge` or a station). Interior
+  vertices are blockMesh's edge-weighted transfinite interpolation
+  (`preview._block_mesh_point`) of the side stations at their arc-length
+  fractions; every block is checked convex before anything is built and
+  refused with its would-be ID, column, row and corners; a block over an
+  existing block or vertex is refused (`_refuse_overlap`). New side edges
+  between two points on the side's curve are splines through its points
+  (`_CurvePath.edge_interior`, as `add_ring`'s wall edges). No engine code.
 - `blockdrawer/size_distance.py`: item 3's sizing (commit 9a84f29),
   unchanged, behind `size method=distance`: the scalar wall-distance field,
   wall-normal edges graded from their finer end, tangential edges uniform,

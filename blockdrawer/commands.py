@@ -1342,6 +1342,17 @@ def _run_add_ring(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
     ).to_data()
 
 
+def _run_add_fill(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
+    from .construct import add_fill
+
+    return add_fill(
+        model, args["corners"],
+        sides=tuple(args[f"side{k}"] for k in range(1, 5)),
+        curves=tuple(args[f"curve{k}"] for k in range(1, 5)),
+        prefix=args["id"],
+    ).to_data()
+
+
 def _run_set_boundary_by(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
     from .construct import set_boundary_by
 
@@ -1441,6 +1452,35 @@ _register(CommandSpec(
         _ID,
     ),
     _run_add_ring,
+))
+_register(CommandSpec(
+    "add_fill",
+    (
+        "Fill a four-sided region with blocks: corners A,B,C,D in order round "
+        "it (either way; counter-clockwise where both ways bound a region, as "
+        "in a half annulus), side k from corner k to corner k+1. A side is the "
+        "vertex list given for it (sideK=A,...,B); else the chain of exterior "
+        "edges joining its corners with their blocks outside the region (a "
+        "band front, a grid's side; the most such sides are taken); else "
+        "open: straight, or along curveK, through the standalone vertices "
+        "lying on it, or with none through new stations at the opposite "
+        "side's arc-length fractions (one edge when both are open). Opposite "
+        "sides need as many edges (a refusal says where to split or add a "
+        "station). Interior vertices by blockMesh's transfinite interpolation "
+        "of the sides; new side edges between two points on curveK follow it "
+        "as splines. A block that would not be strictly convex is refused by "
+        "name, nothing built."
+    ),
+    (
+        Parameter("corners", "vertices", "four corner vertices in order round the region"),
+        *(Parameter(f"side{k}", "vertices",
+                    f"side {k}'s stations from corner {k} to corner {k % 4 + 1} (either order)",
+                    required=False, default=()) for k in range(1, 5)),
+        *(Parameter(f"curve{k}", "curve", f"reference curve side {k} follows where it is open or new",
+                    required=False, default=None) for k in range(1, 5)),
+        _ID,
+    ),
+    _run_add_fill,
 ))
 _register(CommandSpec(
     "set_boundary_by",
@@ -2029,7 +2069,7 @@ def _note(result: CommandResult) -> dict[str, Any] | None:
         }
     if result.name == "size":
         return {**base, **_size_note(data)}
-    if result.name in ("add_grid", "add_band", "add_ring"):
+    if result.name in ("add_grid", "add_band", "add_ring", "add_fill"):
         note = {
             **base,
             "blocks": len(data.get("created_blocks", [])),

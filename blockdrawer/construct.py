@@ -25,6 +25,13 @@ computed:
     has given angles, optionally at rounded convex corners (``tips``), and
     by a count spread between them; wall edges as splines through the
     curve's own points, then the band as ``add_band`` builds it.
+``add_fill``
+    Blocks filling a four-sided region between existing vertices - band
+    fronts, grid sides, standalone stations on a curve - its interior
+    vertices by blockMesh's transfinite interpolation of the four sides; a
+    side not given is the exterior chain joining its corners, or open
+    (straight or along a curve) through the standalone vertices on it or
+    new stations facing the opposite side's.
 ``set_boundary_by``
     Assign every exterior edge chosen by a selector - within a tolerance of
     reference curves, inside a box, along the exterior chain between two
@@ -47,6 +54,7 @@ from typing import Any, Sequence
 
 from .domain import Block, EdgeGeometry, EdgeKey, TopologyError, Vertex, edge_key
 from .model import MeshModel
+from .preview import _block_mesh_point
 from .session import from_data, to_data
 
 Point = tuple[float, float]
@@ -125,7 +133,10 @@ class _Build:
                 return vertex.id
         return None
 
-    def vertex(self, point: Point) -> str:
+    def vertex(self, point: Point, name: str | None = None) -> str:
+        """The vertex at ``point``: an existing one within the tolerance, or a
+        new one named ``name``, ``PREFIX_k`` (k in creation order) or the
+        next free ``vN``."""
         x, y = point
         if not (math.isfinite(x) and math.isfinite(y)):
             raise TopologyError("A constructed vertex is not finite")
@@ -134,7 +145,11 @@ class _Build:
             if found not in self.created_vertices:
                 self.reused.add(found)
             return found
-        if self.prefix is not None:
+        if name is not None:
+            identifier = name
+            if identifier in self.model.vertices:
+                raise TopologyError(f"Vertex ID {identifier} is already used")
+        elif self.prefix is not None:
             identifier = f"{self.prefix}_{len(self.created_vertices)}"
             if identifier in self.model.vertices:
                 raise TopologyError(f"Vertex ID {identifier} is already used")
@@ -1431,3 +1446,621 @@ def _exterior_path(model, exterior, start, end) -> list[EdgeKey]:
         vertex, current = back[vertex]
         path.append(current)
     return path
+
+
+# ---------------------------------------------------------------------------
+# Reference curves as paths (add_stations, add_fill)
+# ---------------------------------------------------------------------------
+
+
+class _CurvePath:
+    """A reference curve as the polyline through its points - the path
+    ``add_ring`` puts its stations on - parametrised by arc length from its
+    first point.
+
+    It is closed when its first point is repeated at its end, or when the
+    chord from its last point back to its first is no longer than its
+    longest segment (a body's loop with the closing point left implied); an
+    open chain is never closed across its ends.  ``tolerance`` is
+    ``set_boundary_by``'s default, a thousandth of the curve's size: a
+    vertex that close is on the curve."""
+
+    def __init__(self, model: MeshModel, curve_id: str) -> None:
+        curve = model.geometry_curves.get(curve_id)
+        if curve is None:
+            raise TopologyError(f"Unknown curve {curve_id!r}")
+        points = [(float(p[0]), float(p[1])) for p in curve.points]
+        extent = _extent(points)
+        repeated = len(points) > 2 and math.dist(points[0], points[-1]) <= 1.0e-12 * (1.0 + extent)
+        if repeated:
+            points.pop()
+        segments = [math.dist(a, b) for a, b in zip(points, points[1:])]
+        self.name = curve.name or curve_id
+        self.points = points
+        self.closed = repeated or (len(points) >= 3 and math.dist(points[-1], points[0]) <= max(segments))
+        self.lengths = [0.0]
+        for length in segments:
+            self.lengths.append(self.lengths[-1] + length)
+        if self.closed:
+            self.lengths.append(self.lengths[-1] + math.dist(points[-1], points[0]))
+        self.total = self.lengths[-1]
+        if self.total <= 0.0:
+            raise TopologyError(f"curve {self.name} has no length")
+        self.extent = extent
+        self.tolerance = 1.0e-3 * extent
+
+    def wrap(self, s: float) -> float:
+        return s % self.total if self.closed else min(max(s, 0.0), self.total)
+
+    def at(self, s: float) -> Point:
+        s = self.wrap(s)
+        n = len(self.points)
+        k = max(0, min(len(self.lengths) - 2, _bisect(self.lengths, s) - 1))
+        span = self.lengths[k + 1] - self.lengths[k]
+        f = 0.0 if span <= 0.0 else (s - self.lengths[k]) / span
+        a, b = self.points[k], self.points[(k + 1) % n]
+        return a[0] + f * (b[0] - a[0]), a[1] + f * (b[1] - a[1])
+
+    def locate(self, point: Point) -> tuple[float, float]:
+        """The arc length of the nearest point of the path, and the distance."""
+        best_distance, best_s = math.inf, 0.0
+        n = len(self.points)
+        for k in range(len(self.lengths) - 1):
+            a, b = self.points[k], self.points[(k + 1) % n]
+            dx, dy = b[0] - a[0], b[1] - a[1]
+            squared = dx * dx + dy * dy
+            t = 0.0 if squared <= 0.0 else max(0.0, min(1.0, ((point[0] - a[0]) * dx + (point[1] - a[1]) * dy) / squared))
+            distance = math.hypot(point[0] - a[0] - t * dx, point[1] - a[1] - t * dy)
+            if distance < best_distance:
+                best_distance, best_s = distance, self.lengths[k] + t * (self.lengths[k + 1] - self.lengths[k])
+        return best_s, best_distance
+
+    def span(self, start: float, end: float) -> float:
+        """Signed arc length from ``start`` to ``end``: direct on an open
+        curve, the shorter way round a closed one."""
+        if not self.closed:
+            return end - start
+        forward = (end - start) % self.total
+        return forward if forward <= self.total - forward else forward - self.total
+
+    def inside(self, start: float, length: float) -> list[Point]:
+        """The curve's own points strictly inside the section from ``start``
+        over the signed ``length``, in its direction."""
+        return [point for _u, point in self.inside_with_parameters(start, length)]
+
+    def inside_with_parameters(self, start: float, length: float) -> list[tuple[float, Point]]:
+        """As ``inside``, each point with its fraction of the section."""
+        if length == 0.0:
+            return []
+        found = []
+        for j, point in enumerate(self.points):
+            values = [self.lengths[j]]
+            if self.closed:
+                values += [self.lengths[j] + self.total, self.lengths[j] - self.total]
+            for value in values:
+                u = (value - start) / length
+                if 1.0e-12 < u < 1.0 - 1.0e-12:
+                    found.append((u, point))
+                    break
+        found.sort()
+        return found
+
+    def edge_interior(self, start: float, length: float, tol: float) -> tuple[Point, ...]:
+        """Interior points of a spline edge along the section, as add_ring's
+        wall edges take them (none within a thousandth of the chord of an
+        end, at most ``MAX_SPLINE_POINTS``); empty when the section is
+        straight."""
+        a, b = self.at(start), self.at(start + length)
+        gap = 1.0e-3 * max(math.dist(a, b), tol)
+        inside = [p for p in self.inside(start, length) if math.dist(p, a) > gap and math.dist(p, b) > gap]
+        if len(inside) > MAX_SPLINE_POINTS:
+            step = len(inside) / MAX_SPLINE_POINTS
+            inside = [inside[int(i * step)] for i in range(MAX_SPLINE_POINTS)]
+        if all(_segment_distance(p, a, b) <= tol * 10 for p in inside):
+            return ()
+        return tuple(inside)
+
+
+def _polyline_lengths(points: Sequence[Point]) -> list[float]:
+    lengths = [0.0]
+    for a, b in zip(points, points[1:]):
+        lengths.append(lengths[-1] + math.dist(a, b))
+    return lengths
+
+
+def _polyline_at(points: Sequence[Point], lengths: Sequence[float], s: float) -> Point:
+    k = max(0, min(len(points) - 2, _bisect(lengths, s) - 1))
+    span = lengths[k + 1] - lengths[k]
+    f = 0.0 if span <= 0.0 else (s - lengths[k]) / span
+    a, b = points[k], points[k + 1]
+    return a[0] + f * (b[0] - a[0]), a[1] + f * (b[1] - a[1])
+
+
+def _polyline_locate(points: Sequence[Point], lengths: Sequence[float], point: Point) -> tuple[float, float]:
+    best_distance, best_s = math.inf, 0.0
+    for k in range(len(points) - 1):
+        a, b = points[k], points[k + 1]
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        squared = dx * dx + dy * dy
+        t = 0.0 if squared <= 0.0 else max(0.0, min(1.0, ((point[0] - a[0]) * dx + (point[1] - a[1]) * dy) / squared))
+        distance = math.hypot(point[0] - a[0] - t * dx, point[1] - a[1] - t * dy)
+        if distance < best_distance:
+            best_distance, best_s = distance, lengths[k] + t * (lengths[k + 1] - lengths[k])
+    return best_s, best_distance
+
+
+# ---------------------------------------------------------------------------
+# add_fill
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _FillSide:
+    """One side of a fill, from its first corner to its second: stations
+    (``None`` for one still to be created), their points, and per segment
+    an existing edge, a section of the side's curve, or a straight line."""
+
+    kind: str
+    vertices: list[str | None]
+    points: list[Point]
+    segments: list[tuple]
+    lengths: list[float]
+    route: list[Point] = field(default_factory=list)
+    path: Any = None
+
+    def fractions(self) -> list[float]:
+        total = sum(self.lengths)
+        out = [0.0]
+        for length in self.lengths:
+            out.append(out[-1] + length / total if total > 0.0 else 0.0)
+        out[-1] = 1.0
+        return out
+
+
+def add_fill(
+    model: MeshModel,
+    corners: Sequence[str],
+    *,
+    sides: Sequence[Sequence[str]] = ((), (), (), ()),
+    curves: Sequence[str | None] = (None, None, None, None),
+    prefix: str | None = None,
+) -> ConstructResult:
+    """Blocks filling a four-sided region whose sides run between existing
+    vertices, interior vertices by transfinite interpolation.
+
+    ``corners`` go round the region (either way); side k runs from corner k
+    to corner k+1.  A side is, in this order: the vertex list given for it;
+    else the chain of exterior edges joining its corners, its blocks
+    outside the region (the band front, the grid side that is there); else
+    open - straight, or along its reference curve - taking the standalone
+    vertices lying on it as stations, or, with none, new stations at the
+    opposite side's arc-length fractions.  Opposite sides need as many
+    segments; edges between stations both on a side's curve follow it as
+    splines through its points."""
+    if len(corners) != 4 or len(set(corners)) != 4:
+        raise TopologyError("corners takes four distinct vertices, in order round the region")
+    if len(sides) != 4 or len(curves) != 4:
+        raise TopologyError("a fill has four sides")
+
+    def work(working: MeshModel) -> ConstructResult:
+        build = _Build(working, prefix)
+        position = {v.id: (v.x, v.y) for v in working.vertices.values()}
+        build.scale(_extent([position[c] for c in corners]) + max(abs(c) for v in corners for c in position[v]))
+        occurrences = working.edge_occurrences()
+        paths = [_CurvePath(working, c) if c else None for c in curves]
+        candidates: list[list[list[str] | None]] = []
+        for k in range(4):
+            a, b = corners[k], corners[(k + 1) % 4]
+            if sides[k]:
+                given = list(sides[k])
+                if given[0] == b and given[-1] == a:
+                    given.reverse()
+                if given[0] != a or given[-1] != b or len(given) < 2:
+                    raise TopologyError(f"side{k + 1} must run from corner {a} to corner {b}")
+                if len(set(given)) != len(given):
+                    raise TopologyError(f"side{k + 1} lists a vertex twice")
+                for p, q in zip(given, given[1:]):
+                    key = edge_key(p, q)
+                    if len(occurrences.get(key, ())) > 1:
+                        raise TopologyError(f"edge {key[0]}-{key[1]} of side{k + 1} already has blocks on both sides")
+                candidates.append([given])
+            else:
+                forbidden = set(corners) - {a, b}
+                ways = (1, -1) if paths[k] is not None and paths[k].closed else (0,)
+                candidates.append([*_exterior_walks(occurrences, a, b, forbidden), *ways])
+        chosen, sign = _choose_sides(working, occurrences, corners, candidates, paths, position)
+        listed = {v for side in sides for v in side}
+        resolved = [
+            _resolve_side(working, chosen[k], corners[k], corners[(k + 1) % 4], paths[k], position,
+                          "given" if sides[k] else "chain", listed)
+            for k in range(4)
+        ]
+        for first, second in ((0, 2), (1, 3)):
+            _match_counts(resolved, first, second, corners)
+        n = len(resolved[0].points) - 1
+        m = len(resolved[1].points) - 1
+        fractions = [side.fractions() for side in resolved]
+
+        def boundary(i: int, j: int) -> tuple[str | None, Point, tuple[int, int] | None]:
+            if j == 0:
+                return resolved[0].vertices[i], resolved[0].points[i], (0, i)
+            if i == n:
+                return resolved[1].vertices[j], resolved[1].points[j], (1, j)
+            if j == m:
+                return resolved[2].vertices[n - i], resolved[2].points[n - i], (2, n - i)
+            return resolved[3].vertices[m - j], resolved[3].points[m - j], (3, m - j)
+
+        c00, c10, c11, c01 = (position[c] for c in corners)
+        grid: dict[tuple[int, int], Point] = {}
+        for j in range(m + 1):
+            for i in range(n + 1):
+                if i in (0, n) or j in (0, m):
+                    grid[i, j] = boundary(i, j)[1]
+                    continue
+                grid[i, j] = _block_mesh_point(
+                    (fractions[0][i], resolved[0].points[i]),
+                    (fractions[1][j], resolved[1].points[j]),
+                    (1.0 - fractions[2][n - i], resolved[2].points[n - i]),
+                    (1.0 - fractions[3][m - j], resolved[3].points[m - j]),
+                    (c00, c10, c11, c01),
+                )
+        quads = [((i, j), [grid[i, j], grid[i + 1, j], grid[i + 1, j + 1], grid[i, j + 1]])
+                 for j in range(m) for i in range(n)]
+        names = {}
+        for i in range(n + 1):
+            for j in range(m + 1):
+                if i in (0, n) or j in (0, m):
+                    names[i, j] = boundary(i, j)[0]
+        for index, ((i, j), quad) in enumerate(quads):
+            if not _ordered_convex(quad, sign):
+                raise TopologyError(_fill_fold_message(working, build, index, i, j, n, m, quad, sign, names))
+        _refuse_overlap(working, quads, names, position)
+        # Vertices: new side stations, side by side, then the interior row by row.
+        for k, side in enumerate(resolved):
+            for s, vertex in enumerate(side.vertices):
+                if vertex is None:
+                    side.vertices[s] = build.vertex(side.points[s])
+        ids: dict[tuple[int, int], str] = {}
+        for j in range(m + 1):
+            for i in range(n + 1):
+                if i in (0, n) or j in (0, m):
+                    ids[i, j] = boundary(i, j)[0]  # type: ignore[assignment]
+        for j in range(1, m):
+            for i in range(1, n):
+                ids[i, j] = build.vertex(grid[i, j])
+        for (i, j), _quad in quads:
+            build.block([ids[i, j], ids[i + 1, j], ids[i + 1, j + 1], ids[i, j + 1]], expect=sign)
+        for side in resolved:
+            for s, segment in enumerate(side.segments):
+                if segment[0] == "curve" and segment[1]:
+                    build.curve(side.vertices[s], side.vertices[s + 1], "spline", segment[1])
+        build.finish()
+        result = build.result("add_fill")
+        described = []
+        for k, side in enumerate(resolved):
+            a, b = corners[k], corners[(k + 1) % 4]
+            text = {
+                "given": "as given",
+                "chain": "the exterior chain",
+                "stations": "open, through standalone stations",
+                "matched": "open, new stations facing the opposite side's",
+                "open": "open",
+            }[side.kind]
+            curve_text = f" along {paths[k].name}" if paths[k] is not None else ""
+            described.append(f"side{k + 1} {a}..{b}: {len(side.points) - 1} edge(s), {text}{curve_text}")
+        result.note = f"{n} x {m} blocks; " + "; ".join(described)
+        return result
+
+    return _atomic(model, work)
+
+
+def _exterior_walks(occurrences, a: str, b: str, forbidden: set[str]) -> list[list[str]]:
+    """Chains of exterior edges from ``a`` to ``b``: from each exterior edge
+    at ``a``, on through vertices with exactly two exterior edges, never
+    through another corner."""
+    adjacency: dict[str, list[EdgeKey]] = {}
+    for current, items in occurrences.items():
+        if len(items) == 1:
+            for vertex in current:
+                adjacency.setdefault(vertex, []).append(current)
+    walks = []
+    for first in sorted(adjacency.get(a, ())):
+        path, edge, current = [a], first, a
+        while True:
+            following = edge[1] if edge[0] == current else edge[0]
+            if following == b:
+                walks.append(path + [b])
+                break
+            if following == a or following in forbidden or following in path:
+                break
+            options = [e for e in adjacency[following] if e != edge]
+            if len(options) != 1:
+                break
+            path.append(following)
+            current, edge = following, options[0]
+    return walks
+
+
+def _open_path(position, a: str, b: str, path: _CurvePath | None, way: int) -> list[Point]:
+    """An open side's path: straight, or the curve's section between the
+    points nearest its corners - round a closed curve forwards (``way`` 1)
+    or backwards (-1)."""
+    pa, pb = position[a], position[b]
+    if path is None:
+        return [pa, pb]
+    start, end = path.locate(pa)[0], path.locate(pb)[0]
+    if path.closed:
+        forward = (end - start) % path.total
+        length = forward if way > 0 else forward - path.total
+    else:
+        length = end - start
+    return [pa, *path.inside(start, length), pb]
+
+
+def _side_samples(model: MeshModel, vertices: Sequence[str], position) -> list[Point]:
+    points: list[Point] = []
+    for p, q in zip(vertices, vertices[1:]):
+        key = edge_key(p, q)
+        points.append(position[p])
+        if key in model.edge_geometry:
+            fractions = [k / 8.0 for k in range(1, 8)]
+            samples = model.edge_points(key, fractions if key[0] == p else [1.0 - f for f in fractions])
+            points.extend(samples)
+    points.append(position[vertices[-1]])
+    return points
+
+
+def _choose_sides(model, occurrences, corners, candidates, paths, position):
+    """The choice of one candidate per side that bounds a region with the
+    blocks of every existing side edge outside it and no existing vertex
+    inside - the most sides on existing edges first, then the region the
+    corners go round counter-clockwise; refused when that leaves two."""
+    import itertools
+
+    valid = []
+    for combination in itertools.product(*candidates):
+        loop: list[Point] = []
+        for k, choice in enumerate(combination):
+            a, b = corners[k], corners[(k + 1) % 4]
+            if isinstance(choice, int):
+                side = _open_path(position, a, b, paths[k], choice)
+            else:
+                side = _side_samples(model, choice, position)
+            loop.extend(side[:-1])
+        area = sum(loop[k][0] * loop[(k + 1) % len(loop)][1] - loop[(k + 1) % len(loop)][0] * loop[k][1]
+                   for k in range(len(loop)))
+        if abs(area) <= 1.0e-12 * _extent(loop) ** 2:
+            continue
+        sign = 1.0 if area > 0.0 else -1.0
+        ok = True
+        for choice in combination:
+            if isinstance(choice, int):
+                continue
+            score = 0
+            for p, q in zip(choice, choice[1:]):
+                key = edge_key(p, q)
+                items = occurrences.get(key)
+                if not items:
+                    continue
+                block = items[0][0]
+                cx, cy = _block_centre(model, block)
+                mx, my = model.edge_point(key, 0.5)
+                tx, ty = position[q][0] - position[p][0], position[q][1] - position[p][1]
+                score += 1 if (tx * (cy - my) - ty * (cx - mx)) * sign < 0.0 else -1
+            if score < 0 or (score == 0 and any(occurrences.get(edge_key(p, q)) for p, q in zip(choice, choice[1:]))):
+                ok = False
+                break
+        if ok and not _vertex_inside(model, loop, corners, combination):
+            valid.append((sum(not isinstance(choice, int) for choice in combination), combination, sign))
+    if not valid:
+        raise TopologyError(
+            "the sides between corners " + ", ".join(corners) + " bound no region with the existing "
+            "blocks outside it: give the corners in order round the region, or the sides explicitly "
+            "(side1=...)"
+        )
+    best = max(score for score, _c, _s in valid)
+    top = [(combination, sign) for score, combination, sign in valid if score == best]
+    if len(top) > 1 and sum(sign > 0 for _c, sign in top) == 1:
+        # Corners that go round either of two regions (a half annulus
+        # between two loops): the one they go round counter-clockwise.
+        top = [item for item in top if item[1] > 0]
+    if len(top) > 1:
+        differing = [k + 1 for k in range(4) if len({str(c[k]) for c, _s in top}) > 1]
+        raise TopologyError(
+            "the region is ambiguous: side" + ", side".join(map(str, differing))
+            + " can run more than one way between its corners; give it explicitly (sideK=A,...,B)"
+        )
+    return top[0]
+
+
+def _vertex_inside(model: MeshModel, loop: Sequence[Point], corners, combination) -> bool:
+    """Whether an existing vertex lies inside the region bounded by
+    ``loop``, clear of its boundary: a fill region holds none."""
+    on_sides = set(corners)
+    for choice in combination:
+        if not isinstance(choice, int):
+            on_sides.update(choice)
+    xs = [p[0] for p in loop]
+    ys = [p[1] for p in loop]
+    x0, y0, x1, y1 = min(xs), min(ys), max(xs), max(ys)
+    clearance = 1.0e-6 * math.hypot(x1 - x0, y1 - y0)
+    for vertex in model.vertices.values():
+        if vertex.id in on_sides or not (x0 < vertex.x < x1 and y0 < vertex.y < y1):
+            continue
+        point = (vertex.x, vertex.y)
+        if _inside(point, loop) and _distance_to(point, loop, True) > clearance:
+            return True
+    return False
+
+
+def _resolve_side(model, choice, a, b, path, position, kind, listed) -> _FillSide:
+    tol = path.tolerance if path is not None else 0.0
+    if not isinstance(choice, int):
+        points = [position[v] for v in choice]
+        segments, lengths = [], []
+        for p, q in zip(choice, choice[1:]):
+            key = edge_key(p, q)
+            if key in model.edge_cells:
+                segments.append(("edge", key))
+                lengths.append(model.edge_length(key))
+            else:
+                segments.append(_new_segment(position[p], position[q], path))
+                lengths.append(segments[-1][2])
+        return _FillSide(kind, list(choice), points, segments, lengths)
+    route = _open_path(position, a, b, path, choice)
+    route_lengths = _polyline_lengths(route)
+    total = route_lengths[-1]
+    tol = max(tol, 1.0e-3 * total)
+    used = {v for block in model.blocks for v in block.vertices}
+    found = []
+    for vertex in model.vertices.values():
+        if vertex.id in used or vertex.id in listed or vertex.id in (a, b):
+            continue
+        s, distance = _polyline_locate(route, route_lengths, (vertex.x, vertex.y))
+        if distance <= tol and tol < s < total - tol:
+            found.append((s, vertex.id))
+    found.sort()
+    stations = [a, *(v for _s, v in found), b]
+    points = [position[v] for v in stations]
+    segments = [_new_segment(p, q, path) for p, q in zip(points, points[1:])]
+    return _FillSide("stations" if found else "open", list(stations), points, segments,
+                     [segment[2] for segment in segments], route, path)
+
+
+def _new_segment(p: Point, q: Point, path: _CurvePath | None) -> tuple:
+    """A new side edge from ``p`` to ``q``: along the curve (interior points
+    for a spline, empty when straight) when both ends are on it, else a
+    line; with its length."""
+    if path is not None:
+        sp, dp = path.locate(p)
+        sq, dq = path.locate(q)
+        if dp <= path.tolerance and dq <= path.tolerance:
+            length = path.span(sp, sq)
+            interior = path.edge_interior(sp, length, path.tolerance * 1.0e-3)
+            return ("curve", interior, math.dist(p, q) if not interior else
+                    _polyline_lengths([p, *interior, q])[-1])
+    return ("line", (), math.dist(p, q))
+
+
+def _match_counts(resolved: list[_FillSide], first: int, second: int, corners) -> None:
+    one, other = resolved[first], resolved[second]
+    open_kinds = ("open",)
+    if one.kind in open_kinds and other.kind in open_kinds:
+        return
+    if one.kind in open_kinds or other.kind in open_kinds:
+        pending, source = (one, other) if one.kind in open_kinds else (other, one)
+        targets = [1.0 - f for f in reversed(source.fractions())]
+        if len(targets) <= 2:
+            return
+        route, path = pending.route, pending.path
+        lengths = _polyline_lengths(route)
+        points = [_polyline_at(route, lengths, f * lengths[-1]) for f in targets]
+        points[0], points[-1] = route[0], route[-1]
+        pending.kind = "matched"
+        pending.vertices = [pending.vertices[0], *([None] * (len(points) - 2)), pending.vertices[-1]]
+        pending.points = points
+        pending.segments = [_new_segment(p, q, path) for p, q in zip(points, points[1:])]
+        pending.lengths = [segment[2] for segment in pending.segments]
+        return
+    if len(one.points) == len(other.points):
+        return
+    raise TopologyError(_mismatch_message(resolved, first, second, corners))
+
+
+def _mismatch_message(resolved, first, second, corners) -> str:
+    sides = {first: resolved[first], second: resolved[second]}
+    count = {k: len(side.points) - 1 for k, side in sides.items()}
+    long_k, short_k = (first, second) if count[first] > count[second] else (second, first)
+    long_side, short_side = sides[long_k], sides[short_k]
+    # Fractions of the long side's stations read along the short side.
+    targets = [1.0 - f for f in reversed(long_side.fractions())]
+    short_f = short_side.fractions()
+    interior = sorted(targets[1:-1], key=lambda f: -min(abs(f - g) for g in short_f))
+    extra = sorted(interior[:count[long_k] - count[short_k]])
+    hints = []
+    for f in extra:
+        s = max(0, min(len(short_f) - 2, _bisect(short_f, f) - 1))
+        local = (f - short_f[s]) / (short_f[s + 1] - short_f[s]) if short_f[s + 1] > short_f[s] else 0.5
+        p, q = short_side.vertices[s], short_side.vertices[s + 1]
+        if short_side.segments[s][0] == "edge":
+            hints.append(f"split_edge {p}-{q} {local:.3g}")
+        else:
+            hints.append(f"a station at {local:.3g} of the way from {p} to {q}")
+    def name(k: int) -> str:
+        return f"side{k + 1} ({corners[k]}..{corners[(k + 1) % 4]}, {count[k]} edge(s))"
+    return (
+        f"opposite sides need as many edges: {name(first)} against {name(second)}; "
+        f"side{short_k + 1} lacks stations facing side{long_k + 1}'s near " + "; ".join(hints)
+        + f" (or remove {count[long_k] - count[short_k]} station(s) from side{long_k + 1})"
+    )
+
+
+def _fill_fold_message(model, build, index, i, j, n, m, quad, sign, names) -> str:
+    if build.prefix is not None:
+        block_id = f"{build.prefix}_b{index}"
+    else:
+        used = {block.id for block in model.blocks}
+        block_id = None
+        for _ in range(index + 1):
+            block_id = model._next_id("b", used)
+            used.add(block_id)
+    labels = []
+    for (di, dj), point in zip(((0, 0), (1, 0), (1, 1), (0, 1)), quad):
+        vertex = names.get((i + di, j + dj))
+        labels.append(f"{vertex or 'new'} ({point[0]:.6g}, {point[1]:.6g})")
+    bad = 0
+    for corner in range(4):
+        p, q, r = quad[corner - 1], quad[corner], quad[(corner + 1) % 4]
+        cross = (q[0] - p[0]) * (r[1] - q[1]) - (q[1] - p[1]) * (r[0] - q[0])
+        if cross * sign <= MeshModel.COORDINATE_TOLERANCE * math.dist(p, q) * math.dist(q, r):
+            bad = corner
+            break
+    return (
+        f"fill block {block_id} (column {i + 1} of {n}, row {j + 1} of {m}) [{', '.join(labels)}] "
+        f"would not be strictly convex at its corner {labels[bad]}: the stations of opposite sides "
+        "do not face each other there, or a side bends more than the transfinite map follows; "
+        "move or add stations, or fill the region in parts"
+    )
+
+
+def _refuse_overlap(model: MeshModel, quads, names, position) -> None:
+    """Refuse a fill block lying over an existing block: an existing vertex
+    strictly inside it, or its centre inside an existing block."""
+    existing = []
+    for block in model.blocks:
+        polygon = _block_polygon(model, block)
+        xs = [p[0] for p in polygon]
+        ys = [p[1] for p in polygon]
+        existing.append((block, polygon, (min(xs), min(ys), max(xs), max(ys))))
+    every_vertex = [(v.id, (v.x, v.y)) for v in model.vertices.values()]
+    for (i, j), quad in quads:
+        corners_here = {names.get((i + di, j + dj)) for di, dj in ((0, 0), (1, 0), (1, 1), (0, 1))}
+        xs = [p[0] for p in quad]
+        ys = [p[1] for p in quad]
+        box = (min(xs), min(ys), max(xs), max(ys))
+        centre = (sum(xs) / 4.0, sum(ys) / 4.0)
+        for block, polygon, (x0, y0, x1, y1) in existing:
+            if x0 <= centre[0] <= x1 and y0 <= centre[1] <= y1 and _inside(centre, polygon):
+                raise TopologyError(
+                    f"the fill's block at column {i + 1}, row {j + 1} would lie over the existing block "
+                    f"{block.id}: check the corners and sides"
+                )
+        for vertex_id, point in every_vertex:
+            if vertex_id in corners_here:
+                continue
+            if box[0] < point[0] < box[2] and box[1] < point[1] < box[3] and _strictly_inside(point, quad):
+                raise TopologyError(
+                    f"the existing vertex {vertex_id} lies inside the fill's block at column {i + 1}, "
+                    f"row {j + 1}: a side passes the wrong side of it, or it should be a station"
+                )
+
+
+def _strictly_inside(point: Point, quad: Sequence[Point]) -> bool:
+    """Inside a convex quad, clear of its sides by a relative tolerance."""
+    signs = []
+    for k in range(4):
+        a, b = quad[k], quad[(k + 1) % 4]
+        cross = (b[0] - a[0]) * (point[1] - a[1]) - (b[1] - a[1]) * (point[0] - a[0])
+        signs.append(cross / max(math.dist(a, b) ** 2, 1.0e-300))
+    return all(s > 1.0e-9 for s in signs) or all(s < -1.0e-9 for s in signs)
+

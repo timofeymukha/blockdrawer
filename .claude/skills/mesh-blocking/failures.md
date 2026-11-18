@@ -43,6 +43,9 @@ shows why.
 | A gate in the wrong place along the wall: a band block sheared although its spokes are fine | the wall vertex sits off where its spoke wants it | `smooth slide=true` (slides it along the wall, re-cut from the input wall, carrying the band spoke), or `slide_vertex V fraction=F` by hand and then move the spoke's front with `move_vertex` |
 | A wake or far-field block with a corner near 180 degrees | a ring vertex in the wrong place | `move_vertex` (with `carry_curves=true` for curved edges) or `split_edge` with a centre vertex |
 | A folded band block at a sharp convex feature | the feature needs more incident blocks | a fan (`add_band` and `add_ring` make one above 60 degrees of turning), a seam or a wake (engine) - not a thinner band |
+| `add_fill` refused: "opposite sides need as many edges" | the side stations do not pair up | the `split_edge` or station the refusal names (the short side's segment facing the extra station), or remove a station from the long side |
+| `add_fill` refused: a fill block "would not be strictly convex" | stations on opposite sides do not face each other, or a side bends further than one transfinite map follows | move or add stations; fill the region in parts (a side corner in between) |
+| `add_fill` refused: "bound no region" or "ambiguous" | the corners are not in order round the region, or a side runs two ways between its corners | reorder the corners; name that side's vertices with `side1=...` |
 | `add_band` refused: "would fold ... concave corner" | a mitre at a concave corner moves the offset end past a short edge beside it | the height the refusal names, or merge the short edge (`combine_blocks`, a station moved) and band again |
 | A fan at a trailing edge (`add_ring`, `add_band`) | the body-normal lines collapse into a downstream fan: Mesh OK, but a poor wake | for a production wake, the engine's C-grid (`engine.md`) |
 | A core spoke crossing a band front in a narrow gap | the gap holds too many layers | engine `--span-gaps`, or move the ring |
@@ -68,4 +71,5 @@ edge by more than that.
 Every block is checked strictly convex when it is made and by `validate`,
 and two blocks on the same side of a shared edge are refused; edges crossing
 elsewhere and blocks overlapping without sharing an edge are not checked
-before `check`. Render every corner, gap and bridge, and run `check`.
+before `check` (`add_fill` alone refuses a block over an existing block's
+centre or an existing vertex). Render every corner, gap and bridge, and run `check`.
