@@ -12,7 +12,9 @@ from blockdrawer.foam import write_block_mesh_dict
 from blockdrawer.model import MeshModel, edge_key
 from blockdrawer.preview import build_mesh_preview
 from blockdrawer.symmetry import symmetrize_model
-from tests.helpers import build_ring_model, center_vertex_ids
+from tests.helpers import (
+    build_periodic_rows, build_ring_model, center_vertex_ids,
+)
 
 
 @unittest.skipUnless(
@@ -115,6 +117,17 @@ class OpenFoamIntegrationTests(unittest.TestCase):
         model.set_edge_boundary(edge_key("v1", "v2"), "periodicB")
 
         self._assert_block_mesh_accepts(model)
+
+    def test_block_mesh_accepts_cyclic_pair_whatever_the_vertex_names(self) -> None:
+        # Before the export ordered coupled faces by geometry, these failed
+        # with "face 0 area does not match neighbour ... possible face
+        # ordering problem".
+        for starts in ((0,) * 6, (0, 0, 0, 2, 2, 2), (1, 0, 3, 3, 1, 2)):
+            with self.subTest(starts=starts):
+                model = build_periodic_rows(starts=starts, z_cells=2)
+                self._assert_block_mesh_accepts(model)
+                result = run_mesh_check(model, locate=False)
+                self.assertTrue(result.ok, result.problems or result.fatal_errors)
 
     def test_block_mesh_accepts_automatic_cyclic_z_patch_pair(self) -> None:
         model = MeshModel()

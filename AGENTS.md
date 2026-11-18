@@ -438,7 +438,26 @@ them in the canvas widgets.
 - `blockdrawer/foam.py`: deterministic `blockMeshDict` serialization. Each 2D
   vertex is emitted at `zMin` and `zMax`; a block becomes one `hex`, with the
   editable edge counts and the global z cell count. It also generates one
-  correctly oriented zMin/zMax boundary face per block.
+  correctly oriented zMin/zMax boundary face per block. Cyclic pairs go
+  through `blockdrawer/cyclic.py`: the second patch's faces are listed in the
+  order of their partners, and a block with a coupled side is written from
+  the start corner (`_block_rotations`, a mod-4 difference system over the
+  blocks) that makes every coupled pair local sides 0/2 or 1/3 running the
+  same way, since blockMesh writes a side's cell faces in the block's local
+  order (along then through z on sides 0/2, through z then along on 1/3).
+  With one z cell only the along-edge direction must agree, the fallback
+  when the strict system has no solution. Only the exported hex start
+  changes; the model's block order is untouched.
+- `blockdrawer/cyclic.py`: the face-by-face correspondence of each reciprocal
+  cyclic pair from geometry alone: `match_cyclic_pair` finds the rigid motion
+  (a translation first, else a rotation) mapping every edge of the first
+  patch onto one of the second, each image running against its partner's
+  block traversal as a coupled face must; `check_cyclic_nodes` compares
+  every mesh node of each edge with its partner's at OpenFOAM's
+  `matchTolerance` (1e-4 of the face size), so counts, grading and curves
+  are one check. Both refuse naming the edges. `CyclicMatch.aligned` says
+  whether the two canonical edge directions are the same physical
+  direction, for code that matches partner gradings.
 - `blockdrawer/history.py`: bounded, complete-model snapshots for atomic undo/redo.
   Snapshotting is appropriate because one topology operation can update multiple
   constrained edges. A mouse drag is recorded once, on release.
@@ -838,7 +857,9 @@ them in the canvas widgets.
 - Named boundaries have an OpenFOAM type and a persistent unique canvas color.
   Only exterior 2D edges can be assigned, and each edge belongs to at most one
   boundary. `cyclic` definitions are reciprocal pairs selected with
-  `neighbourPatch`; ordinary `cyclic` geometry is inferred by OpenFOAM. Pairing
+  `neighbourPatch`; ordinary `cyclic` geometry is inferred by OpenFOAM, and
+  export orders and orients the coupled faces by geometry (never by vertex
+  names), refusing a pair that does not correspond face by face. Pairing
   two patches is atomic, while changing/removing one turns its former partner
   back into `patch`. Boundary type and cyclic-neighbour combobox selections apply
   immediately through one history action; there is no separate Apply button.

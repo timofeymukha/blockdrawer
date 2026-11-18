@@ -5,7 +5,8 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-from .domain import TopologyError
+from .cyclic import CyclicPair, cyclic_pairs
+from .domain import EdgeKey, TopologyError
 from .model import MeshModel
 
 
@@ -14,7 +15,9 @@ def block_mesh_dict(model: MeshModel) -> str:
     model.validate()
     if not model.blocks:
         raise TopologyError("Cannot export blockMeshDict without at least one block")
-    _validate_cyclic_boundaries(model)
+    pairs = cyclic_pairs(model)
+    rotations = _block_rotations(model, pairs)
+    patch_order = _cyclic_face_order(pairs)
     vertex_ids = list(model.vertices)
     bottom_index = {identifier: index for index, identifier in enumerate(vertex_ids)}
     top_offset = len(vertex_ids)
@@ -55,12 +58,16 @@ def block_mesh_dict(model: MeshModel) -> str:
 
     lines.extend([")", ";", "", "blocks", "("])
     for block in model.blocks:
-        lower = [bottom_index[identifier] for identifier in block.vertices]
+        shift = rotations.get(block.id, 0)
+        corners = block.vertices[shift:] + block.vertices[:shift]
+        lower = [bottom_index[identifier] for identifier in corners]
         upper = [index + top_offset for index in lower]
         nx, ny, nz = model.block_cell_counts(block)
+        if shift % 2:
+            nx, ny = ny, nx
         indices = " ".join(str(index) for index in lower + upper)
         grading = " ".join(
-            _scalar(value) for value in _block_edge_grading(model, block.vertices)
+            _scalar(value) for value in _block_edge_grading(model, corners)
         )
         lines.append(
             f"    hex ({indices}) ({nx} {ny} {nz}) edgeGrading ({grading})"
@@ -120,7 +127,9 @@ def block_mesh_dict(model: MeshModel) -> str:
             "        faces",
             "        (",
         ])
-        for current in model.boundary_edges(boundary.name):
+        for current in patch_order.get(
+            boundary.name, model.boundary_edges(boundary.name)
+        ):
             _, _, directed = occurrences[current][0]
             first, second = directed
             first_index = bottom_index[first]
@@ -242,36 +251,123 @@ def _block_edge_grading(
     )
 
 
-def _validate_cyclic_boundaries(model: MeshModel) -> None:
-    """Reject incomplete cyclic pairs before writing an unusable dictionary."""
-    checked: set[str] = set()
-    for boundary in model.boundaries.values():
-        if boundary.kind != "cyclic" or boundary.name in checked:
-            continue
-        assert boundary.neighbour_patch is not None
-        partner = model.boundaries[boundary.neighbour_patch]
-        first_edges = model.boundary_edges(boundary.name)
-        second_edges = model.boundary_edges(partner.name)
-        if not first_edges or not second_edges:
-            raise TopologyError(
-                f"Cyclic pair {boundary.name!r}/{partner.name!r} needs "
-                "at least one assigned edge on each patch"
-            )
-        first_cells = sorted(model.edge_cells[current] for current in first_edges)
-        second_cells = sorted(model.edge_cells[current] for current in second_edges)
-        if first_cells != second_cells:
-            raise TopologyError(
-                f"Cyclic pair {boundary.name!r}/{partner.name!r} needs matching "
-                "edge subdivisions"
-            )
-        first_lengths = sorted(model.edge_length(current) for current in first_edges)
-        second_lengths = sorted(model.edge_length(current) for current in second_edges)
-        if len(first_lengths) != len(second_lengths) or any(
-            not math.isclose(first, second, rel_tol=1.0e-9, abs_tol=1.0e-12)
-            for first, second in zip(first_lengths, second_lengths)
-        ):
-            raise TopologyError(
-                f"Cyclic pair {boundary.name!r}/{partner.name!r} needs matching "
-                "edge lengths"
-            )
-        checked.update((boundary.name, partner.name))
+def _cyclic_face_order(pairs: list[CyclicPair]) -> dict[str, list[EdgeKey]]:
+    """List each cyclic pair's faces so face i of one is face i of the other."""
+    order: dict[str, list[EdgeKey]] = {}
+    for pair in pairs:
+        order[pair.first] = [match.first for match in pair.matches]
+        order[pair.second] = [match.second for match in pair.matches]
+    return order
+
+
+def _block_rotations(model: MeshModel, pairs: list[CyclicPair]) -> dict[str, int]:
+    """Export-time start corners that make coupled faces correspond.
+
+    blockMesh writes the faces of a block face in the block's local index
+    order: along the edge then through z on a y-min/y-max face, through z
+    then along the edge on an x-min/x-max face. Two coupled faces therefore
+    correspond face by face when, in their blocks' local numbering, they are
+    an opposite pair of local edges (0 and 2, or 1 and 3) - exactly the
+    numbering of a block's own opposite faces - and starting a hex at
+    another corner of the same counter-clockwise cycle (shift r) renumbers
+    local edge i as i - r. Coupled occurrences at local edges a in block X
+    and b in block Y thus need r_X - r_Y = a - b - 2 (mod 4), solved block by
+    block from each component's first block at its stored start. With one
+    z cell the through-z order is moot and only the direction along the
+    edge must agree (local edges in {0, 1} run with the block's
+    counter-clockwise traversal, {2, 3} against it; coupled faces run
+    against each other's traversal), which is the fallback when the strict
+    system has no solution. Blocks without a cyclic edge keep their order.
+    """
+    if not pairs:
+        return {}
+    occurrence: dict[EdgeKey, tuple[str, int]] = {}
+    for current, found in model.edge_occurrences().items():
+        if len(found) == 1:
+            block, index, _ = found[0]
+            occurrence[current] = (block.id, index)
+    couplings = [
+        (occurrence[match.first], occurrence[match.second], match)
+        for pair in pairs for match in pair.matches
+    ]
+    try:
+        return _solve_shifts(model, couplings, strict=True)
+    except TopologyError as error:
+        relaxed = _solve_shifts(model, couplings, strict=False)
+        if model.z_cells == 1:
+            return relaxed
+        raise TopologyError(
+            f"{error}; with one z cell they would export, since blockMesh "
+            "then has no through-z order to match"
+        ) from None
+
+
+def _solve_shifts(model, couplings, *, strict: bool) -> dict[str, int]:
+    """Per-block start shifts satisfying every coupling, or a refusal."""
+    if strict:
+        # r_X - r_Y = a - b - 2 (mod 4).
+        links: dict[str, list[tuple[str, int, object]]] = {}
+        for (x, a), (y, b), match in couplings:
+            difference = (a - b - 2) % 4
+            links.setdefault(x, []).append((y, difference, match))
+            links.setdefault(y, []).append((x, -difference % 4, match))
+        shifts: dict[str, int] = {}
+        for block in model.blocks:
+            if block.id not in links or block.id in shifts:
+                continue
+            shifts[block.id] = 0
+            queue = [block.id]
+            while queue:
+                current = queue.pop()
+                for other, difference, match in links[current]:
+                    wanted = (shifts[current] - difference) % 4
+                    if other not in shifts:
+                        shifts[other] = wanted
+                        queue.append(other)
+                    elif shifts[other] != wanted:
+                        raise _odd_cycle(match)
+        return {key: value for key, value in shifts.items() if value}
+
+    # One z cell: only the direction along each coupled edge must agree.
+    # s[(block, axis)] is +1 when local index increases along the block's
+    # counter-clockwise traversal of its edge ``axis``; local edge
+    # ``axis + 2`` then runs against it: s(a) sign(a) = -s(b) sign(b).
+    axis_links: dict[tuple[str, int], list[tuple[tuple[str, int], int, object]]] = {}
+    for (x, a), (y, b), match in couplings:
+        relation = -(1 if a < 2 else -1) * (1 if b < 2 else -1)
+        axis_links.setdefault((x, a % 2), []).append(((y, b % 2), relation, match))
+        axis_links.setdefault((y, b % 2), []).append(((x, a % 2), relation, match))
+    value: dict[tuple[str, int], int] = {}
+    for block in model.blocks:
+        for axis in (0, 1):
+            start = (block.id, axis)
+            if start not in axis_links or start in value:
+                continue
+            value[start] = 1
+            queue = [start]
+            while queue:
+                current = queue.pop()
+                for other, relation, match in axis_links[current]:
+                    wanted = value[current] * relation
+                    if other not in value:
+                        value[other] = wanted
+                        queue.append(other)
+                    elif value[other] != wanted:
+                        raise _odd_cycle(match)
+    # Shift r gives (s0, s1): 0 -> (+, +), 1 -> (-, +), 2 -> (-, -), 3 -> (+, -).
+    table = {(1, 1): 0, (-1, 1): 1, (-1, -1): 2, (1, -1): 3}
+    result: dict[str, int] = {}
+    for block in model.blocks:
+        shift = table[(value.get((block.id, 0), 1), value.get((block.id, 1), 1))]
+        if shift:
+            result[block.id] = shift
+    return result
+
+
+def _odd_cycle(match) -> TopologyError:
+    first, second = match.first, match.second
+    return TopologyError(
+        f"Cyclic edges {first[0]}-{first[1]} and {second[0]}-{second[1]} "
+        "cannot be written as corresponding block faces: the blocks' coupled "
+        "sides close a cycle no choice of hex start corners satisfies"
+    )

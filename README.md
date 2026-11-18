@@ -154,8 +154,17 @@ and vertex drags update the preview without a server round trip for it.
   apply immediately; there is no separate Apply button. BlockDrawer configures
   the reciprocal pairing in one undoable operation; changing or removing one
   member returns its former partner to `patch`. Ordinary cyclic translation or
-  rotation is inferred by OpenFOAM from the matching patches. Export checks that
-  cyclic partners both have edges with matching lengths and subdivisions.
+  rotation is inferred by OpenFOAM from the matching patches. OpenFOAM couples
+  face *i* of one patch with face *i* of the other, so export pairs the edges by
+  geometry, never by vertex names: it finds the one translation (or, failing
+  that, rotation) that maps every edge of the first patch onto an edge of the
+  second, lists the second patch's faces in its partners' order, and starts
+  each hex at the corner that makes the two blockMesh faces of every pair an
+  opposite side pair running the same way (the order blockMesh writes their
+  cell faces in). A pair with no such motion is refused naming the edges left
+  without a partner, and a pair whose corresponding edges place a mesh node
+  apart by more than OpenFOAM's matching tolerance (different counts, grading
+  or curves) is refused naming both edges.
 - Press `E`, choose **File → Export blockMeshDict…**, or click **Export** to open
   the Export panel. It contains the z cell count, z extents, scale, and the names
   and types of the automatic zMin/zMax patches. These values are applied when a

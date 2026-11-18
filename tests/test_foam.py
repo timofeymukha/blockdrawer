@@ -3,6 +3,7 @@ import unittest
 
 from blockdrawer.foam import block_mesh_dict
 from blockdrawer.model import MeshModel, TopologyError, edge_key
+from tests.helpers import build_periodic_rows
 
 
 class FoamExportTests(unittest.TestCase):
@@ -270,6 +271,128 @@ class FoamExportTests(unittest.TestCase):
 
         with self.assertRaisesRegex(TopologyError, "at least one assigned"):
             block_mesh_dict(model)
+
+    def test_cyclic_faces_correspond_whatever_the_vertex_names(self) -> None:
+        # Face i of each cyclic patch must be the translate of face i of its
+        # neighbour, and both block faces must be the same local side pair
+        # (0/2 or 1/3) running the same way, since blockMesh writes the cell
+        # faces of each listed block face in the block's local order.
+        for starts in ((0,) * 6, (0, 0, 0, 2, 2, 2), (1, 0, 3, 3, 1, 2)):
+            for order in ((0, 1, 2, 3, 4, 5), (0, 1, 2, 5, 4, 3), (5, 3, 1, 0, 2, 4)):
+                with self.subTest(starts=starts, order=order):
+                    model = build_periodic_rows(block_order=order, starts=starts)
+                    self._assert_cyclic_faces_correspond(
+                        block_mesh_dict(model), "lower", "upper", (0.0, 1.0)
+                    )
+
+    def test_cyclic_pair_that_is_not_a_translate_is_refused_naming_edges(self) -> None:
+        model = build_periodic_rows()
+        # Move one upper vertex: the pair no longer maps edge onto edge.
+        model.vertices["y"].x = 1.2
+        with self.assertRaisesRegex(
+            TopologyError, r"does not correspond face by face"
+        ) as caught:
+            block_mesh_dict(model)
+        message = str(caught.exception)
+        self.assertIn("translation by (0, 1)", message)
+        self.assertIn("c-k, c-m of 'lower'", message)
+        self.assertIn("f-y, d-y of 'upper'", message)
+
+    def test_cyclic_partner_with_other_grading_is_refused_naming_edges(self) -> None:
+        model = build_periodic_rows()
+        # The upper partner of the lower edge c-k is d-y (both from x = 0 to
+        # x = 1); grade it the other way.
+        model.set_edge_grading(edge_key("d", "y"), "total_ratio", 1 / 3.0)
+        with self.assertRaisesRegex(
+            TopologyError, r"edge c-k of 'lower' and its partner d-y of 'upper'"
+            r" place node \d+ .* apart"
+        ):
+            block_mesh_dict(model)
+
+    def test_cyclic_partner_with_other_count_is_refused_naming_edges(self) -> None:
+        # Two unconnected blocks, so the partners' counts are independent.
+        model = MeshModel()
+        for name, x, y in (("p", 0, 2), ("q", 1, 2), ("r", 1, 3), ("s", 0, 3)):
+            model.add_vertex(x, y, vertex_id=name)
+        model.add_block_from_vertices(["p", "q", "r", "s"])
+        model.set_edge_cells(edge_key("v0", "v1"), 5)
+        model.add_boundary("lower")
+        model.add_boundary("upper")
+        model.set_boundary_type("lower", "cyclic", neighbour_patch="upper")
+        model.set_edge_boundary(edge_key("v0", "v1"), "lower")
+        model.set_edge_boundary(edge_key("r", "s"), "upper")
+        with self.assertRaisesRegex(
+            TopologyError, r"partner r-s of 'upper' need the same cell count"
+        ):
+            block_mesh_dict(model)
+
+    def test_rotational_cyclic_pair_on_adjacent_block_sides(self) -> None:
+        # The bottom and left sides of one block, coupled by a rotation of
+        # 90 degrees about their common corner: one z cell exports; with
+        # more, blockMesh's through-z face order cannot correspond.
+        model = MeshModel()
+        model.set_edge_grading(edge_key("v0", "v1"), "total_ratio", 3.0)
+        model.set_edge_grading(edge_key("v0", "v3"), "total_ratio", 3.0)
+        model.add_boundary("low")
+        model.add_boundary("left")
+        model.set_boundary_type("low", "cyclic", neighbour_patch="left")
+        model.set_edge_boundary(edge_key("v0", "v1"), "low")
+        model.set_edge_boundary(edge_key("v0", "v3"), "left")
+
+        self.assertEqual(block_mesh_dict(model).count("type cyclic;"), 2)
+        model.set_z_cells(3)
+        with self.assertRaisesRegex(TopologyError, "with one z cell they would export"):
+            block_mesh_dict(model)
+
+    def _assert_cyclic_faces_correspond(
+        self, text: str, first: str, second: str, shift: tuple[float, float]
+    ) -> None:
+        number = r"[-+]?[0-9.eE+-]+"
+        vertex_lines = re.search(r"vertices\s*\((.*?)\n\)", text, re.DOTALL).group(1)
+        points = [
+            (float(x), float(y)) for x, y, _ in re.findall(
+                rf"\(({number}) ({number}) ({number})\)", vertex_lines
+            )
+        ]
+        hexes = [
+            [int(value) for value in found.split()][:4]
+            for found in re.findall(r"hex \(([0-9 ]+)\)", text)
+        ]
+
+        def faces(name: str) -> list[tuple[int, int]]:
+            body = re.search(
+                rf"{name}\s*\{{.*?faces\s*\((.*?)\);", text, re.DOTALL
+            ).group(1)
+            return [
+                tuple(int(value) for value in face.split()[:2])
+                for face in re.findall(r"\(([0-9 ]+)\)", body)
+            ]
+
+        def local(face: tuple[int, int]) -> tuple[int, tuple[float, float]]:
+            # The block's local side index and where local index 0 lies on it.
+            for corners in hexes:
+                for side in range(4):
+                    a, b = corners[side], corners[(side + 1) % 4]
+                    if {a, b} == set(face):
+                        start = a if side < 2 else b
+                        return side, points[start]
+            raise AssertionError(f"face {face} is not a block side")
+
+        first_faces, second_faces = faces(first), faces(second)
+        self.assertEqual(len(first_faces), len(second_faces))
+        for face_a, face_b in zip(first_faces, second_faces):
+            moved = {
+                (round(points[i][0] + shift[0], 9), round(points[i][1] + shift[1], 9))
+                for i in face_a
+            }
+            self.assertEqual(
+                moved, {(round(points[i][0], 9), round(points[i][1], 9)) for i in face_b}
+            )
+            side_a, start_a = local(face_a)
+            side_b, start_b = local(face_b)
+            self.assertEqual((side_a - side_b) % 4, 2)
+            self.assertAlmostEqual(start_a[0] + shift[0], start_b[0])
+            self.assertAlmostEqual(start_a[1] + shift[1], start_b[1])
 
     def test_arc_is_exported_on_lower_and_upper_extruded_edges(self) -> None:
         model = MeshModel()
