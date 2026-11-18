@@ -644,7 +644,8 @@ edges carried along, merging it across an internal edge, splitting an edge,
 regrading an edge to the series of its opposite edge - and applies the one
 that most improves the block and its neighbours, judged on the corner
 screen and the sampled transfinite interior by the worst cell and by the
-count of severely sheared cells; it reports when no move helps - a sound
+count of severely sheared cells (neither may get worse for a gain in the
+other); it reports when no move helps - a sound
 neighbourhood (no severe cell, every angle at least 45 degrees from
 degenerate) is "nothing to repair", since it judges angles only and size
 jumps and aspect ratios belong to the quality report, and anything else means

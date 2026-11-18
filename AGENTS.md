@@ -200,11 +200,13 @@ them in the canvas widgets.
   `blockdrawer.sampling`), since the
   corner screen alone passed a merge that folded between the corners and a
   coarser sampling passed a fold of one real cell. A move must raise the
-  worst cell by half a degree, or keep it and remove a tenth of the
-  *severe* sampled cells (a corner within 20 degrees of 0 or 180, checkMesh's
-  70 degrees of non-orthogonality on a sheared cell): a seam wedge's apex
-  angle is what it is however the cells are distributed, and the severe
-  count is what a grading move acts on. Boundary vertices never move; with
+  worst cell by half a degree without adding severe cells, or keep it and
+  remove a tenth of the *severe* sampled cells (a corner within 20 degrees
+  of 0 or 180, checkMesh's 70 degrees of non-orthogonality on a sheared
+  cell): a seam wedge's apex angle is what it is however the cells are
+  distributed, and the severe count is what a grading move acts on
+  (`RepairScore.improves`; the high-lift trial applied a move that raised
+  the worst cell and took the severe count from 1172 to 1193). Boundary vertices never move; with
   no improving move nothing changes and the result says why: a sound
   neighbourhood (no severe cell, every angle at least 45 degrees from
   degenerate - `SOUND_ANGLE`) is reported as nothing to repair, pointing at

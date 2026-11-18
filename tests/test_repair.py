@@ -1,3 +1,4 @@
+import math
 import unittest
 
 from blockdrawer.commands import CommandError, apply_commands, command_specs
@@ -143,6 +144,30 @@ class RepairBlockTests(unittest.TestCase):
         self.assertTrue(RepairScore(12.0, 150.0, 12.0, severe=90).improves(before))
         self.assertFalse(RepairScore(12.0, 150.0, 12.0, severe=91).improves(before))
         self.assertFalse(RepairScore(11.5, 150.0, 11.5, severe=10).improves(before))
+        # A gain on the worst cell paid for in severe cells is no gain.
+        self.assertFalse(RepairScore(14.0, 150.0, 14.0, severe=101).improves(before))
+
+    def test_a_move_that_opens_a_wedge_by_adding_severe_cells_is_not_applied(self) -> None:
+        # Two wedges at a fixed boundary apex A share the edge A-B with a
+        # free vertex B: W turns 15 degrees, N 21 degrees and has ten times
+        # W's cells. Rotating B opened W to 17.8 degrees, closed N under the
+        # 20-degree severe angle, and was applied with the severe count
+        # going from 129 to 185.
+        def polar(r, degrees):
+            return (r * math.cos(math.radians(degrees)), r * math.sin(math.radians(degrees)))
+
+        points = {"A": (0.0, 0.0), "C": polar(1.0, 0.0), "B": polar(1.0, 15.0), "D": polar(1.0, 36.0),
+                  "P": polar(1.5, 7.5), "E": polar(1.5, 25.5), "Q": polar(2.0, 15.0)}
+        commands = [f"add_vertex {x} {y} id={name}" for name, (x, y) in points.items()]
+        commands += ["add_block_from_vertices A,C,P,B", "add_block_from_vertices A,B,E,D",
+                     "add_block_from_vertices B,P,Q,E", "remove_edge v0-v1",
+                     "set_edge_cells A-C 6", "set_edge_cells A-B 40", "set_edge_cells B-E 64"]
+        model = apply_commands(MeshModel(box=(20, 20, 21, 21)), commands).model
+        wedge = next(b.id for b in model.blocks if set(b.vertices) == {"A", "C", "P", "B"})
+        result = repair_block(model, wedge)
+        self.assertTrue(result.applied, result.reason)
+        self.assertGreaterEqual(result.after.worst, result.before.worst + 0.5)
+        self.assertLessEqual(result.after.severe, result.before.severe)
 
     def test_a_vertex_move_carries_the_curved_edges_with_it(self) -> None:
         """An arc on an interior edge of the sliver: moving its vertex would

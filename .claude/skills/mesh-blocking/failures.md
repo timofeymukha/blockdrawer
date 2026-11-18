@@ -20,8 +20,8 @@ shows why.
    internal edge, splitting its edges and regrading an edge to its opposite
    edge's series, judges each on the block and its neighbours by the corner
    screen and the sampled interior at real counts, and applies the best (a
-   worst cell half a degree better, or a tenth of the severely sheared
-   cells removed). Stop when it reports a structural defect or "nothing to
+   worst cell half a degree better with no more severely sheared cells, or
+   a tenth of them removed with the worst cell kept). Stop when it reports a structural defect or "nothing to
    repair" (no severe cell, every angle at least 45 degrees from
    degenerate); the remaining defects are then size jumps or aspect ratios,
    which it does not judge.

@@ -9,9 +9,9 @@ improves the block and its neighbours, and applies it. The judge is the
 corner-angle screen of :mod:`blockdrawer.quality`, measured from the first
 mesh cell so curved edges and grading count, plus the block interiors
 sampled at the real cell counts: a move must raise the worst cell by half a
-degree, or keep it and cut the number of severely sheared cells by a tenth
-- the measure a grading move acts on, since a wedge's apex angle is what it
-is however the cells are distributed. ``checkMesh`` remains the authority
+degree without adding severely sheared cells, or keep it and cut their
+number by a tenth - the measure a grading move acts on, since a wedge's
+apex angle is what it is however the cells are distributed. ``checkMesh`` remains the authority
 on the result.
 
 Vertices on a boundary edge never move: a wall vertex must stay on the
@@ -87,7 +87,15 @@ class RepairScore:
         return min(self.min_angle, 180.0 - self.max_angle, self.interior)
 
     def improves(self, before: "RepairScore") -> bool:
-        """Half a degree on the worst cell, or a tenth fewer severe cells at no cost to it."""
+        """Half a degree on the worst cell at no cost in severe cells, or a
+        tenth fewer severe cells at no cost to the worst cell.
+
+        Each gain must leave the other measure no worse: a move opening a
+        wedge's apex by a degree while it pushed its neighbour's apex under
+        the severe angle raised the worst cell and added severe cells, and
+        was applied."""
+        if self.severe > before.severe:
+            return False
         if self.worst >= before.worst + MIN_GAIN:
             return True
         return (
@@ -350,7 +358,8 @@ def repair_block(
         else:
             reason = (
                 f"no local move raises the worst cell around {block_id} by {MIN_GAIN:g} degrees "
-                f"or removes a tenth of its {before.severe} severe cells "
+                f"without adding severe cells, or removes a tenth of its {before.severe} severe "
+                "cells without lowering the worst one "
                 f"(corners {before.min_angle:.1f} to {before.max_angle:.1f} degrees, interior "
                 f"{before.interior:.1f}; {considered} candidates): the defect is in the "
                 "topology round it, not in a vertex or a grading"
