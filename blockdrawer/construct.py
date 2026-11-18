@@ -726,7 +726,8 @@ def _fold_message(chain: _Chain, position, spokes, edge_count: int, count: int, 
         largest = low
     advice = (
         f"the largest height that builds is {_round_down(largest)}" if largest
-        else "no height builds it"
+        else ("no height builds it: the spokes at its ends already cross at the wall, as when "
+              "an edge path turns back at its end (look at its interpolation points)")
     )
     kind, index = folded
     if kind == "fan":
@@ -770,18 +771,23 @@ def _fold_message(chain: _Chain, position, spokes, edge_count: int, count: int, 
             "(a mitred spoke at a concave corner turning T degrees moves the offset point "
             "height * tan(T/2) along each edge beside it)"
         )
+        advice += ", or merge the short edge into its neighbour"
     else:
         cause = "its offset corners would not make a strictly convex block"
-    return (
-        f"the band block on edge {first}-{second} would fold at height {height:g}: "
-        f"{cause}; {advice}, or merge the short edge into its neighbour"
-    )
+    return f"the band block on edge {first}-{second} would fold at height {height:g}: {cause}; {advice}"
 
 
 def _offset_interior(path: list[Point], chain: _Chain, distance: float,
                      spoke_a, spoke_b) -> tuple[Point, ...]:
     """Interior points of an edge carried along their local normals; an arc
-    stays an arc (its one point moves along the radius)."""
+    stays an arc (its one point moves along the radius).
+
+    The offset's ends are where the end spokes put them, not on the local
+    normals: a mitre at a concave corner moves an end forward along the
+    edge, and a wall curving tighter than the offset folds the offset back
+    on itself, so points near an end can land behind it and the offset edge
+    would hook back.  Only the points running monotonically along the
+    offset chord, clear of both ends, are kept (`_monotone_points`)."""
     out = []
     n = len(path)
     for index in range(1, n - 1):
@@ -790,7 +796,43 @@ def _offset_interior(path: list[Point], chain: _Chain, distance: float,
         normal = _left(t)
         normal = normal[0] * chain.side, normal[1] * chain.side
         out.append((path[index][0] + normal[0] * distance, path[index][1] + normal[1] * distance))
-    return tuple(out)
+    (da, fa), (db, fb) = spoke_a, spoke_b
+    start = (path[0][0] + da[0] * fa * distance, path[0][1] + da[1] * fa * distance)
+    end = (path[-1][0] + db[0] * fb * distance, path[-1][1] + db[1] * fb * distance)
+    return _monotone_points(start, out, end)
+
+
+def _monotone_points(start: Point, points: Sequence[Point], end: Point) -> tuple[Point, ...]:
+    """The longest run of ``points`` (kept in order) whose projections on the
+    chord ``start`` -> ``end`` strictly increase and stay a thousandth of
+    the chord clear of both ends - the interior points of an edge path
+    that never runs backwards along its chord."""
+    ux, uy = end[0] - start[0], end[1] - start[1]
+    length = math.hypot(ux, uy)
+    if length <= 0.0 or not points:
+        return tuple(points)
+    gap = 1.0e-3 * length
+    along = [((p[0] - start[0]) * ux + (p[1] - start[1]) * uy) / length for p in points]
+    candidates = [k for k, value in enumerate(along) if gap < value < length - gap]
+    # Longest strictly increasing subsequence (first such on ties): a hook
+    # at either end, or a swallowtail in the middle, is what it leaves out.
+    best: dict[int, tuple[int, int | None]] = {}
+    for k in candidates:
+        length_here, previous = 1, None
+        for j in candidates:
+            if j >= k:
+                break
+            if along[j] < along[k] - gap * 1.0e-3 and best[j][0] + 1 > length_here:
+                length_here, previous = best[j][0] + 1, j
+        best[k] = (length_here, previous)
+    if not best:
+        return ()
+    tail = max(best, key=lambda k: (best[k][0], -k))
+    kept = []
+    while tail is not None:
+        kept.append(points[tail])
+        tail = best[tail][1]
+    return tuple(reversed(kept))
 
 
 def _band_to_box(build, chain, position, spokes, box, edge_path):

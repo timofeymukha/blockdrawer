@@ -375,7 +375,12 @@ them in the canvas widgets.
   with other edges; a band that would fold is refused before any vertex is
   made, naming the edge, the concave corner whose mitre moves the offset
   end `height * tan(turn/2)` along it past its length, and the largest
-  height that builds (bisected over the whole band, `_fold_message`). `add_ring`
+  height that builds (bisected over the whole band, `_fold_message`). An
+  offset curved edge keeps only the interior points running monotonically
+  along the chord between its offset ends, clear of both by a thousandth
+  (`_monotone_points`, a longest increasing run): a mitre or a wall curving
+  tighter than the offset put points behind an end, and the hooked spline
+  made the next band fail as misoriented. `add_ring`
   places stations at curve corners (`CORNER_ANGLE`) and by arc length,
   spline wall edges through the curve's points (at most
   `MAX_SPLINE_POINTS`, none within a thousandth of a station). Curves

@@ -2,7 +2,7 @@ import math
 import unittest
 
 from blockdrawer.commands import apply_commands, batch_digest
-from blockdrawer.domain import TopologyError
+from blockdrawer.domain import EdgeGeometry, TopologyError
 from blockdrawer.history import ModelHistory
 from blockdrawer.model import MeshModel, edge_key
 from blockdrawer.session import to_data
@@ -132,6 +132,44 @@ class BandTests(unittest.TestCase):
         # Below that height the band block keeps the wall edge as its own.
         wall_block = next(b for b in built.blocks if {corner, short} <= set(b.vertices) and b.id.startswith("B_"))
         self.assertIn(edge_key(corner, short), [edge_key(*wall_block.directed_edge(k)) for k in range(4)])
+
+    def test_an_offset_spline_never_runs_back_behind_its_ends(self) -> None:
+        # The wall edge leaving the reflex corner (1, 1) is a spline with
+        # points 0.02 and 0.05 from the corner; the mitre there moves the
+        # offset's start 0.1 along it, so those points offset along their
+        # normals used to land behind the start and the offset spline hooked
+        # back - the next band then failed ("overlap or are misoriented").
+        model = apply_commands(MeshModel(box=(0, 0, 0.9, 1)), [
+            "add_grid xs=0,0.9,1,2 ys=0,1,1.5,2 skip=1,1,2,2",
+        ]).model
+        ids = {(v.x, v.y): v.id for v in model.vertices.values()}
+        wall = edge_key(ids[(1.0, 1.0)], ids[(2.0, 1.0)])
+        xs = [1.02, 1.05, 1.1, 1.2, 1.4, 1.6, 1.8, 1.9]
+        points = [(x, 1.0 - 0.02 * math.sin(math.pi * (x - 1.0))) for x in xs]
+        if wall[0] != ids[(1.0, 1.0)]:
+            points.reverse()
+        model.edge_geometry[wall] = EdgeGeometry("spline", tuple(points))
+        model.validate()
+        banded = apply_commands(model, ["add_band bbox=0.85,0.95,2.05,2.05 height=0.1 id=B"]).model
+        offsets = [k for k, g in banded.edge_geometry.items() if g.kind == "spline" and k != wall]
+        self.assertEqual(len(offsets), 1)
+        first, second = (banded.vertices[v] for v in offsets[0])
+        chord = (second.x - first.x, second.y - first.y)
+        path = [(first.x, first.y), *banded.edge_geometry[offsets[0]].points, (second.x, second.y)]
+        along = [(p[0] - first.x) * chord[0] + (p[1] - first.y) * chord[1] for p in path]
+        self.assertEqual(along, sorted(set(along)))
+        self.assertGreaterEqual(len(path), 5)   # the hook goes, the curve stays
+        apply_commands(banded, ["add_band bbox=0.8,0.9,2.2,2.2 height=0.05"]).model.validate()
+
+    def test_monotone_points_drop_a_hook_and_a_swallowtail(self) -> None:
+        from blockdrawer.construct import _monotone_points
+
+        kept = _monotone_points(
+            (0.0, 0.0),
+            [(-0.1, 0.1), (0.2, 0.1), (0.4, 0.1), (0.35, 0.2), (0.6, 0.1), (1.05, 0.1)],
+            (1.0, 0.0),
+        )
+        self.assertEqual(kept, ((0.2, 0.1), (0.4, 0.1), (0.6, 0.1)))
 
     def test_a_ring_round_a_square_curve(self) -> None:
         model = apply_commands(MeshModel(box=(5, 5, 6, 6)), square_curve([]) + [

@@ -494,7 +494,8 @@ refused by name; `id=PREFIX` names new vertices `PREFIX_0, ...` and blocks
   rectangle, its corners taken by the nearest spokes. A band block that would
   fold - a mitre at a concave corner moves the offset end `height *
   tan(turn/2)` along the edge beside it, past a short edge's length - is
-  refused with the corner, the edge and the largest height that builds.
+  refused with the corner, the edge and the largest height that builds. An
+  offset spline keeps only the points that run forwards between its ends.
 - `add_ring CURVE HEIGHT count=N | fractions=...` - a band round a closed
   reference curve: vertices on the curve at its sharp corners and spread by
   arc length, wall edges as splines through the curve's points.
