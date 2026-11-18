@@ -468,7 +468,15 @@ them in the canvas widgets.
   refused with its would-be ID, column, row and corners; a block over an
   existing block or vertex is refused (`_refuse_overlap`). New side edges
   between two points on the side's curve are splines through its points
-  (`_CurvePath.edge_interior`, as `add_ring`'s wall edges). No engine code.
+  (`_CurvePath.edge_interior`, as `add_ring`'s wall edges). Three or five
+  corners (`_build_polygon`): that many four-sided fills (`_build_quad`)
+  round a centre vertex at the mean of the side split stations; side k is
+  split `σ_(k-1)` edges from its start, the spoke counts σ solving
+  `s_k = σ_(k-1) + σ_(k+1)` exactly (`_spoke_counts`, fractions), refused
+  unless every σ is a whole number of at least 1 (an even edge total, and
+  for a triangle each side shorter than the other two together); each
+  spoke is made by the first fill that needs it, with stations facing its
+  opposite side, and reused reversed by the next. No engine code.
 - `blockdrawer/size_distance.py`: item 3's sizing (commit 9a84f29),
   unchanged, behind `size method=distance`: the scalar wall-distance field,
   wall-normal edges graded from their finer end, tangential edges uniform,

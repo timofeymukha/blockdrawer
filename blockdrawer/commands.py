@@ -1376,8 +1376,8 @@ def _run_add_fill(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
 
     return add_fill(
         model, args["corners"],
-        sides=tuple(args[f"side{k}"] for k in range(1, 5)),
-        curves=tuple(args[f"curve{k}"] for k in range(1, 5)),
+        sides=tuple(args[f"side{k}"] for k in range(1, 6)),
+        curves=tuple(args[f"curve{k}"] for k in range(1, 6)),
         prefix=args["id"],
     ).to_data()
 
@@ -1526,15 +1526,18 @@ _register(CommandSpec(
         "station). Interior vertices by blockMesh's transfinite interpolation "
         "of the sides; new side edges between two points on curveK follow it "
         "as splines. A block that would not be strictly convex is refused by "
-        "name, nothing built."
+        "name, nothing built. Three or five corners: that many blocks round a "
+        "centre vertex, side k split at a station so that side k's edge count "
+        "is the sum of spokes k-1 and k+1 (the counts summing to an even "
+        "number; refused with the spoke counts the sides give otherwise)."
     ),
     (
-        Parameter("corners", "vertices", "four corner vertices in order round the region"),
+        Parameter("corners", "vertices", "three, four or five corner vertices in order round the region"),
         *(Parameter(f"side{k}", "vertices",
-                    f"side {k}'s stations from corner {k} to corner {k % 4 + 1} (either order)",
-                    required=False, default=()) for k in range(1, 5)),
+                    f"side {k}'s stations from corner {k} to corner {k + 1} (or 1; either order)",
+                    required=False, default=()) for k in range(1, 6)),
         *(Parameter(f"curve{k}", "curve", f"reference curve side {k} follows where it is open or new",
-                    required=False, default=None) for k in range(1, 5)),
+                    required=False, default=None) for k in range(1, 6)),
         _ID,
     ),
     _run_add_fill,

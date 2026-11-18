@@ -449,6 +449,67 @@ class FillTests(unittest.TestCase):
         second.model.validate()
 
 
+class PolygonFillTests(unittest.TestCase):
+    def polygon(self, corners, stations):
+        """Standalone corners and evenly spaced standalone stations, the
+        given number of edges per side."""
+        commands = [f"add_vertex {x} {y} id=c{k}" for k, (x, y) in enumerate(corners)]
+        for k, count in enumerate(stations):
+            (x0, y0), (x1, y1) = corners[k], corners[(k + 1) % len(corners)]
+            commands += [f"add_vertex {x0 + (x1 - x0) * j / count} {y0 + (y1 - y0) * j / count} id=s{k}_{j}"
+                         for j in range(1, count)]
+        return apply_commands(MeshModel(box=(5, 5, 6, 6)), commands).model
+
+    def test_a_triangle_is_three_fills_round_a_centre(self) -> None:
+        corners = [(0, 0), (2, 0), (1, 1.6)]
+        model = self.polygon(corners, (4, 4, 4))
+        batch = apply_commands(model, ["add_fill c0,c1,c2 id=t"])
+        data = batch.results[0].result
+        self.assertIn("3 fills round a centre (2, 2, 2 edges on its spokes)", data["note"])
+        self.assertEqual(len(data["created_blocks"]), 12)
+        centre = batch.model.vertices["t_0"]
+        self.assertAlmostEqual(centre.x, 1.0, places=12)
+        # The mean of the three side midpoints, where the spokes end.
+        self.assertAlmostEqual(centre.y, 1.6 / 3.0, places=12)
+        batch.model.validate()
+        # Uneven sides, read from c2: 3, 4, 3 edges; spoke k has
+        # (s_(k-1) + s_(k+1) - s_k) / 2 edges: 2, 1, 2.
+        uneven = apply_commands(self.polygon(corners, (4, 3, 3)), ["add_fill c2,c0,c1"])
+        self.assertIn("(2, 1, 2 edges on its spokes)", uneven.results[0].result["note"])
+        self.assertEqual(len(uneven.model.blocks), len(model.blocks) + 2 * 1 + 1 * 2 + 2 * 2)
+        uneven.model.validate()
+        # Clockwise corners build the same blocks.
+        reverse = apply_commands(model, ["add_fill c2,c1,c0 id=t"]).model
+        self.assertEqual(len(reverse.blocks), len(batch.model.blocks))
+
+    def test_a_triangle_with_an_odd_edge_total_is_refused_with_the_condition(self) -> None:
+        model = self.polygon([(0, 0), (2, 0), (1, 1.6)], (3, 2, 2))
+        with self.assertRaises(Exception) as caught:
+            apply_commands(model, ["add_fill c0,c1,c2"])
+        text = str(caught.exception)
+        self.assertIn("side edge counts (3, 2, 2)", text)
+        self.assertIn("sum to an even number and each side shorter than the other two", text)
+        model = self.polygon([(0, 0), (2, 0), (1, 1.6)], (6, 2, 2))
+        with self.assertRaises(Exception) as caught:
+            apply_commands(model, ["add_fill c0,c1,c2"])
+        self.assertIn("σ = (-1, 3, 3)", str(caught.exception))
+
+    def test_a_pentagon_is_five_fills_round_a_centre(self) -> None:
+        corners = [(math.cos(2 * math.pi * k / 5 + 0.3), math.sin(2 * math.pi * k / 5 + 0.3)) for k in range(5)]
+        model = self.polygon(corners, (2, 2, 2, 2, 2))
+        batch = apply_commands(model, ["add_fill c0,c1,c2,c3,c4"])
+        self.assertEqual(len(batch.results[0].result["created_blocks"]), 5)
+        self.assertIn("1, 1, 1, 1, 1 edges on its spokes", batch.results[0].result["note"])
+        batch.model.validate()
+        # An odd edge total has no whole spoke counts.
+        with self.assertRaises(Exception) as caught:
+            apply_commands(self.polygon(corners, (3, 2, 2, 2, 2)), ["add_fill c0,c1,c2,c3,c4"])
+        self.assertIn("a pentagon is filled as 5 blocks round a centre", str(caught.exception))
+        with self.assertRaises(Exception) as caught:
+            apply_commands(model, ["add_fill c0,c1,c2,c3 side5=c4,c0"])
+        self.assertIn("side5", str(caught.exception))
+
+
 class StationTests(unittest.TestCase):
     def wavy(self, offset=0.0, reverse=False, steps=20):
         points = [(2.0 * k / steps, offset - 0.5 + 0.1 * math.sin(2.0 * math.pi * k / steps))

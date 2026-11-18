@@ -36,7 +36,8 @@ computed:
     vertices by blockMesh's transfinite interpolation of the four sides; a
     side not given is the exterior chain joining its corners, or open
     (straight or along a curve) through the standalone vertices on it or
-    new stations facing the opposite side's.
+    new stations facing the opposite side's.  Three or five sides become
+    that many four-sided fills round a centre vertex.
 ``set_boundary_by``
     Assign every exterior edge chosen by a selector - within a tolerance of
     reference curves, inside a box, along the exterior chain between two
@@ -1771,12 +1772,13 @@ def add_fill(
     model: MeshModel,
     corners: Sequence[str],
     *,
-    sides: Sequence[Sequence[str]] = ((), (), (), ()),
-    curves: Sequence[str | None] = (None, None, None, None),
+    sides: Sequence[Sequence[str]] = (),
+    curves: Sequence[str | None] = (),
     prefix: str | None = None,
 ) -> ConstructResult:
-    """Blocks filling a four-sided region whose sides run between existing
-    vertices, interior vertices by transfinite interpolation.
+    """Blocks filling a region of three, four or five sides whose sides run
+    between existing vertices, interior vertices by transfinite
+    interpolation.
 
     ``corners`` go round the region (either way); side k runs from corner k
     to corner k+1.  A side is, in this order: the vertex list given for it;
@@ -1784,13 +1786,19 @@ def add_fill(
     outside the region (the band front, the grid side that is there); else
     open - straight, or along its reference curve - taking the standalone
     vertices lying on it as stations, or, with none, new stations at the
-    opposite side's arc-length fractions.  Opposite sides need as many
-    segments; edges between stations both on a side's curve follow it as
-    splines through its points."""
-    if len(corners) != 4 or len(set(corners)) != 4:
-        raise TopologyError("corners takes four distinct vertices, in order round the region")
-    if len(sides) != 4 or len(curves) != 4:
-        raise TopologyError("a fill has four sides")
+    opposite side's arc-length fractions (four sides).  Four sides need as
+    many segments on opposite sides.  Three or five sides are filled as
+    that many blocks round a centre vertex (`_build_polygon`), each side
+    split at a station where two of them meet.  Edges between stations both
+    on a side's curve follow it as splines through its points."""
+    count = len(corners)
+    if count not in (3, 4, 5) or len(set(corners)) != count:
+        raise TopologyError("corners takes three, four or five distinct vertices, in order round the region")
+    sides = list(sides) + [()] * max(0, count - len(sides))
+    curves = list(curves) + [None] * max(0, count - len(curves))
+    if any(sides[count:]) or any(curves[count:]):
+        raise TopologyError(f"a fill with {count} corners has {count} sides: side{count + 1} and above are not used")
+    sides, curves = sides[:count], curves[:count]
 
     def work(working: MeshModel) -> ConstructResult:
         build = _Build(working, prefix)
@@ -1798,9 +1806,9 @@ def add_fill(
         build.scale(_extent([position[c] for c in corners]) + max(abs(c) for v in corners for c in position[v]))
         occurrences = working.edge_occurrences()
         paths = [_CurvePath(working, c) if c else None for c in curves]
-        candidates: list[list[list[str] | None]] = []
-        for k in range(4):
-            a, b = corners[k], corners[(k + 1) % 4]
+        candidates: list[list] = []
+        for k in range(count):
+            a, b = corners[k], corners[(k + 1) % count]
             if sides[k]:
                 given = list(sides[k])
                 if given[0] == b and given[-1] == a:
@@ -1821,74 +1829,22 @@ def add_fill(
         chosen, sign = _choose_sides(working, occurrences, corners, candidates, paths, position)
         listed = {v for side in sides for v in side}
         resolved = [
-            _resolve_side(working, chosen[k], corners[k], corners[(k + 1) % 4], paths[k], position,
+            _resolve_side(working, chosen[k], corners[k], corners[(k + 1) % count], paths[k], position,
                           "given" if sides[k] else "chain", listed)
-            for k in range(4)
+            for k in range(count)
         ]
-        for first, second in ((0, 2), (1, 3)):
-            _match_counts(resolved, first, second, corners)
-        n = len(resolved[0].points) - 1
-        m = len(resolved[1].points) - 1
-        fractions = [side.fractions() for side in resolved]
-
-        def boundary(i: int, j: int) -> tuple[str | None, Point, tuple[int, int] | None]:
-            if j == 0:
-                return resolved[0].vertices[i], resolved[0].points[i], (0, i)
-            if i == n:
-                return resolved[1].vertices[j], resolved[1].points[j], (1, j)
-            if j == m:
-                return resolved[2].vertices[n - i], resolved[2].points[n - i], (2, n - i)
-            return resolved[3].vertices[m - j], resolved[3].points[m - j], (3, m - j)
-
-        c00, c10, c11, c01 = (position[c] for c in corners)
-        grid: dict[tuple[int, int], Point] = {}
-        for j in range(m + 1):
-            for i in range(n + 1):
-                if i in (0, n) or j in (0, m):
-                    grid[i, j] = boundary(i, j)[1]
-                    continue
-                grid[i, j] = _block_mesh_point(
-                    (fractions[0][i], resolved[0].points[i]),
-                    (fractions[1][j], resolved[1].points[j]),
-                    (1.0 - fractions[2][n - i], resolved[2].points[n - i]),
-                    (1.0 - fractions[3][m - j], resolved[3].points[m - j]),
-                    (c00, c10, c11, c01),
-                )
-        quads = [((i, j), [grid[i, j], grid[i + 1, j], grid[i + 1, j + 1], grid[i, j + 1]])
-                 for j in range(m) for i in range(n)]
-        names = {}
-        for i in range(n + 1):
-            for j in range(m + 1):
-                if i in (0, n) or j in (0, m):
-                    names[i, j] = boundary(i, j)[0]
-        for index, ((i, j), quad) in enumerate(quads):
-            if not _ordered_convex(quad, sign):
-                raise TopologyError(_fill_fold_message(working, build, index, i, j, n, m, quad, sign, names))
-        _refuse_overlap(working, quads, names, position)
-        # Vertices: new side stations, side by side, then the interior row by row.
-        for k, side in enumerate(resolved):
-            for s, vertex in enumerate(side.vertices):
-                if vertex is None:
-                    side.vertices[s] = build.vertex(side.points[s])
-        ids: dict[tuple[int, int], str] = {}
-        for j in range(m + 1):
-            for i in range(n + 1):
-                if i in (0, n) or j in (0, m):
-                    ids[i, j] = boundary(i, j)[0]  # type: ignore[assignment]
-        for j in range(1, m):
-            for i in range(1, n):
-                ids[i, j] = build.vertex(grid[i, j])
-        for (i, j), _quad in quads:
-            build.block([ids[i, j], ids[i + 1, j], ids[i + 1, j + 1], ids[i, j + 1]], expect=sign)
-        for side in resolved:
-            for s, segment in enumerate(side.segments):
-                if segment[0] == "curve" and segment[1]:
-                    build.curve(side.vertices[s], side.vertices[s + 1], "spline", segment[1])
+        if count == 4:
+            for first, second in ((0, 2), (1, 3)):
+                _match_counts(resolved, first, second, corners)
+            n, m = _build_quad(working, build, list(corners), resolved, sign)
+            shape = f"{n} x {m} blocks"
+        else:
+            shape = _build_polygon(working, build, list(corners), resolved, sign)
         build.finish()
         result = build.result("add_fill")
         described = []
         for k, side in enumerate(resolved):
-            a, b = corners[k], corners[(k + 1) % 4]
+            a, b = corners[k], corners[(k + 1) % count]
             text = {
                 "given": "as given",
                 "chain": "the exterior chain",
@@ -1898,10 +1854,161 @@ def add_fill(
             }[side.kind]
             curve_text = f" along {paths[k].name}" if paths[k] is not None else ""
             described.append(f"side{k + 1} {a}..{b}: {len(side.points) - 1} edge(s), {text}{curve_text}")
-        result.note = f"{n} x {m} blocks; " + "; ".join(described)
+        result.note = f"{shape}; " + "; ".join(described)
         return result
 
     return _atomic(model, work)
+
+
+def _build_quad(working: MeshModel, build: _Build, corners: list[str], resolved: list[_FillSide],
+                sign: float) -> tuple[int, int]:
+    """The blocks of a four-sided fill whose sides are resolved and matched:
+    interior vertices by blockMesh's edge-weighted transfinite interpolation
+    of the side stations at their arc-length fractions, every block checked
+    convex and clear of existing blocks before any vertex is made."""
+    n = len(resolved[0].points) - 1
+    m = len(resolved[1].points) - 1
+    fractions = [side.fractions() for side in resolved]
+
+    def boundary(i: int, j: int) -> tuple[str | None, Point]:
+        if j == 0:
+            return resolved[0].vertices[i], resolved[0].points[i]
+        if i == n:
+            return resolved[1].vertices[j], resolved[1].points[j]
+        if j == m:
+            return resolved[2].vertices[n - i], resolved[2].points[n - i]
+        return resolved[3].vertices[m - j], resolved[3].points[m - j]
+
+    corner_points = tuple(side.points[0] for side in resolved)
+    grid: dict[tuple[int, int], Point] = {}
+    for j in range(m + 1):
+        for i in range(n + 1):
+            if i in (0, n) or j in (0, m):
+                grid[i, j] = boundary(i, j)[1]
+                continue
+            grid[i, j] = _block_mesh_point(
+                (fractions[0][i], resolved[0].points[i]),
+                (fractions[1][j], resolved[1].points[j]),
+                (1.0 - fractions[2][n - i], resolved[2].points[n - i]),
+                (1.0 - fractions[3][m - j], resolved[3].points[m - j]),
+                corner_points,  # type: ignore[arg-type]
+            )
+    quads = [((i, j), [grid[i, j], grid[i + 1, j], grid[i + 1, j + 1], grid[i, j + 1]])
+             for j in range(m) for i in range(n)]
+    names = {(i, j): boundary(i, j)[0] for i in range(n + 1) for j in range(m + 1)
+             if i in (0, n) or j in (0, m)}
+    for index, ((i, j), quad) in enumerate(quads):
+        if not _ordered_convex(quad, sign):
+            raise TopologyError(_fill_fold_message(working, build, len(build.created_blocks) + index,
+                                                   i, j, n, m, quad, sign, names))
+    _refuse_overlap(working, quads, names)
+    # Vertices: new side stations, side by side, then the interior row by row.
+    for side in resolved:
+        for s, vertex in enumerate(side.vertices):
+            if vertex is None:
+                side.vertices[s] = build.vertex(side.points[s])
+    ids: dict[tuple[int, int], str] = {}
+    for j in range(m + 1):
+        for i in range(n + 1):
+            if i in (0, n) or j in (0, m):
+                ids[i, j] = boundary(i, j)[0]  # type: ignore[assignment]
+    for j in range(1, m):
+        for i in range(1, n):
+            ids[i, j] = build.vertex(grid[i, j])
+    for (i, j), _quad in quads:
+        build.block([ids[i, j], ids[i + 1, j], ids[i + 1, j + 1], ids[i, j + 1]], expect=sign)
+    for side in resolved:
+        for s, segment in enumerate(side.segments):
+            if segment[0] == "curve" and segment[1]:
+                build.curve(side.vertices[s], side.vertices[s + 1], "spline", segment[1])
+    return n, m
+
+
+def _build_polygon(working: MeshModel, build: _Build, corners: list[str], resolved: list[_FillSide],
+                   sign: float) -> str:
+    """Three or five sides filled as that many four-sided fills round a
+    centre vertex: the fill at corner k runs along side k to its split
+    station M_k, along a spoke to the centre, back along the spoke to
+    M_(k-1) and along side k-1 to the corner.  Opposite sides of each fill
+    match when side k has ``s_k = σ_(k-1) + σ_(k+1)`` edges, σ_k the edges
+    of spoke k; M_k is ``σ_(k-1)`` edges from side k's start.  The centre is
+    the mean of the split stations."""
+    n = len(resolved)
+    counts = [len(side.points) - 1 for side in resolved]
+    spokes = _spoke_counts(counts)
+    if spokes is None or any(value.denominator != 1 or value < 1 for value in spokes):
+        shown = ", ".join(str(value) for value in spokes) if spokes is not None else "none"
+        name = "triangle" if n == 3 else "pentagon"
+        extra = " and each side shorter than the other two together" if n == 3 else ""
+        raise TopologyError(
+            f"a {name} is filled as {n} blocks round a centre, so side k with s_k edges needs "
+            f"spokes σ with s_k = σ_(k-1) + σ_(k+1), each a whole number of at least 1: the side "
+            f"edge counts ({', '.join(map(str, counts))}) give σ = ({shown}); the counts must sum to "
+            f"an even number{extra} - add or remove a station"
+        )
+    sigma = [int(value) for value in spokes]
+    split = [sigma[(k - 1) % n] for k in range(n)]
+    centre_points = [resolved[k].points[split[k]] for k in range(n)]
+    centre = (sum(p[0] for p in centre_points) / n, sum(p[1] for p in centre_points) / n)
+    centre_id = build.vertex(centre)
+    made: dict[int, _FillSide] = {}   # spoke k, from M_k to the centre
+    for k in range(n):
+        previous = (k - 1) % n
+        along = _slice_side(resolved[k], 0, split[k])
+        back = _slice_side(resolved[previous], split[previous], counts[previous])
+        out = made.get(k) or _straight_side(resolved[k].vertices[split[k]], resolved[k].points[split[k]],
+                                            centre_id, centre)
+        inward = (_reverse_side(made[previous]) if previous in made else
+                  _straight_side(centre_id, centre, resolved[previous].vertices[split[previous]],
+                                 resolved[previous].points[split[previous]]))
+        quad = [along, out, inward, back]
+        names = [corners[k], resolved[k].vertices[split[k]], centre_id,
+                 resolved[previous].vertices[split[previous]]]
+        _match_counts(quad, 0, 2, names)
+        _match_counts(quad, 1, 3, names)
+        _build_quad(working, build, names, quad, sign)  # type: ignore[arg-type]
+        made.setdefault(k, quad[1])
+        made.setdefault(previous, _reverse_side(quad[2]))
+    return f"{n} fills round a centre ({', '.join(map(str, sigma))} edges on its spokes)"
+
+
+def _spoke_counts(counts: Sequence[int]):
+    """σ solving ``counts[k] = σ[k-1] + σ[k+1]`` (cyclic, an odd number of
+    sides), as fractions; None when singular."""
+    from fractions import Fraction
+
+    n = len(counts)
+    rows = [[Fraction(0)] * n + [Fraction(c)] for c in counts]
+    for k in range(n):
+        rows[k][(k - 1) % n] += 1
+        rows[k][(k + 1) % n] += 1
+    for column in range(n):
+        pivot = next((r for r in range(column, n) if rows[r][column] != 0), None)
+        if pivot is None:
+            return None
+        rows[column], rows[pivot] = rows[pivot], rows[column]
+        for r in range(n):
+            if r != column and rows[r][column] != 0:
+                factor = rows[r][column] / rows[column][column]
+                rows[r] = [a - factor * b for a, b in zip(rows[r], rows[column])]
+    return [rows[k][n] / rows[k][k] for k in range(n)]
+
+
+def _slice_side(side: _FillSide, first: int, last: int) -> _FillSide:
+    return _FillSide("given", side.vertices[first:last + 1], side.points[first:last + 1],
+                     side.segments[first:last], side.lengths[first:last])
+
+
+def _reverse_side(side: _FillSide) -> _FillSide:
+    segments = [(segment[0], tuple(reversed(segment[1])), segment[2]) if segment[0] == "curve" else segment
+                for segment in reversed(side.segments)]
+    return _FillSide("given", list(reversed(side.vertices)), list(reversed(side.points)),
+                     segments, list(reversed(side.lengths)))
+
+
+def _straight_side(first: str | None, a: Point, second: str | None, b: Point) -> _FillSide:
+    length = math.dist(a, b)
+    return _FillSide("open", [first, second], [a, b], [("line", (), length)], [length], [a, b], None)
 
 
 def _exterior_walks(occurrences, a: str, b: str, forbidden: set[str]) -> list[list[str]]:
@@ -1971,7 +2078,7 @@ def _choose_sides(model, occurrences, corners, candidates, paths, position):
     for combination in itertools.product(*candidates):
         loop: list[Point] = []
         for k, choice in enumerate(combination):
-            a, b = corners[k], corners[(k + 1) % 4]
+            a, b = corners[k], corners[(k + 1) % len(corners)]
             if isinstance(choice, int):
                 side = _open_path(position, a, b, paths[k], choice)
             else:
@@ -2015,7 +2122,7 @@ def _choose_sides(model, occurrences, corners, candidates, paths, position):
         # between two loops): the one they go round counter-clockwise.
         top = [item for item in top if item[1] > 0]
     if len(top) > 1:
-        differing = [k + 1 for k in range(4) if len({str(c[k]) for c, _s in top}) > 1]
+        differing = [k + 1 for k in range(len(corners)) if len({str(c[k]) for c, _s in top}) > 1]
         raise TopologyError(
             "the region is ambiguous: side" + ", side".join(map(str, differing))
             + " can run more than one way between its corners; give it explicitly (sideK=A,...,B)"
@@ -2173,7 +2280,7 @@ def _fill_fold_message(model, build, index, i, j, n, m, quad, sign, names) -> st
     )
 
 
-def _refuse_overlap(model: MeshModel, quads, names, position) -> None:
+def _refuse_overlap(model: MeshModel, quads, names) -> None:
     """Refuse a fill block lying over an existing block: an existing vertex
     strictly inside it, or its centre inside an existing block."""
     existing = []

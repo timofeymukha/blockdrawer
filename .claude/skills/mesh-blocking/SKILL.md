@@ -116,11 +116,11 @@ Rules that follow from the table; the first that matches decides:
    - `add_stations CURVE xs=... id=x` (`count=`, `between=`, `fractions=`):
      standalone stations; `offset=DX,DY` copies them onto a periodic partner.
    - `add_fill A,B,C,D` - blocks between what is built (a slot, a pocket,
-     half an annulus), corners in order round it: a side is the exterior
-     chain joining its corners, else open (straight or along `curve3=CURVE`)
-     through the standalone vertices on it or new stations facing the
-     opposite side's; `side2=B,...,C` names one. A station mismatch or a
-     non-convex block is refused, saying where to split or add a station.
+     half an annulus; three or five corners: blocks round a centre), corners
+     in order round it: a side is the exterior chain joining its corners,
+     else open (straight or along `curve3=CURVE`) through the standalone
+     vertices on it or new stations facing the opposite side's; `side2=...`
+     names one. A count mismatch or a fold is refused, saying what to change.
    - `add_block_from_vertices A,B points=X,Y;X,Y` - one block, corners by ID or coordinates.
    - `add_grid xs=... ys=... outside=BODIES` again for the H-grid round what
      is built: existing vertices on its cell sides become stations.

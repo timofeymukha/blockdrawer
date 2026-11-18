@@ -542,7 +542,12 @@ refused by name; `id=PREFIX` names new vertices `PREFIX_0, ...` and blocks
   strictly convex is refused with its corners, as is a block over an
   existing block or vertex. Where both readings of the corners bound a
   region (half an annulus between two loops) the counter-clockwise one is
-  taken. On the round-1 high-lift build the cove pocket (20 `add_vertex`,
+  taken. Three or five corners give that many blocks round a centre vertex
+  (the triangle and pentagon templates): side k is split where spokes k-1
+  and k+1 meet it, which needs its edge count to equal the sum of their
+  counts - an even total, and in a triangle each side shorter than the
+  other two together; otherwise it is refused with the spoke counts the
+  sides give. On the round-1 high-lift build the cove pocket (20 `add_vertex`,
   24 `add_block_from_vertices` and a script) is one `add_fill`, and the
   slot strips three; same blocks, vertices within 1.3e-4 of the script's.
 - `set_boundary_by NAME [type=T] [curves=...] [bbox=...] [between=A,B]
