@@ -523,7 +523,7 @@ refused by name; `id=PREFIX` names new vertices `PREFIX_0, ...` and blocks
   so the two chains, cut in opposite directions, export as a node-for-node
   cyclic pair. On the round-1 cascade build the periodic stations, the
   passage round the blade, the inlet and the wake region (16 `add_vertex`,
-  4 `project`, 12 more `add_vertex` and 24 `add_block_from_vertices`) are
+  4 `project`, 12 more `add_vertex` and 26 `add_block_from_vertices`) are
   two `add_stations`, four `add_vertex` and four `add_fill`: same blocks,
   vertices within 1.3e-5; with the trial's shape, size and polish, 59,696
   cells, Mesh OK, max 65.1 degrees, skewness 3.26 (the original batch on
