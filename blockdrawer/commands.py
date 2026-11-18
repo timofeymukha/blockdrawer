@@ -721,6 +721,7 @@ def _run_size(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
         split=args["split"],
         keep_counts=args["keep_counts"],
         method=args["method"],
+        grading=args["grading"],
     )
     result = size_model(model, options, blocks=args.get("blocks") or None, bbox=bbox)
     return result.to_data()
@@ -1296,8 +1297,15 @@ _register(CommandSpec(
                   "field's verification shows faces above 70 degrees",
                   required=False, default="directional", choices=("directional", "distance")),
         Parameter("keep_counts", "bool",
-                  "keep every count and recompute only the gradings (after a smoothing)",
+                  "keep every count; the gradings are recomputed and regraded for "
+                  "continuity, no count is raised (after a smoothing or a hand count)",
                   required=False, default=False),
+        Parameter("grading", "choice",
+                  "strip: opposite sides through a strip share one total ratio; field: "
+                  "a last pass grades each edge by the field where it lies at its count (a "
+                  "wall spoke starts at the first width, far edges relax) where the shear, "
+                  "the interface jumps and the sampled grid allow; counts unchanged",
+                  required=False, default="strip", choices=("strip", "field")),
         Parameter("blocks", "blocks", "only these blocks' edges are graded (default: all)",
                   required=False, default=()),
         Parameter("bbox", "numbers", "only blocks with a corner inside xmin,ymin,xmax,ymax",
@@ -1975,6 +1983,13 @@ def _size_note(data: dict[str, Any]) -> dict[str, Any]:
         "moves": data.get("moves"),
         "guard": data.get("guard"),
         "refused": data.get("refused"),
+        # grading=field: strips graded by the field all the way, part of
+        # the way, or kept on their shared ratio.
+        "field_grading": (
+            "{own} own, {part} part, {shared} shared of {strips} strips".format(**data["field_grading"])
+            + (f" ({data['field_grading']['dropped']})" if data["field_grading"].get("dropped") else "")
+            if data.get("field_grading") else None
+        ),
         "note": data.get("note"),
     }
     return {key: value for key, value in note.items() if value not in (None, "", [])}

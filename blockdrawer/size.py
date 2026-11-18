@@ -61,6 +61,12 @@ same physical way on both, so a sized pair meshes face by face. The model's
 own count components do not join a pair, so a strip that holds a cyclic
 edge is not split (its partner would not be).
 
+With ``grading=field`` a last pass gives each strip member its own series
+at the final count (``_FieldGrading``): a wall spoke starts at the first
+width asked, an edge far from walls relaxes to what the field wants there,
+within the shear, interface-jump and sampled-grid limits of
+``_FieldGrading.settle``; counts are not changed.
+
 Counts and gradings are written directly: spacing links are kept and the
 ones left out of sync are reported. Everything is deterministic and applied
 as one validated edit; on any failure the model is unchanged.
@@ -124,6 +130,23 @@ OPPOSITE_LENGTH_RATIO = 2.0
 SPLIT_RESOLUTION = 1000
 # Samples per edge for the demand integral, at most.
 MAX_SAMPLES = 200
+# grading=field (_FieldGrading): two opposite sides of a block in one strip
+# may be graded apart only so far that the lines across the block tilt by
+# at most this angle (node displacement along the sides over the block's
+# height), and the sampled guard lets no block's worst face pass it (or the
+# shared state's worst, if lower) unless it was there already. At 20 a
+# column from a blunt base kept 20.4 degrees; it read 50 without the guard.
+SHEAR_ANGLE = 20.0
+# Node indices the displacement is measured at, at most.
+SHEAR_SAMPLES = 64
+# grading=field may not leave an interface jump above this (the quality
+# screen's first count) or above the spent state's worst where it touches.
+JUMP_LIMIT = 2.5
+# How far a strip goes from its shared ratio to its members' own, tried in
+# turn: all the way, half, a quarter.
+FIELD_MODES = (1.0, 0.5, 0.25)
+# Rounds of lowering bounds to the partners' widths (_FieldGrading.tighten).
+TIGHTEN_ROUNDS = 20
 
 
 @dataclass(frozen=True)
@@ -145,6 +168,10 @@ class SizeOptions:
     # "directional" (this module) or "distance" (item 3's wall-distance
     # sizing, size_distance.py).
     method: str = "directional"
+    # "strip": every member of a strip shares one total ratio; "field":
+    # each member is graded by the field where it lies, within the strip's
+    # count and SHEAR_ANGLE of its neighbours (_FieldGrading).
+    grading: str = "strip"
 
     def check(self, model: MeshModel) -> None:
         if not (self.first_width > 0.0 and self.core_size >= self.first_width):
@@ -161,6 +188,8 @@ class SizeOptions:
             raise TopologyError("method must be directional or distance")
         if self.method == "distance" and self.keep_counts:
             raise TopologyError("keep_counts applies to method=directional only")
+        if self.grading not in ("strip", "field"):
+            raise TopologyError("grading must be strip or field")
         for name, width in self.patch_first_widths:
             if name not in model.boundaries:
                 raise TopologyError(f"Unknown patch {name!r} in a first-width override")
@@ -194,6 +223,9 @@ class SizeResult:
     # larger one would buy more continuity. False: spending ran out of
     # moves that lower the jump cost (or the guard refused them) first.
     budget_binding: bool | None = None
+    # grading=field: how many strips took their members' own gradings,
+    # half of them, or kept the shared ratio (None with grading=strip).
+    field_grading: dict | None = None
     note: str = ""
 
     def to_data(self) -> dict[str, Any]:
@@ -222,6 +254,7 @@ class SizeResult:
             "unsynchronized_spacing_links": self.unsynchronized_links,
             "budget_factor": self.budget_factor,
             "budget_binding": self.budget_binding,
+            "field_grading": self.field_grading,
             "note": self.note,
         }
 
@@ -586,7 +619,13 @@ def size_model(
     field_cells = _state_cells(working, state)
     field_cost = _jump_cost(state, options)
     skew_floor = _max_skewness(model)
-    if not options.keep_counts:
+    if options.keep_counts:
+        # The counts stay: spending may regrade strips for continuity but
+        # pays for no raise (its budget is the cells there are), so the
+        # regrades an earlier size made are made again, not discarded.
+        state, moves, guard = _spend(working, state, options, field_cells, skew_floor)
+        state["budget_binding"] = None
+    else:
         budget = options.budget if options.budget else int(round(DEFAULT_BUDGET * field_cells))
         state, moves, guard = _spend(working, state, options, budget, skew_floor)
         if options.split:
@@ -594,6 +633,9 @@ def size_model(
                 working, field_, state, moves, guard, options, budget, blocks, bbox, splits, refused,
                 skew_floor,
             )
+    field_grading = None
+    if options.grading == "field":
+        state, field_grading = _field_pass(working, state, options)
     _write(working, state, options)
     skewness = _max_skewness(working)
     if skewness > SKEWNESS_LIMIT >= skew_floor:
@@ -612,6 +654,7 @@ def size_model(
     result.guard = guard
     result.verification = state.get("verification", {})
     result.budget_binding = state.get("budget_binding")
+    result.field_grading = field_grading
     field_faces = result.verification.get("field", {}).get("severe_faces", 0)
     if field_faces:
         result.note = " ".join(filter(None, [result.note, (
@@ -621,6 +664,45 @@ def size_model(
         )]))
     _replace(model, working)
     return result
+
+
+def _field_pass(working: MeshModel, state: dict, options: SizeOptions) -> tuple[dict, dict]:
+    """``grading=field``: after spending, give each strip's members their own
+    gradings at the final counts where the sampled grid and the interface
+    jumps allow (``_FieldGrading``). Counts and the spent shared ratios are
+    the starting point, so the cells are the spent state's. The result is
+    verified like spending's; a pass that adds a face above 70 degrees, a
+    fold, more than ``VERIFY_TOLERANCE`` on the worst face or skewness past
+    4 is dropped whole."""
+    grader = _FieldGrading(working, state["strips"], state["edges"], state["bounds"], options, state["ratios"])
+    grader.tighten(state["counts"], state["links"])
+    grader.settle(working, state["counts"], state["scope"], state["links"])
+    ratios = dict(state["ratios"])
+    ratios.update(grader.ratios(state["counts"]))
+    trial_state = {**state, "ratios": ratios}
+    record = {
+        "strips": len(grader.mode),
+        "own": sum(1 for mode in grader.mode if mode == 1.0),
+        "part": sum(1 for mode in grader.mode if 0.0 < mode < 1.0),
+        "shared": sum(1 for mode in grader.mode if mode == 0.0),
+        "refused_by_jumps": grader.refused["jump"],
+        "refused_by_grid": grader.refused["grid"],
+    }
+    spent = state.get("verification", {}).get("result")
+    if spent is None:
+        return trial_state, record
+    trial = from_data(to_data(working))
+    _write(trial, trial_state, options)
+    summary = _verify(trial, _neighbours(trial))[1]
+    if (summary["severe_faces"] > spent["severe_faces"]
+            or summary["folded_cells"] > spent["folded_cells"]
+            or summary["max_non_orthogonality"] > spent["max_non_orthogonality"] + VERIFY_TOLERANCE
+            or summary["max_skewness"] > SKEWNESS_LIMIT >= spent["max_skewness"]):
+        record["dropped"] = "the verification at 256 cells a side found the pass worse than the spent state"
+        return state, record
+    brief = {key: summary[key] for key in ("severe_faces", "max_non_orthogonality", "max_skewness", "folded_cells")}
+    trial_state["verification"] = {**state["verification"], "result": brief}
+    return trial_state, record
 
 
 def _neighbours(model: MeshModel) -> dict[str, set[str]]:
@@ -909,6 +991,380 @@ def _strip_targets(strips, edges, bounds, ratios, options) -> dict[EdgeKey, int]
                 bounds[(current, current[1])], options.maximum_cells, slack,
             )
     return needed
+
+
+def _fractions(log: float, cells: int, indices: Sequence[int]) -> list[float]:
+    """Node fractions at ``indices`` of ``cells`` geometric cells of total ratio exp(log)."""
+    if cells < 2 or abs(log) < 1.0e-12:
+        return [index / cells for index in indices]
+    step = log / (cells - 1)
+    whole = math.expm1(step * cells)
+    return [math.expm1(step * index) / whole for index in indices]
+
+
+def _shear(first: float, second: float, cells: int, indices: Sequence[int]) -> float:
+    """The largest node displacement, as a fraction of the side, between two
+    opposite sides of ``cells`` cells graded by the log total ratios given."""
+    a = _fractions(first, cells, indices)
+    b = _fractions(second, cells, indices)
+    return max(abs(x - y) for x, y in zip(a, b))
+
+
+class _FieldGrading:
+    """Each strip member's own grading at a count (``grading=field``).
+
+    ``_ratios`` gives a strip one total ratio, so its members' end widths
+    are in proportion to their lengths: on the benchmark sessions the first
+    width of every wall spoke over its length was the same to 1e-3 within
+    each strip, and a far-field member of the NACA 4412 C-grid's wake strip
+    carried the trailing edge's 0.00036 to the far-field corner, where its
+    bound was 0.5 and its own series at the same count gives 0.07.
+
+    Here every member gets, at the strip's count, the series that keeps its
+    finer-bounded end at its bound and grows from there (uniform when the
+    count already makes every cell finer than that bound): a wall spoke
+    starts at the first width asked whatever its length, and a member far
+    from walls relaxes to what the field wants there. Where the bounds
+    cannot both be met at that count the finer end keeps its bound. The
+    bounds are the field's, lowered by ``tighten`` to the widths the
+    members across each interface get. Two opposite sides of a block graded
+    differently shear the cells between them: the lines across the block
+    tilt by the nodes' displacement along the sides over the block's
+    height. Members are fixed finest bound first, and each is clamped to
+    within ``SHEAR_ANGLE`` of tilt of every member already fixed beside it
+    - its bounds still win over the clamp. The two edges of a cyclic pair
+    are one member. ``settle`` then decides per strip how far it goes from
+    the shared ratio (``FIELD_MODES``). Values are log total ratios in each
+    strip's orientation, cached per count.
+    """
+
+    def __init__(self, model: MeshModel, strips, edges, bounds, options: SizeOptions, shared) -> None:
+        self.strips = strips
+        self.edges = edges
+        self.bounds = dict(bounds)
+        self.options = options
+        self.limit = math.tan(math.radians(SHEAR_ANGLE))
+        self.cache: dict[tuple[int, int], dict[EdgeKey, float]] = {}
+        strip_of = {member: index for index, orientation in enumerate(strips) for member in orientation}
+        self.strip_of = strip_of
+        # The strip's one shared log ratio (``_ratios``, in the strip's
+        # orientation) and how far each strip goes from it to its members'
+        # own: 1 all the way, 0.5 half, 0 not at all (``settle``).
+        self.shared = []
+        for orientation in strips:
+            member = next(iter(orientation))
+            value = math.log(shared[member])
+            self.shared.append(value if orientation[member] == member[0] else -value)
+        self.mode = [1.0] * len(strips)
+        # Cyclic partners share one value: union them.
+        self.group: dict[EdgeKey, EdgeKey] = {member: member for member in strip_of}
+        for match in _cyclic_matches(model):
+            a, b = self._root(match.first), self._root(match.second)
+            if a != b:
+                self.group[max(a, b)] = min(a, b)
+        # Opposite sides of a block in one strip: the shear the grading
+        # difference adds is the node displacement times length over height.
+        self.pairs: dict[int, list[tuple[EdgeKey, EdgeKey, float, float]]] = {}
+        for block in model.blocks:
+            keys = [edge_key(*block.directed_edge(index)) for index in range(4)]
+            corners = block.vertices
+            for k in range(2):
+                first, second = keys[k], keys[k + 2]
+                strip = strip_of.get(first)
+                if strip is None or strip_of.get(second) != strip:
+                    continue
+                orientation = strips[strip]
+                # Corner k faces corner k+3 across the block.
+                aligned = (orientation[first] == corners[k]) == (orientation[second] == corners[(k + 3) % 4])
+                height = 0.5 * (edges[keys[k + 1]].length + edges[keys[(k + 3) % 4]].length)
+                length = 0.5 * (edges[first].length + edges[second].length)
+                allowed = self.limit * height / length if length > 0.0 else math.inf
+                self.pairs.setdefault(strip, []).append(
+                    (first, second, 1.0 if aligned else -1.0, allowed))
+
+    def _root(self, member: EdgeKey) -> EdgeKey:
+        while self.group[member] != member:
+            member = self.group[member]
+        return member
+
+    def _window(self, cells: int, member: EdgeKey) -> tuple[float, float, float, float, float]:
+        """(lo, hi, near, far, length): the log ratios keeping each end
+        within its bound - the begin end for log >= lo, the other for
+        log <= hi - with the oriented bounds."""
+        orientation = self.strips[self.strip_of[member]]
+        begin = orientation[member]
+        end = member[0] if member[1] == begin else member[1]
+        near, far = self.bounds[(member, begin)], self.bounds[(member, end)]
+        length = self.edges[member].length
+        lo = (cells - 1) * math.log(series_ratio(near, length, cells))
+        hi = -(cells - 1) * math.log(series_ratio(far, length, cells))
+        return (max(-MAX_LOG_RATIO, min(MAX_LOG_RATIO, lo)), max(-MAX_LOG_RATIO, min(MAX_LOG_RATIO, hi)),
+                near, far, length)
+
+    def logs(self, strip: int, cells: int) -> dict[EdgeKey, float]:
+        key = (strip, cells)
+        if key not in self.cache:
+            self.cache[key] = self._solve(strip, cells)
+        own = self.cache[key]
+        mode = self.mode[strip]
+        if mode == 1.0:
+            return own
+        shared = self.shared[strip]
+        return {member: shared + mode * (value - shared) for member, value in own.items()}
+
+    def tighten(self, counts: dict[EdgeKey, int], links) -> None:
+        """Lower each end's bound to ``interface_growth`` times the widths
+        its partners across block interfaces have, until nothing changes.
+
+        The field's bounds do not see cells a count forces fine, and the
+        shared ratio hid that: a column through the Y-junction's mouth,
+        graded like the top-wall spokes beside it, met the branch's fine
+        column at 1.65; graded by the field alone it relaxed to 0.014
+        against the branch's 0.0018 (7.7). Bounds only fall, so this ends.
+        """
+        cap = self.options.interface_growth
+        if cap is None:
+            return
+        for _round in range(TIGHTEN_ROUNDS):
+            widths = _actual(self.edges, self.ratios(counts), counts)
+            changed = False
+            for key, partners in sorted(links.items()):
+                if key[0] not in self.strip_of or counts[key[0]] < 2:
+                    continue
+                limit = cap * min(widths[partner] for partner in partners)
+                if limit < self.bounds[key] * (1.0 - 1.0e-9):
+                    self.bounds[key] = limit
+                    changed = True
+            if not changed:
+                break
+            self.cache.clear()
+
+    def settle(self, model: MeshModel, counts: dict[EdgeKey, int], scope, links) -> None:
+        """Keep each strip's own gradings only where the sampled grid allows.
+
+        Two opposite sides graded apart tilt the lines across a block; where
+        the block's other pair is graded apart too, the transfinite map
+        blends the two and the cells near the finer corner shear far more
+        than either tilt (a column from a blunt base read 50 degrees with
+        each pair within 20). Strips are taken finest bound first, from the
+        spent state where every strip shares one ratio; a strip goes the
+        first of ``FIELD_MODES`` of the way to its members' own gradings for
+        which the worst interface jump at its members' ends stays within the
+        spent state's there (or ``JUMP_LIMIT``), and its blocks and their
+        neighbours, sampled at ``GUARD_CELLS`` a side, gain no fold, no face
+        above 70 degrees, no skewness past 4, and keep their worst face below
+        ``SHEAR_ANGLE`` and the shared state's worst face, or at most
+        ``VERIFY_TOLERANCE`` above what it was; else it keeps the shared
+        ratio. A refused strip is tried once more together with the refused
+        strips it meets across an interface.
+        """
+        from .sampling import sample_model
+
+        trial = from_data(to_data(model))
+        for current, value in counts.items():
+            trial.edge_cells[current] = value
+        self.mode = [0.0] * len(self.strips)
+        self.refused = {"jump": 0, "grid": 0}
+
+        ratios: dict[EdgeKey, float] = {}
+
+        def write(strip: int) -> None:
+            orientation = self.strips[strip]
+            logs = self.logs(strip, counts[next(iter(orientation))])
+            for current, begin in orientation.items():
+                value = logs[current] if begin == current[0] else -logs[current]
+                ratios[current] = math.exp(value)
+                if counts[current] < 2 or abs(value) <= 1.0e-9:
+                    trial.edge_grading.pop(current, None)
+                else:
+                    trial.edge_grading[current] = math.exp(value)
+
+        for strip in range(len(self.strips)):
+            write(strip)
+        users: dict[EdgeKey, list[str]] = {}
+        for block in trial.blocks:
+            for k in range(4):
+                users.setdefault(edge_key(*block.directed_edge(k)), []).append(block.id)
+        neighbours: dict[str, set[str]] = {}
+        for ids in users.values():
+            for block in ids:
+                neighbours.setdefault(block, set()).update(ids)
+
+        cap = self.options.interface_growth or 1.25
+
+        def width(key: tuple[EdgeKey, str]) -> float:
+            current, vertex = key
+            first, last = _end_widths(self.edges[current].length, counts[current], ratios[current])
+            return first if vertex == current[0] else last
+
+        def jumps(members) -> dict:
+            found = {}
+            for member in members:
+                for vertex in member:
+                    for partner in links.get((member, vertex), ()):
+                        a, b = width((member, vertex)), width(partner)
+                        found[tuple(sorted(((member, vertex), partner)))] = max(a / b, b / a)
+            return found
+
+        def verdict(blocks):
+            summary = sample_model(trial, GUARD_CELLS, blocks=blocks).summary()
+            return (summary.get("folded_cells", 0), summary.get("severe_faces", 0),
+                    summary.get("max_skewness", 0.0), summary.get("max_non_orthogonality", 0.0))
+
+        def finest(strip: int) -> float:
+            return min(min(self.bounds[(member, member[0])], self.bounds[(member, member[1])])
+                       for member in self.strips[strip])
+
+        # No block may be sheared past the worst face the shared state
+        # already has (a pure H-grid stays at 0 degrees), nor past SHEAR_ANGLE.
+        ceiling = min(SHEAR_ANGLE, sample_model(trial, GUARD_CELLS).summary().get("max_non_orthogonality", 0.0))
+        order = sorted(
+            (strip for strip, orientation in enumerate(self.strips)
+             if all(member in scope for member in orientation)
+             and counts[next(iter(orientation))] > 1),
+            key=lambda strip: (finest(strip), min(self.strips[strip])),
+        )
+        # Strips whose members meet across an interface: a far-field strip
+        # relaxed alone jumps against the next one the spending graded from
+        # it (the NACA 4412's wake strip and the C-arc piece at its far
+        # corner), so a refused strip is tried again with its refused
+        # partners.
+        linked: dict[int, set[int]] = {}
+        for (member, _vertex), partners in links.items():
+            if member not in self.strip_of:
+                continue
+            for partner, _other in partners:
+                if partner in self.strip_of and self.strip_of[partner] != self.strip_of[member]:
+                    linked.setdefault(self.strip_of[member], set()).add(self.strip_of[partner])
+
+        def attempt(group: list[int]) -> str | None:
+            members = [member for strip in group for member in self.strips[strip]]
+            for strip in group:
+                self.mode[strip] = 1.0
+            if all(abs(value - self.shared[strip]) <= 1.0e-9
+                   for strip in group
+                   for value in self.logs(strip, counts[next(iter(self.strips[strip]))]).values()):
+                return None
+            blocks = sorted({block for member in members for block in users.get(member, ())})
+            local = sorted({other for block in blocks for other in neighbours.get(block, ())})
+            for strip in group:
+                self.mode[strip] = 0.0
+            before = verdict(local)
+            jumps_before = max(jumps(members).values(), default=1.0)
+            reason = "jump"
+            for mode in FIELD_MODES:
+                for strip in group:
+                    self.mode[strip] = mode
+                    write(strip)
+                # The worst interface jump at the strips' ends grows past
+                # neither the spent state's nor the quality screen's limit.
+                if max(jumps(members).values(), default=1.0) > max(jumps_before, cap, JUMP_LIMIT) * (1.0 + 1.0e-9):
+                    continue
+                reason = "grid"
+                after = verdict(local)
+                if (after[0] <= before[0] and after[1] <= before[1]
+                        and not (after[2] > SKEWNESS_LIMIT >= before[2])
+                        and after[3] <= max(ceiling, before[3] + VERIFY_TOLERANCE)):
+                    return None
+            for strip in group:
+                self.mode[strip] = 0.0
+                write(strip)
+            return reason
+
+        refused: dict[int, str] = {}
+        for strip in order:
+            reason = attempt([strip])
+            if reason is not None:
+                refused[strip] = reason
+        for strip in order:
+            if strip not in refused:
+                continue
+            group = sorted({strip} | {other for other in linked.get(strip, ()) if other in refused})
+            if len(group) > 1 and attempt(group) is None:
+                for other in group:
+                    refused.pop(other, None)
+        for reason in refused.values():
+            self.refused[reason] += 1
+
+    def _solve(self, strip: int, cells: int) -> dict[EdgeKey, float]:
+        members = sorted(self.strips[strip])
+        if cells < 2:
+            return {member: 0.0 for member in members}
+        groups: dict[EdgeKey, list[EdgeKey]] = {}
+        for member in members:
+            groups.setdefault(self._root(member), []).append(member)
+        window: dict[EdgeKey, tuple[float, float]] = {}
+        target: dict[EdgeKey, float] = {}
+        finest: dict[EdgeKey, float] = {}
+        for root, items in groups.items():
+            values = [self._window(cells, member) for member in items]
+            lo = max(value[0] for value in values)
+            hi = min(value[1] for value in values)
+            near = min(value[2] for value in values)
+            far = min(value[3] for value in values)
+            if lo > hi:
+                # No series meets both bounds at this count: the finer end
+                # keeps its bound (a wall spoke its first width) and the
+                # other end is over.
+                lo = hi = lo if near <= far else hi
+            wanted = max(lo, 0.0) if near <= far else min(hi, 0.0)
+            window[root] = (lo, hi)
+            target[root] = min(hi, max(lo, wanted))
+            finest[root] = min(near, far)
+        indices = list(range(cells + 1)) if cells <= SHEAR_SAMPLES else sorted(
+            {round(step * cells / SHEAR_SAMPLES) for step in range(SHEAR_SAMPLES + 1)})
+        beside: dict[EdgeKey, list[tuple[EdgeKey, float, float]]] = {}
+        for first, second, sign, allowed in self.pairs.get(strip, ()):
+            a, b = self._root(first), self._root(second)
+            if a == b or allowed >= 1.0:
+                continue
+            beside.setdefault(a, []).append((b, sign, allowed))
+            beside.setdefault(b, []).append((a, sign, allowed))
+        value: dict[EdgeKey, float] = {}
+        for root in sorted(groups, key=lambda item: (finest[item], item)):
+            lo, hi = window[root]
+            wanted = target[root]
+            fixed = [(sign * value[other], allowed) for other, sign, allowed in beside.get(root, ())
+                     if other in value]
+            if fixed and any(_shear(wanted, there, cells, indices) > allowed for there, allowed in fixed):
+                low, high = -math.inf, math.inf
+                for there, allowed in fixed:
+                    a, b = self._reach(there, allowed, cells, indices)
+                    low, high = max(low, a), min(high, b)
+                wanted = min(high, max(low, wanted)) if low <= high else 0.5 * (low + high)
+                wanted = min(hi, max(lo, wanted))
+            value[root] = wanted
+        return {member: value[self._root(member)] for member in members}
+
+    @staticmethod
+    def _reach(there: float, allowed: float, cells: int, indices: Sequence[int]) -> tuple[float, float]:
+        """The log ratios within ``allowed`` node displacement of ``there``."""
+        ends = []
+        for direction in (-1.0, 1.0):
+            far = there + direction * 2.0 * MAX_LOG_RATIO
+            if _shear(there, far, cells, indices) <= allowed:
+                ends.append(far)
+                continue
+            near_end, far_end = there, far
+            for _ in range(40):
+                middle = 0.5 * (near_end + far_end)
+                if _shear(there, middle, cells, indices) <= allowed:
+                    near_end = middle
+                else:
+                    far_end = middle
+            ends.append(near_end)
+        return ends[0], ends[1]
+
+    def ratios(self, counts: dict[EdgeKey, int]) -> dict[EdgeKey, float]:
+        """Canonical total ratios of every member at ``counts``."""
+        result = {}
+        for index, orientation in enumerate(self.strips):
+            member = next(iter(orientation))
+            logs = self.logs(index, counts[member])
+            for current, begin in orientation.items():
+                value = logs[current]
+                result[current] = math.exp(value if begin == current[0] else -value)
+        return result
 
 
 def _actual(edges, ratios, counts) -> dict[tuple[EdgeKey, str], float]:

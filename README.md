@@ -806,7 +806,11 @@ has are left to the polish and to hand corrections. A result above
 skewness 4 from an input below is refused. Strips the
 spent state leaves coarse between finer neighbours at both ends are split
 and the budget spent again when that lowers the jumps. `keep_counts=true`
-recomputes the gradings only. The report gives the cells, the field's own
+keeps every count and spends with a budget of the cells there are, so the
+strips are regraded for continuity but no count is raised (it used to
+recompute the gradings and drop the regrades: three cylinders after its
+polish went from a worst jump of 6.15 to 23.5, 30 jumps above 5; now 6.53
+and 13). The report gives the cells, the field's own
 cells and jump cost against the result's, whether the budget stopped the
 spending (`budget_binding`; false when no move that lowers the jumps was
 left or the guard refused them), the interface jumps above 2.5, 5 and 20
@@ -832,6 +836,56 @@ at the default budget) in the tapered blocks b21, b39 and b53, which the
 repair's moves do not lower; after the polish checkMesh counts 6 at 85.8
 degrees (12 at the default budget), where the previous fixed sizing gave 0
 at 68.8. Check fine sessions and correct those blocks by hand.
+
+`grading=field` (off by default) addresses two benchmark findings: the
+first width of a wall spoke drifted from the one asked (within a strip
+every spoke's first width over its length was the same, so short spokes
+came out finer: -16 percent on the NACA 4412, -28 on the U-bend), and
+wall-fine spacing was carried to the far field (the NACA 4412 C-grid's
+wake strip put the trailing edge's 0.00036 at the far-field corner, whose
+bound was 0.5). Both come from one total ratio per strip. After spending, a
+last pass gives each strip member at its count the series that keeps its
+finer-bounded end at its bound - a wall spoke starts at the first width
+asked, a far member relaxes - with bounds lowered to `interface_growth`
+times the widths across each interface, opposite sides clamped to 20
+degrees of tilt, and each strip taken all, half or a quarter of the way
+from its spent ratio only where the worst interface jump it touches stays
+within the spent one (or 2.5) and the sampled grid gains no fold, no face
+above 70, no skewness past 4 and no worst face above the lower of 20
+degrees and the spent state's worst that was not there. Counts do not
+change. Measured (each session's shaped state, its own `size` line,
+`smooth`, `check`; the 11 sessions of the skill examples and benchmark
+round 1; cells are equal; no face above 70 in either):
+
+| session | max non-orth | avg | skew | checkMesh aspect | worst jump (>2.5/5/20) | first widths reported |
+|---|---|---|---|---|---|---|
+| backward step | 0.00 -> 0.00 | 0.00 -> 0.00 | 0.00 -> 0.00 | 31 -> 31 | 1.07 (0/0/0) -> 1.04 (0/0/0) | -2..-2% -> -2..+0% |
+| grooved tandem | 20.51 -> 20.67 | 4.70 -> 5.93 | 0.77 -> 0.80 | 43 -> 33 | 3.42 (4/0/0) -> 3.42 (4/0/0) | -50..-1% -> -24..+0% |
+| NACA 0012 | 48.60 -> 48.27 | 7.78 -> 8.84 | 2.15 -> 2.12 | 54 -> 54 | 4.36 (4/0/0) -> 4.36 (2/0/0) | -17..+346% -> -13..+344% |
+| cylinder channel | 35.62 -> 35.21 | 3.08 -> 3.04 | 0.84 -> 0.83 | 25 -> 21 | 1.84 (0/0/0) -> 2.01 (0/0/0) | -15..-0% -> -0..+0% |
+| U-bend | 20.88 -> 20.57 | 2.84 -> 3.00 | 0.80 -> 0.93 | 36 -> 26 | 1.97 (0/0/0) -> 2.50 (0/0/0) | -28..-4% -> -0..+0% |
+| Y-junction | 39.96 -> 39.97 | 9.21 -> 13.34 | 1.14 -> 1.13 | 37 -> 29 | 1.55 (0/0/0) -> 1.69 (0/0/0) | -19..+18% -> -10..+30% |
+| blunt plate | 29.53 -> 25.58 | 7.87 -> 6.99 | 0.96 -> 0.62 | 468 -> 504 | 10.01 (8/4/0) -> 5.11 (4/2/0) | -13..-4% -> -13..-3% |
+| cascade | 60.70 -> 60.68 | 27.23 -> 27.49 | 3.24 -> 3.27 | 29 -> 29 | 7.98 (6/1/0) -> 7.47 (7/1/0) | -16..+68% -> -16..+238% |
+| three cylinders | 64.83 -> 64.76 | 18.25 -> 18.07 | 3.97 -> 3.96 | 26 -> 23 | 6.15 (46/12/0) -> 5.75 (16/4/0) | -19..-0% -> -0..+0% |
+| NACA 4412 | 69.85 -> 30.98 | 6.48 -> 7.29 | 0.87 -> 0.86 | 80 -> 67 | 3.83 (21/0/0) -> 3.04 (4/0/0) | -16..+254% -> -0..+256% |
+| high-lift | 61.41 -> 61.80 | 12.17 -> 11.57 | 3.84 -> 3.65 | 112 -> 95 | 6.54 (25/5/0) -> 5.78 (28/1/0) | -54..+285% -> -43..+385% |
+
+It is not the default because it failed the rule set for that (on every
+session: no new face above 70, skewness below 4, max non-orthogonality
+within 1 degree, worst jump not above the larger of the old and 2.5; and
+where the gaps were reported a tighter first-width range and a lower
+aspect ratio or cell count) on two sessions. On the blunt plate the band
+strip, which runs on into the wake lines behind the base, put 76, 59 and
+33 degrees on the wake block at the three steps and was refused, so its
+spokes keep their drift and the aspect ratio rose. On the cascade a
+trailing-edge spoke leaving the wall obliquely takes the size the
+directional field asks along it (0.000676 where the normal spokes have
+0.0002), which widens the reported range although the near-normal spokes
+are unchanged. The first widths reported are along the spoke; the polish
+moves them by up to 5 percent (band spokes within 5 percent of their
+length). The pass added 1 to 40 seconds to `size` on these sessions (40
+on the high-lift's 241).
 
 `method=distance` keeps item 3's sizing reachable (`size_distance.py`, as
 of commit 9a84f29): counts from the wall distance alone, wall-normal edges

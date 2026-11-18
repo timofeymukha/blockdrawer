@@ -352,6 +352,32 @@ them in the canvas widgets.
   field state (`CONTINUITY_SPLIT_ROUNDS`). Counts and total
   ratios are written directly (links kept and reported); one validated edit.
   `quality` reports `interface_jumps` (above 2.5, 5, 20) in its summary.
+  `keep_counts=true` keeps every count, refits the strips' ratios from the
+  bounds and spends with a budget of the cells there are (regrades only, no
+  raise), so an earlier sizing's regrades are made again: three cylinders
+  after its polish, worst jump 23.5 and 30 above 5 before, 6.53 and 13 now
+  (6.15 and 12 before re-sizing). `grading=field` (off by default, the
+  measured table is in the README) adds `_field_pass` after spending:
+  one shared ratio per strip makes its members' end widths proportional to
+  their lengths (every wall spoke's first width over its length was equal
+  within each strip on the benchmark) and carries a wall member's
+  clustering to far members (NACA 4412: 0.00036 at a far-field corner where
+  the bound was 0.5). `_FieldGrading` gives each member at the final count
+  the series keeping its finer-bounded end at its bound (`tighten` lowers
+  the bounds to `interface_growth` times the partners' widths), clamped
+  finest bound first to `SHEAR_ANGLE` (20) of tilt against the members
+  beside it; `settle` takes each strip, finest first, all, half or a
+  quarter of the way from the spent shared ratio (`FIELD_MODES`) where the
+  worst touched interface jump stays within the spent one or `JUMP_LIMIT`
+  (2.5) and the sampled guard at 256 a side finds no new fold, face above
+  70, skewness past 4, nor a worst face above min(`SHEAR_ANGLE`, the spent
+  state's worst) that was not there; refused strips are retried with their
+  refused interface partners; the pass is verified like spending and
+  dropped whole if worse. Counts never change. Measured: NACA 4412 max
+  non-orthogonality 69.85 -> 30.98, wall spokes exact; it failed the
+  default rule on the blunt plate (its band strip refused by the guard) and
+  the cascade (an oblique trailing-edge spoke takes the field's directional
+  size, widening the reported first-width range).
 - `blockdrawer/construct.py`: construction operators behind the registry
   commands `add_grid`, `add_band`, `add_ring` and `set_boundary_by`, derived
   from what the two hand builds coded themselves (coordinate-deduplicated

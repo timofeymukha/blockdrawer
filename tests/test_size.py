@@ -510,5 +510,141 @@ class CyclicPairTests(unittest.TestCase):
         block_mesh_dict(model)
 
 
+def _blocks(points: dict, quads: list, walls: list) -> MeshModel:
+    from blockdrawer.session import from_data
+
+    data = to_data(MeshModel())
+    data["vertices"] = [{"id": key, "x": x, "y": y} for key, (x, y) in points.items()]
+    data["blocks"] = [{"id": f"b{index}", "vertices": list(quad)} for index, quad in enumerate(quads)]
+    edges = set()
+    for quad in quads:
+        for k in range(4):
+            edges.add(tuple(sorted((quad[k], quad[(k + 1) % 4]))))
+    data["edgeCells"] = [{"vertices": list(edge), "cells": 10} for edge in sorted(edges)]
+    return apply_commands(from_data(data), WALL + [f"set_edge_boundary {edge} wall" for edge in walls]).model
+
+
+def band() -> MeshModel:
+    """Two blocks on a wall, spokes 0.5, 0.6 and 0.7 long: one strip."""
+    return _blocks(
+        {"w0": (0, 0), "w1": (1, 0), "w2": (2, 0), "t0": (0, 0.5), "t1": (1, 0.6), "t2": (2, 0.7)},
+        [("w0", "w1", "t1", "t0"), ("w1", "w2", "t2", "t1")],
+        ["w0-w1", "w1-w2"],
+    )
+
+
+def column() -> MeshModel:
+    """Four rows 10 long stacked from y = 0 to 10 (to 14 at the far end, so
+    the rows already shear by up to 22 degrees); the wall is the left end of
+    the bottom row only (a blunt base), so the streamwise strip's lower
+    members start at the wall and its upper ones far from it."""
+    ys = (0.0, 0.1, 1.0, 4.0, 10.0)
+    far = (0.0, 0.1, 1.5, 6.0, 14.0)
+    points = {**{f"a{i}": (0.0, y) for i, y in enumerate(ys)}, **{f"b{i}": (10.0, y) for i, y in enumerate(far)}}
+    quads = [(f"a{i}", f"b{i}", f"b{i + 1}", f"a{i + 1}") for i in range(len(ys) - 1)]
+    return _blocks(points, quads, ["a0-a1"])
+
+
+def _rectangle_column():
+    ys = (0.0, 0.1, 1.0, 4.0, 10.0)
+    points = {**{f"a{i}": (0.0, y) for i, y in enumerate(ys)}, **{f"b{i}": (10.0, y) for i, y in enumerate(ys)}}
+    quads = [(f"a{i}", f"b{i}", f"b{i + 1}", f"a{i + 1}") for i in range(len(ys) - 1)]
+    return points, quads, ["a0-a1"]
+
+
+class FieldGradingTests(unittest.TestCase):
+    def test_short_and_long_spokes_get_the_asked_first_width(self) -> None:
+        spokes = [edge_key("w0", "t0"), edge_key("w1", "t1"), edge_key("w2", "t2")]
+        shared = band()
+        size_model(shared, SizeOptions(0.001, 0.1, growth=1.2))
+        widths = [shared.edge_width_at_vertex(spoke, spoke[1]) for spoke in spokes]
+        # One shared ratio: the first width in proportion to the length.
+        self.assertGreater(max(widths) / min(widths), 1.3)
+        graded = band()
+        size_model(graded, SizeOptions(0.001, 0.1, growth=1.2, grading="field"))
+        for spoke in spokes:
+            self.assertEqual(graded.edge_cells[spoke], shared.edge_cells[spoke])
+            self.assertAlmostEqual(graded.edge_width_at_vertex(spoke, spoke[1]), 0.001, delta=1.0e-9)
+
+    def test_a_column_from_a_wall_relaxes_far_from_it(self) -> None:
+        from blockdrawer.sampling import sample_model
+
+        options = dict(first_width=0.001, core_size=1.0, growth=1.2, split=False)
+        shared = column()
+        size_model(shared, SizeOptions(**options))
+        graded = column()
+        size_model(graded, SizeOptions(**options, grading="field"))
+        bottom, top = edge_key("a0", "b0"), edge_key("a4", "b4")
+        self.assertEqual(graded.edge_cells[top], shared.edge_cells[top])
+        # The wall member starts at the first width either way.
+        self.assertAlmostEqual(graded.edge_width_at_vertex(bottom, "a0"), 0.001, delta=1.0e-9)
+        # The far member carried the wall's clustering to the far corner;
+        # graded by the field it is almost uniform there.
+        far_shared = shared.edge_width_at_vertex(top, "a4")
+        far_graded = graded.edge_width_at_vertex(top, "a4")
+        self.assertLess(far_shared, 0.002)
+        self.assertGreater(far_graded, 30 * far_shared)
+        self.assertLessEqual(far_graded, graded.edge_length(top) / graded.edge_cells[top] * (1 + 1e-9))
+        # The rows' opposite sides are graded apart only as far as the
+        # sampled grid allows: no face worse than the shared grading's.
+        self.assertLessEqual(sample_model(graded).summary()["max_non_orthogonality"],
+                             sample_model(shared).summary()["max_non_orthogonality"] + 0.5)
+
+    def test_a_pure_h_grid_is_not_sheared(self) -> None:
+        # With no non-orthogonality to begin with, the field may not add
+        # any: a rectangle column keeps its shared grading.
+        options = dict(first_width=0.001, core_size=1.0, growth=1.2, split=False)
+        shared = _blocks(*_rectangle_column())
+        size_model(shared, SizeOptions(**options))
+        graded = _blocks(*_rectangle_column())
+        size_model(graded, SizeOptions(**options, grading="field"))
+        self.assertEqual(graded.edge_grading, shared.edge_grading)
+
+    def test_a_cyclic_pair_still_matches(self) -> None:
+        from blockdrawer.cyclic import cyclic_pairs
+        from blockdrawer.foam import block_mesh_dict
+
+        model = periodic_ring()
+        size_model(model, SizeOptions(0.005, 0.2, growth=1.2, wall_aspect=10, grading="field"))
+        (pair,) = cyclic_pairs(model, check_nodes=False)
+        for match in pair.matches:
+            first = model.edge_total_expansion(match.first)
+            second = model.edge_total_expansion(match.second)
+            if not match.aligned:
+                second = 1.0 / second
+            self.assertEqual(model.edge_cells[match.first], model.edge_cells[match.second], match)
+            self.assertAlmostEqual(first, second, places=12, msg=str(match))
+        block_mesh_dict(model)
+
+    def test_field_grading_is_deterministic_and_a_command_option(self) -> None:
+        first, second = column(), column()
+        apply_commands(first, ["size 0.001 1.0 growth=1.2 grading=field"])
+        apply_commands(second, ["size 0.001 1.0 growth=1.2 grading=field"])
+        self.assertEqual(to_data(first), to_data(second))
+        batch = apply_commands(column(), ["size 0.001 1.0 growth=1.2 grading=field"])
+        (note,) = batch_digest(batch.model, batch)["notes"]
+        self.assertRegex(note["field_grading"], r"^\d+ own, \d+ part, \d+ shared of \d+ strips")
+        with self.assertRaises(TopologyError):
+            size_model(column(), SizeOptions(0.001, 1.0, grading="nope"))
+
+
+class KeepCountsTests(unittest.TestCase):
+    def test_keep_counts_regrades_and_raises_nothing(self) -> None:
+        options = dict(first_width=0.01, core_size=0.2, growth=1.2, split=False)
+        model = fan()
+        sized = size_model(model, SizeOptions(**options))
+        self.assertTrue(any(move["kind"] == "regrade" for move in sized.moves))
+        counts = dict(model.edge_cells)
+        kept = size_model(model, SizeOptions(**options, keep_counts=True))
+        self.assertEqual(model.edge_cells, counts)
+        self.assertFalse(any(move["kind"] == "raise" for move in kept.moves))
+        # The regrades are made again, not discarded: the jumps end where
+        # the first sizing left them, below the field's own.
+        self.assertTrue(any(move["kind"] == "regrade" for move in kept.moves))
+        self.assertLess(kept.jump_cost, kept.field_jump_cost)
+        self.assertLessEqual(kept.jump_cost, sized.jump_cost * (1 + 1e-9))
+        self.assertIsNone(kept.budget_binding)
+
+
 if __name__ == "__main__":
     unittest.main()

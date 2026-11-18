@@ -33,7 +33,8 @@ $$
 
 `size FIRST CORE [growth=1.2] [wall_aspect=A] [count_rule=max|mean]
 [interface_growth=R] [budget=N] [first_widths=PATCH=W,...] [split=true]
-[method=directional|distance] [keep_counts=true] [blocks=...] [bbox=...]`
+[method=directional|distance] [keep_counts=true] [grading=strip|field]
+[blocks=...] [bbox=...]`
 
 - The directional field: across each `wall` patch the series
   `first + (growth - 1) d`, along it `wall_aspect` first widths, capped at
@@ -55,15 +56,31 @@ $$
   budget stopped the spending; when it is false a larger budget changes
   nothing (three cylinders: `budget=75000` gave the default's mesh).
 - The first width is a bound, not a value: a spoke shares its count with
-  its component and its strip's series, and the surplus makes the wall end
-  finer. `first_width` in the result gives each wall patch's smallest and
-  largest spoke width against the one asked; round 1 measured 4.05e-4 ..
-  5.23e-4 for 5e-4 and 0.00144 .. 0.00193 for 0.002 (up to 28 percent
-  finer). For a hard $y^+$ ceiling ask a little coarser, or set the
-  spokes' `start_width` by hand (`set_edge_grading`) as the last sizing
-  step: a later `size`, `keep_counts=true` included, regrades them.
-- `keep_counts=true` keeps every count and recomputes the gradings (after
-  moving vertices).
+  its component and its strip's series (one total ratio for every member,
+  so a spoke's first width is in proportion to its length), and the
+  surplus makes the wall end finer. `first_width` in the result gives each
+  wall patch's smallest and largest spoke width against the one asked;
+  round 1 measured 4.05e-4 .. 5.23e-4 for 5e-4 and 0.00144 .. 0.00193 for
+  0.002 (up to 28 percent finer). A spoke leaving the wall obliquely (a
+  trailing-edge fan, a corner) gets the larger size the field asks along
+  it. For a hard $y^+$ ceiling ask a little coarser, try `grading=field`,
+  or set the spokes' `start_width` by hand (`set_edge_grading`) as the
+  last sizing step: a later `size`, `keep_counts=true` included, regrades
+  them.
+- `grading=field` (off by default): after spending, each strip member is
+  graded at its count by the field where it lies - a wall spoke starts at
+  the first width asked, an edge far from walls relaxes instead of
+  carrying a wall's clustering out (cells 4e-4 wide and 0.25 tall at a
+  far-field corner) - where the shear, the interface jumps (worst not
+  above the spent one or 2.5) and the sampled grid allow; counts do not
+  change. `field_grading` says how many strips took it. Measured on the 11
+  example and benchmark sessions (README): NACA 4412 C-grid max 69.85 ->
+  30.98 degrees and its spokes exact; three cylinders, cylinder channel,
+  U-bend spokes exact; no session gained a face above 70; blunt plate and
+  cascade unchanged at the wall. Compare by `check`.
+- `keep_counts=true` keeps every count, recomputes the gradings and
+  regrades strips for continuity without raising a count (after moving
+  vertices or setting a count by hand).
 
 ## Reading `verification`
 
