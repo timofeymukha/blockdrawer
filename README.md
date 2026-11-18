@@ -532,7 +532,8 @@ blockdrawer-cli apply case.json --in-place \
 ```
 
 `describe` lists every entity with the IDs the commands accept; `--only`
-(a named edge lists all its control points), `--bbox`, `--component` and
+(IDs space- or comma-separated; one that names nothing is an error; a named
+edge lists all its control points), `--bbox`, `--component` and
 `--unassigned` narrow it to the part of a large topology being worked on.
 `quality` starts with a verdict: the session validates and exports, no
 cell folds, the worst non-orthogonality and where it is, and how many faces

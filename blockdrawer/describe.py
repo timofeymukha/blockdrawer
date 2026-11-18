@@ -620,6 +620,52 @@ def unassigned_chains(model: MeshModel) -> list[dict[str, Any]]:
     return chains
 
 
+def resolve_only(model: MeshModel, only: Sequence[str]) -> list[str]:
+    """The IDs ``only`` names, comma-separated lists split, each checked.
+
+    An item that names an entity as it stands is kept whole (an ID may
+    contain a comma); otherwise it is split at commas. An ID that names no
+    block, vertex, edge (either vertex order), patch or curve (ID or name)
+    is an error naming it, rather than an empty section.
+    """
+    blocks = {block.id for block in model.blocks}
+    names = (
+        blocks | set(model.vertices) | set(model.boundaries)
+        | {model.z_min_patch_name, model.z_max_patch_name}
+        | set(model.geometry_curves)
+        | {curve.name for curve in model.geometry_curves.values()}
+    )
+
+    def known(item: str) -> bool:
+        if item in names:
+            return True
+        if "-" not in item:
+            return False
+        try:
+            parse_edge(model, item)
+        except (CommandError, TopologyError):
+            return False
+        return True
+
+    resolved: list[str] = []
+    unknown: list[str] = []
+    for item in only:
+        parts = [item] if known(item) or "," not in item else [
+            part.strip() for part in item.split(",") if part.strip()
+        ]
+        for part in parts:
+            if known(part):
+                resolved.append(part)
+            else:
+                unknown.append(part)
+    if unknown:
+        raise TopologyError(
+            "only: no block, vertex, edge, patch or curve named "
+            + ", ".join(repr(item) for item in unknown)
+        )
+    return resolved
+
+
 def query_description(
     model: MeshModel,
     data: dict[str, Any] | None = None,
@@ -641,6 +687,7 @@ def query_description(
     """
     if data is None:
         data = describe_model(model)
+    only = resolve_only(model, only) if only else only
     wanted: set[str] = set(only or ())
     selected = bool(only) or bbox is not None or component is not None
     if bbox is not None:

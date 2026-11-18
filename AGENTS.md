@@ -124,7 +124,8 @@ them in the canvas widgets.
   WSL, container, and SSH wrappers around the Linux OpenFOAM tools.
 - `blockdrawer/describe.py`: complete JSON description of a model plus a compact
   text rendering. Entities carry the same IDs the command registry accepts.
-  `query_description()` restricts it to the union of `only` IDs, the blocks
+  `query_description()` restricts it to the union of `only` IDs (space- or
+  comma-separated, `resolve_only`; an ID naming nothing is an error), the blocks
   overlapping a `bbox` (sampled curved edges included) and the vertices in
   it, and an edge's opposite-edge count `component` (adding a `component`
   section), and adds `unassigned_chains` (exterior edges without a patch

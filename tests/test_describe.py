@@ -10,6 +10,7 @@ from blockdrawer.describe import (
     query_description,
     unassigned_chains,
 )
+from blockdrawer.domain import TopologyError
 from blockdrawer.model import MeshModel
 
 
@@ -149,6 +150,19 @@ class QueryTests(unittest.TestCase):
         # b1 has no patched edge, and says so rather than "none defined".
         other = format_description(query_description(model, only=["b1"]))
         self.assertIn("Boundaries: none on the listed edges", other)
+
+    def test_only_takes_comma_separated_ids_and_names_unknown_ones(self) -> None:
+        model = _sample_model()
+        spaced = query_description(model, only=["b0", "b1"])
+        commas = query_description(model, only=["b0,b1"])
+        self.assertEqual(commas, spaced)
+        self.assertEqual({item["id"] for item in commas["blocks"]}, {"b0", "b1"})
+        self.assertEqual(
+            query_description(model, only=["v3-v0, inlet"])["boundaries"][0]["name"],
+            "inlet",
+        )
+        with self.assertRaisesRegex(TopologyError, "named 'b18', 'v0-v2'"):
+            query_description(model, only=["b0,b18", "v0-v2"])
 
     def test_a_named_edge_lists_every_control_point_in_either_order(self) -> None:
         model = apply_commands(MeshModel(), [

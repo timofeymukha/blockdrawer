@@ -158,8 +158,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     describe.add_argument(
         "--only", nargs="+", metavar="ID",
-        help="restrict blocks/edges/vertices/patches/curves to these IDs; a named "
-        "edge lists all its control points",
+        help="restrict blocks/edges/vertices/patches/curves to these IDs (space- or "
+        "comma-separated; an ID that names nothing is an error); a named edge "
+        "lists all its control points",
     )
     describe.add_argument(
         "--bbox", type=float, nargs=4, metavar=("XMIN", "YMIN", "XMAX", "YMAX"),

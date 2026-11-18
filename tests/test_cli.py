@@ -144,6 +144,15 @@ class CliTests(unittest.TestCase):
         self.assertIn("v4-v5", out)
         self.assertNotIn("v0-v3", out)
         self.assertNotIn("Topology:", out)
+        code, both, _ = run_cli(
+            "describe", str(self.session), "--section", "blocks", "--only", "b0,b1",
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("b0", both)
+        self.assertIn("b1", both)
+        code, _, err = run_cli("describe", str(self.session), "--only", "b0,b18")
+        self.assertEqual(code, 1)
+        self.assertIn("'b18'", err)
 
     def test_quality_text_json_and_thresholds(self) -> None:
         run_cli(

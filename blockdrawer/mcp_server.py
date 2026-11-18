@@ -158,8 +158,9 @@ def describe_session(
 
     ``sections`` limits the output to some of: summary, settings, blocks,
     edges, vertices, boundaries, curves, spacing_links. ``only`` restricts the
-    lists to the given block, edge, vertex, patch, or curve IDs (a named
-    edge lists all its control points). ``bbox`` [xmin, ymin, xmax, ymax]
+    lists to the given block, edge, vertex, patch, or curve IDs (an item may
+    be comma-separated; an ID that names nothing is an error; a named edge
+    lists all its control points). ``bbox`` [xmin, ymin, xmax, ymax]
     keeps the blocks overlapping the box and the vertices in it;
     ``component`` (an edge) keeps the edges whose cell count must equal it
     and their blocks; ``unassigned`` lists the exterior edges without a
