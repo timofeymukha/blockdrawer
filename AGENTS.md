@@ -368,7 +368,14 @@ them in the canvas widgets.
   `ceil(turn/FAN_SECTOR)` kite blocks at a convex turn above `FAN_ANGLE`;
   open ends along the adjacent boundary edge when within 60 degrees of the
   normal; exact arc tangents) and rows by `growth`; `_band_to_box` snaps a
-  box corner to the nearer of the two spokes straddling it. `add_ring`
+  box corner to the nearer of the two spokes straddling it. Band blocks
+  are checked strictly convex in their construction order
+  (`_ordered_convex`, `_Build.block(expect=...)`) before the corners are
+  sorted, since sorting turned a folded block into a valid-looking one
+  with other edges; a band that would fold is refused before any vertex is
+  made, naming the edge, the concave corner whose mitre moves the offset
+  end `height * tan(turn/2)` along it past its length, and the largest
+  height that builds (bisected over the whole band, `_fold_message`). `add_ring`
   places stations at curve corners (`CORNER_ANGLE`) and by arc length,
   spline wall edges through the curve's points (at most
   `MAX_SPLINE_POINTS`, none within a thousandth of a station). Curves

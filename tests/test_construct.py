@@ -111,6 +111,28 @@ class BandTests(unittest.TestCase):
             self.assertIn((float(corner[0]), float(corner[1])), corners)
         self.assertEqual(len(batch.model.blocks), 1 + 8 + 8)
 
+    def test_a_band_that_would_fold_at_a_concave_corner_is_refused_with_the_height_that_builds(self) -> None:
+        # An L-shaped region whose reflex corner (1, 1) has a 0.1-long edge
+        # beside it: a band grown into the notch mitres there and moves the
+        # offset of that edge 0.15 along it at height 0.15, so its block
+        # would fold. Sorting its corners round their centre used to turn
+        # it into a valid-looking block with other edges, silently.
+        model = apply_commands(MeshModel(box=(0, 0, 0.9, 1)), [
+            "add_grid xs=0,0.9,1,2 ys=0,1,1.1,2 skip=1,1,2,2",
+        ]).model
+        corner = next(v.id for v in model.vertices.values() if (v.x, v.y) == (1.0, 1.0))
+        short = next(v.id for v in model.vertices.values() if (v.x, v.y) == (1.0, 1.1))
+        with self.assertRaises(Exception) as caught:
+            apply_commands(model, ["add_band bbox=0.85,0.95,2.05,2.05 height=0.15"])
+        message = str(caught.exception)
+        self.assertIn(f"concave corner {corner}", message)
+        self.assertIn(f"edge {corner}-{short}", message)
+        self.assertIn("largest height that builds is 0.0999", message)
+        built = apply_commands(model, ["add_band bbox=0.85,0.95,2.05,2.05 height=0.0999 id=B"]).model
+        # Below that height the band block keeps the wall edge as its own.
+        wall_block = next(b for b in built.blocks if {corner, short} <= set(b.vertices) and b.id.startswith("B_"))
+        self.assertIn(edge_key(corner, short), [edge_key(*wall_block.directed_edge(k)) for k in range(4)])
+
     def test_a_ring_round_a_square_curve(self) -> None:
         model = apply_commands(MeshModel(box=(5, 5, 6, 6)), square_curve([]) + [
             "add_ring body 0.1 count=8",

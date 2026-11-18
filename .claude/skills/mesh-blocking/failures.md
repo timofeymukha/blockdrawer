@@ -43,6 +43,7 @@ shows why.
 | A gate in the wrong place along the wall: a band block sheared although its spokes are fine | the wall vertex sits off where its spoke wants it | `smooth slide=true` (slides it along the wall, re-cut from the input wall, carrying the band spoke), or `slide_vertex V fraction=F` by hand and then move the spoke's front with `move_vertex` |
 | A wake or far-field block with a corner near 180 degrees | a ring vertex in the wrong place | `move_vertex` (with `carry_curves=true` for curved edges) or `split_edge` with a centre vertex |
 | A folded band block at a sharp convex feature | the feature needs more incident blocks | a fan (`add_band` and `add_ring` make one above 60 degrees of turning), a seam or a wake (engine) - not a thinner band |
+| `add_band` refused: "would fold ... concave corner" | a mitre at a concave corner moves the offset end past a short edge beside it | the height the refusal names, or merge the short edge (`combine_blocks`, a station moved) and band again |
 | A fan at a trailing edge (`add_ring`, `add_band`) | the body-normal lines collapse into a downstream fan: Mesh OK, but a poor wake | for a production wake, the engine's C-grid (`engine.md`) |
 | A core spoke crossing a band front in a narrow gap | the gap holds too many layers | engine `--span-gaps`, or move the ring |
 | A 3-degree corner in a seam wedge at a trailing edge | the medial anchor is outside the feature's sector | the engine's wake construction (`--wake`) |

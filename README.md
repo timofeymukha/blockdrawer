@@ -491,7 +491,10 @@ refused by name; `id=PREFIX` names new vertices `PREFIX_0, ...` and blocks
   unassigned exterior edges inside it): mitred spokes, a fan of corner blocks
   at a convex corner sharper than 60 degrees, open ends following the
   boundary they meet, offset arcs kept arcs; `to_box` carries every spoke to a
-  rectangle, its corners taken by the nearest spokes.
+  rectangle, its corners taken by the nearest spokes. A band block that would
+  fold - a mitre at a concave corner moves the offset end `height *
+  tan(turn/2)` along the edge beside it, past a short edge's length - is
+  refused with the corner, the edge and the largest height that builds.
 - `add_ring CURVE HEIGHT count=N | fractions=...` - a band round a closed
   reference curve: vertices on the curve at its sharp corners and spread by
   arc length, wall edges as splines through the curve's points.

@@ -134,12 +134,23 @@ class _Build:
         self.created_vertices.append(identifier)
         return identifier
 
-    def block(self, identifiers: Sequence[str]) -> str:
+    def block(self, identifiers: Sequence[str], expect: float | None = None) -> str:
+        """A block from four vertices; with ``expect`` (+1 counter-clockwise,
+        -1 clockwise) the four must already make a strictly convex quad in the
+        given order - sorting them round their centre would turn a folded or
+        crossed band block into a valid-looking block with other edges."""
         if len(set(identifiers)) != 4:
             raise TopologyError(
                 f"A constructed block collapses to {len(set(identifiers))} distinct vertices "
                 f"({', '.join(identifiers)})"
             )
+        if expect is not None:
+            corners = [(self.model.vertices[v].x, self.model.vertices[v].y) for v in identifiers]
+            if not _ordered_convex(corners, expect):
+                listed = ", ".join(f"{v} ({x:.6g}, {y:.6g})" for v, (x, y) in zip(identifiers, corners))
+                raise TopologyError(
+                    f"A constructed block [{listed}] folds or crosses itself in its construction order"
+                )
         ordered = self.model._counter_clockwise_vertices(identifiers)
         for block in self.model.blocks:
             if set(block.vertices) == set(ordered):
@@ -598,10 +609,48 @@ def _band(build: _Build, chain: _Chain, height: float, rows: int, growth: float,
     for w in weights:
         fractions.append(fractions[-1] + w / total)
 
-    def point(k: int, spoke: int, f: float) -> Point:
+    def point_at(k: int, spoke: int, f: float, h: float) -> Point:
         (dx, dy), factor = spokes[k][spoke]
         base = position[chain.vertices[k]]
-        return base[0] + dx * factor * height * f, base[1] + dy * factor * height * f
+        return base[0] + dx * factor * h * f, base[1] + dy * factor * h * f
+
+    def point(k: int, spoke: int, f: float) -> Point:
+        return point_at(k, spoke, f, height)
+
+    def quads(h: float):
+        """Every band block's corners in construction order, with the
+        orientation that order must have (``chain.side``: wall a, wall b,
+        then outwards; a fan's first-row kite runs outwards first)."""
+        for r in range(1, rows + 1):
+            f0, f1 = fractions[r - 1], fractions[r]
+            for e in range(edge_count):
+                a, b = e, (e + 1) % count
+                sa = len(spokes[a]) - 1
+                yield (("edge", e), [point_at(a, sa, f0, h), point_at(b, 0, f0, h),
+                                     point_at(b, 0, f1, h), point_at(a, sa, f1, h)], chain.side)
+            for k in range(count):
+                fan = spokes[k]
+                for s in range(0, len(fan) - 1, 2):
+                    if r == 1:
+                        yield (("fan", k), [position[chain.vertices[k]], point_at(k, s, f1, h),
+                                            point_at(k, s + 1, f1, h), point_at(k, s + 2, f1, h)],
+                               -chain.side)
+                    else:
+                        for first, second in ((s, s + 1), (s + 1, s + 2)):
+                            yield (("fan", k), [point_at(k, first, f0, h), point_at(k, second, f0, h),
+                                                point_at(k, second, f1, h), point_at(k, first, f1, h)],
+                                   chain.side)
+
+    def first_fold(h: float):
+        for label, corners, sign in quads(h):
+            if not _ordered_convex(corners, sign):
+                return label
+        return None
+
+    folded = first_fold(height)
+    if folded is not None:
+        raise TopologyError(_fold_message(chain, position, spokes, edge_count, count, height,
+                                          folded, first_fold))
 
     level_ids: dict[tuple[int, int, int], str] = {}
 
@@ -617,7 +666,7 @@ def _band(build: _Build, chain: _Chain, height: float, rows: int, growth: float,
             a, b = e, (e + 1) % count
             sa, sb = len(spokes[a]) - 1, 0
             ids = [vid(a, sa, r - 1), vid(b, sb, r - 1), vid(b, sb, r), vid(a, sa, r)]
-            build.block(ids)
+            build.block(ids, expect=chain.side)
             interior = chain.interiors[e]
             if interior:
                 outer = _offset_interior(edge_path(e), chain, height * fractions[r],
@@ -629,11 +678,104 @@ def _band(build: _Build, chain: _Chain, height: float, rows: int, growth: float,
             for s in range(0, len(fan) - 1, 2):
                 if r == 1:
                     ids = [chain.vertices[k], vid(k, s, 1), vid(k, s + 1, 1), vid(k, s + 2, 1)]
-                    build.block(ids)
+                    build.block(ids, expect=-chain.side)
                 else:
                     for first, second in ((s, s + 1), (s + 1, s + 2)):
                         build.block([vid(k, first, r - 1), vid(k, second, r - 1),
-                                     vid(k, second, r), vid(k, first, r)])
+                                     vid(k, second, r), vid(k, first, r)], expect=chain.side)
+
+
+def _ordered_convex(corners: Sequence[Point], sign: float) -> bool:
+    """Whether four corners, in the given order, make a strictly convex quad
+    turning the way ``sign`` says (+1 counter-clockwise); the sine of every
+    corner is compared, as the model's own convexity check does."""
+    for index in range(4):
+        p, q, r = corners[index], corners[(index + 1) % 4], corners[(index + 2) % 4]
+        ux, uy = q[0] - p[0], q[1] - p[1]
+        vx, vy = r[0] - q[0], r[1] - q[1]
+        lengths = math.hypot(ux, uy) * math.hypot(vx, vy)
+        if lengths <= 0.0 or sign * (ux * vy - uy * vx) <= MeshModel.COORDINATE_TOLERANCE * lengths:
+            return False
+    return True
+
+
+def _round_down(value: float) -> str:
+    """``value`` to three significant digits, never rounded up."""
+    if value <= 0.0:
+        return "0"
+    digits = 2 - math.floor(math.log10(value))
+    factor = 10.0 ** digits
+    return f"{math.floor(value * factor * (1.0 - 1.0e-12)) / factor:.{max(digits, 0)}f}"
+
+
+def _fold_message(chain: _Chain, position, spokes, edge_count: int, count: int, height: float,
+                  folded, first_fold) -> str:
+    """Why the band block ``folded`` cannot be built at ``height``, and the
+    largest height at which every band block is strictly convex."""
+    low, high = 0.0, height
+    if first_fold(height * 1.0e-6) is not None:
+        largest = None
+    else:
+        low = height * 1.0e-6
+        for _ in range(60):
+            middle = 0.5 * (low + high)
+            if first_fold(middle) is None:
+                low = middle
+            else:
+                high = middle
+        largest = low
+    advice = (
+        f"the largest height that builds is {_round_down(largest)}" if largest
+        else "no height builds it"
+    )
+    kind, index = folded
+    if kind == "fan":
+        vertex = chain.vertices[index]
+        return f"the fan at {vertex} would fold at height {height:g}; {advice}"
+    a, b = index, (index + 1) % count
+    first, second = chain.vertices[a], chain.vertices[b]
+    pa, pb = position[first], position[second]
+    length = math.dist(pa, pb)
+    t = ((pb[0] - pa[0]) / length, (pb[1] - pa[1]) / length)
+
+    def slide(k: int, spoke: int, towards: float) -> float:
+        (dx, dy), factor = spokes[k][spoke]
+        return towards * (dx * t[0] + dy * t[1]) * factor * height
+
+    slides = (slide(a, len(spokes[a]) - 1, 1.0), slide(b, 0, -1.0))
+    movers = []
+    for k, along in ((a, slides[0]), (b, slides[1])):
+        if along <= 0.0:
+            continue
+        name = chain.vertices[k]
+        neighbours = []
+        if chain.closed or k > 0:
+            neighbours.append(chain.vertices[(k - 1) % count])
+        if chain.closed or k < count - 1:
+            neighbours.append(chain.vertices[(k + 1) % count])
+        if len(neighbours) == 2 and len(spokes[k]) == 1:
+            here = position[name]
+            before, after = position[neighbours[0]], position[neighbours[1]]
+            t_in = _unit(here[0] - before[0], here[1] - before[1])
+            t_out = _unit(after[0] - here[0], after[1] - here[1])
+            turn = math.degrees(math.acos(max(-1.0, min(1.0, t_in[0] * t_out[0] + t_in[1] * t_out[1]))))
+            what = (f"the mitred spoke at the concave corner {name} (turning {turn:.0f} degrees "
+                    f"between edges {neighbours[0]}-{name} and {name}-{neighbours[1]})")
+        else:
+            what = f"the spoke at {name}"
+        movers.append(f"{what} moves the offset end {along:.4g} along it")
+    if sum(slides) >= length and movers:
+        cause = (
+            f"its offset reverses: {' and '.join(movers)}, more than its length {length:.4g} "
+            "(a mitred spoke at a concave corner turning T degrees moves the offset point "
+            "height * tan(T/2) along each edge beside it)"
+        )
+    else:
+        cause = "its offset corners would not make a strictly convex block"
+    return (
+        f"the band block on edge {first}-{second} would fold at height {height:g}: "
+        f"{cause}; {advice}, or merge the short edge into its neighbour"
+    )
 
 
 def _offset_interior(path: list[Point], chain: _Chain, distance: float,
@@ -701,7 +843,7 @@ def _band_to_box(build, chain, position, spokes, box, edge_path):
     outer = [build.vertex((h[0], h[1])) for h in hits]
     for e in range(edge_count):
         a, b = e, (e + 1) % count
-        build.block([chain.vertices[a], chain.vertices[b], outer[b], outer[a]])
+        build.block([chain.vertices[a], chain.vertices[b], outer[b], outer[a]], expect=chain.side)
 
 
 def _model_chain(model: MeshModel, edges: Sequence[EdgeKey]) -> _Chain:
