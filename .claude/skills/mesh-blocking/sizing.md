@@ -51,7 +51,17 @@ $$
   field takes budget/1.5 (coarsened when that is smaller than its own), the
   rest buys continuity: free regrades and count raises taken greedily by the
   drop in interface jumps per cell. From the field's own state up, more
-  budget never raises the jump cost.
+  budget never raises the jump cost. `budget_binding` says whether the
+  budget stopped the spending; when it is false a larger budget changes
+  nothing (three cylinders: `budget=75000` gave the default's mesh).
+- The first width is a bound, not a value: a spoke shares its count with
+  its component and its strip's series, and the surplus makes the wall end
+  finer. `first_width` in the result gives each wall patch's smallest and
+  largest spoke width against the one asked; round 1 measured 4.05e-4 ..
+  5.23e-4 for 5e-4 and 0.00144 .. 0.00193 for 0.002 (up to 28 percent
+  finer). For a hard $y^+$ ceiling ask a little coarser, or set the
+  spokes' `start_width` by hand (`set_edge_grading`) as the last sizing
+  step: a later `size`, `keep_counts=true` included, regrades them.
 - `keep_counts=true` keeps every count and recomputes the gradings (after
   moving vertices).
 

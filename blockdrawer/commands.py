@@ -1912,6 +1912,61 @@ def compress_ids(identifiers: Sequence[str]) -> list[str]:
     return result
 
 
+def _size_note(data: dict[str, Any]) -> dict[str, Any]:
+    """The ``size`` result in the fields Step 5 of the skill reads, each a
+    scalar or a short string so a quiet digest prints it whole; empty ones
+    are left out."""
+
+    def verdict(item: dict[str, Any] | None) -> str:
+        item = item or {}
+        text = (
+            f"{item.get('severe_faces', 0)} faces >70, max {item.get('max_non_orthogonality', 0.0):.2f}, "
+            f"skew {item.get('max_skewness', 0.0):.2f}"
+        )
+        return text + (f", {item['folded_cells']} folded" if item.get("folded_cells") else "")
+
+    def percent(value: float, asked: float) -> str:
+        return f"{int(round(100.0 * (value / asked - 1.0))):+d}%"
+
+    verification = data.get("verification") or {}
+    bands = []
+    for band in data.get("bands") or ():
+        low, high = band["first_width"]
+        text = f"{band['patch']} {low:.3g}..{high:.3g}"
+        asked = band.get("asked")
+        if asked:
+            text += f" for {asked:.3g} ({percent(low, asked)}..{percent(high, asked)})"
+        bands.append(text)
+    worst = (data.get("worst_interfaces") or [None])[0]
+    jumps = data.get("interface_jumps") or {}
+    note = {
+        "total_cells": data.get("total_cells"),
+        "field_cells": data.get("field_cells"),
+        "budget": data.get("budget"),
+        "budget_binding": data.get("budget_binding"),
+        "verification": (
+            f"field {verdict(verification.get('field'))} | result {verdict(verification.get('result'))}"
+            if verification.get("field") else None
+        ),
+        # Achieved first widths of the spokes leaving each wall patch.
+        "first_width": " | ".join(bands) or None,
+        # quality's interface measure on the sized session, before any
+        # polish (a later smooth moves vertices and changes it).
+        "worst_jump": (
+            f"{worst['jump']:.3g} at {worst['edge']} ({'|'.join(worst['blocks'])}), above "
+            f"2.5/5/20: {jumps.get('above_2_5', 0)}/{jumps.get('above_5', 0)}/{jumps.get('above_20', 0)}"
+            if worst else None
+        ),
+        "jump_cost": [data.get("field_jump_cost"), data.get("jump_cost")],
+        "splits": [item.get("edge") for item in data.get("splits", [])],
+        "moves": data.get("moves"),
+        "guard": data.get("guard"),
+        "refused": data.get("refused"),
+        "note": data.get("note"),
+    }
+    return {key: value for key, value in note.items() if value not in (None, "", [])}
+
+
 def _note(result: CommandResult) -> dict[str, Any] | None:
     """What one command reported that an agent should read, if anything."""
     data = result.result
@@ -1945,20 +2000,7 @@ def _note(result: CommandResult) -> dict[str, Any] | None:
             "deviation": data.get("deviation"),
         }
     if result.name == "size":
-        return {
-            **base,
-            "total_cells": data.get("total_cells"),
-            "splits": [item.get("edge") for item in data.get("splits", [])],
-            "budget": data.get("budget"),
-            "field_cells": data.get("field_cells"),
-            "jump_cost": [data.get("field_jump_cost"), data.get("jump_cost")],
-            "verification": data.get("verification"),
-            "moves": data.get("moves"),
-            "guard": data.get("guard") or None,
-            "worst_interface_size_ratio": data.get("worst_interface_size_ratio"),
-            "refused": data.get("refused"),
-            "note": data.get("note"),
-        }
+        return {**base, **_size_note(data)}
     if result.name in ("add_grid", "add_band", "add_ring"):
         return {
             **base,

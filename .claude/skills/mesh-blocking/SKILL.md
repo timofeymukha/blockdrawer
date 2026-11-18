@@ -155,12 +155,15 @@ count and grading from the wall distance, matches widths across interfaces
 and spends a cell budget (default 1.5 times the field's own cells, `budget=`)
 on continuity. Read:
 
-- `total_cells`, `budget`, `field_cells` - what you are paying for.
-- `verification.field` and `verification.result` - faces above 70 and the
-  worst face for the field's state and the result. Spending never adds to
-  them; the field's own are not removed.
-- `worst_interfaces`, `interface_jumps` (above 2.5, 5, 20), `splits`,
-  `refused`, `guard`, `note`.
+- `total_cells`, `budget`, `field_cells`, `budget_binding` - what you pay
+  for, and whether a larger budget would buy more continuity.
+- `verification` - faces above 70, worst face and skewness for the field's
+  state and the result. Spending never adds to them; the field's own are
+  not removed.
+- `first_width` - per wall patch the first widths the spokes got against
+  the one asked, in percent.
+- `worst_jump` (with the counts above 2.5, 5, 20; `quality`'s measure,
+  which the polish then changes), `splits`, `refused`, `guard`, `note`.
 
 Go on when `verification.result` has no face above 70. **If
 `verification.field` has faces above 70**, size again from the same shaped

@@ -190,6 +190,10 @@ class SizeResult:
     worst_aspect: float = 1.0
     unsynchronized_links: int = 0
     budget_factor: float = 1.0
+    # True when the budget stopped spending (or coarsened the field): a
+    # larger one would buy more continuity. False: spending ran out of
+    # moves that lower the jump cost (or the guard refused them) first.
+    budget_binding: bool | None = None
     note: str = ""
 
     def to_data(self) -> dict[str, Any]:
@@ -217,6 +221,7 @@ class SizeResult:
             "worst_cell_aspect_ratio": self.worst_aspect,
             "unsynchronized_spacing_links": self.unsynchronized_links,
             "budget_factor": self.budget_factor,
+            "budget_binding": self.budget_binding,
             "note": self.note,
         }
 
@@ -598,7 +603,7 @@ def size_model(
             "the block it names is too tapered for the counts the field gives it - raise "
             "core_size's resolution there, split the block or keep the counts"
         )
-    result = _report(working, cells_before, state["components"], splits, refused, state["factor"], note)
+    result = _report(working, cells_before, state["components"], splits, refused, state["factor"], note, options)
     result.budget = budget
     result.field_cells = field_cells
     result.field_jump_cost = field_cost
@@ -606,6 +611,7 @@ def size_model(
     result.moves = moves
     result.guard = guard
     result.verification = state.get("verification", {})
+    result.budget_binding = state.get("budget_binding")
     field_faces = result.verification.get("field", {}).get("severe_faces", 0)
     if field_faces:
         result.note = " ".join(filter(None, [result.note, (
@@ -658,7 +664,8 @@ def _size_by_distance(model, options, blocks, bbox) -> SizeResult:
         )
     verdict = _verify(working, _neighbours(working))[1]
     brief = {key: verdict[key] for key in ("severe_faces", "max_non_orthogonality", "max_skewness", "folded_cells")}
-    result = _report(working, cells_before, old.components, old.splits, old.refused, old.budget_factor, old.note)
+    result = _report(working, cells_before, old.components, old.splits, old.refused, old.budget_factor, old.note,
+                     options)
     result.budget = options.budget
     result.field_cells = result.total_cells
     result.verification = {
@@ -914,7 +921,7 @@ def _actual(edges, ratios, counts) -> dict[tuple[EdgeKey, str], float]:
     return widths
 
 
-def _report(model, cells_before, components, splits, refused, factor, note) -> SizeResult:
+def _report(model, cells_before, components, splits, refused, factor, note, options=None) -> SizeResult:
     from .quality import assess_quality
 
     report = assess_quality(model)
@@ -932,7 +939,7 @@ def _report(model, cells_before, components, splits, refused, factor, note) -> S
         refused=refused,
         jumps=summary.get("interface_jumps", {}),
         worst_jumps=worst,
-        bands=_bands(model),
+        bands=_bands(model, options),
         worst_interface=summary.get("max_interface_size_ratio", 1.0),
         worst_aspect=summary.get("max_cell_aspect_ratio", 1.0),
         unsynchronized_links=sum(
@@ -1089,8 +1096,9 @@ def _split_strips(model, field_, state, options, splits, refused) -> bool:
     return split_any
 
 
-def _bands(model: MeshModel) -> list[dict]:
-    """Per wall patch: the edges leaving it into the fluid, their cells and first widths."""
+def _bands(model: MeshModel, options: SizeOptions | None = None) -> list[dict]:
+    """Per wall patch: the edges leaving it into the fluid, their cells and
+    first widths (smallest and largest), and the first width asked for it."""
     walls = {name for name, boundary in model.boundaries.items() if boundary.kind == "wall"}
     by_patch: dict[str, set[str]] = {}
     on_wall: set[EdgeKey] = set()
@@ -1112,12 +1120,15 @@ def _bands(model: MeshModel) -> list[dict]:
             cells.append(model.edge_cells[current])
             firsts.append(model.edge_width_at_vertex(current, ends[0]))
         if cells:
-            bands.append({
+            band = {
                 "patch": name,
                 "spokes": len(cells),
                 "cells": [min(cells), max(cells)],
                 "first_width": [min(firsts), max(firsts)],
-            })
+            }
+            if options is not None:
+                band["asked"] = dict(options.patch_first_widths).get(name, options.first_width)
+            bands.append(band)
     return bands
 
 
@@ -1460,6 +1471,7 @@ def _spend(model: MeshModel, state: dict, options: SizeOptions, budget: int, ske
 
     cells = _state_cells(model, {"counts": counts})
     moves: list[dict] = []
+    stopped_by_budget = False
     tabu: set[tuple] = set()
     refused = 0
 
@@ -1621,6 +1633,7 @@ def _spend(model: MeshModel, state: dict, options: SizeOptions, budget: int, ske
             # Stop at the first move the budget cannot pay for: a smaller
             # budget's moves are then a prefix of a larger one's, so more
             # budget never leaves a higher jump cost.
+            stopped_by_budget = True
             break
         kind, _score, index, value, added = best
         if kind == "regrade":
@@ -1776,5 +1789,8 @@ def _spend(model: MeshModel, state: dict, options: SizeOptions, budget: int, ske
             f"{field_summary.get('max_non_orthogonality', 0.0):.1f} + {VERIFY_TOLERANCE:g}, "
             "or skewness past 4)"
         )
-    state = {**state, "counts": counts, "ratios": new_ratios, "verification": verification}
+    state = {
+        **state, "counts": counts, "ratios": new_ratios, "verification": verification,
+        "budget_binding": stopped_by_budget or state.get("factor", 1.0) < 1.0,
+    }
     return state, kept, "; ".join(notes)

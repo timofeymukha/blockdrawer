@@ -116,7 +116,14 @@ them in the canvas widgets.
   per-command notes for the results worth reading (`_note`: repairs,
   splits, merges, fits, spacing links left out of sync), capped at
   `MAX_NOTES`. A new command whose result an agent must read adds a case to
-  `_note`. Parameter kinds `blocks` (block IDs) and `numbers` (a list of
+  `_note`. A note's values are scalars, short strings or flat lists, since
+  the text digest elides nested ones: `size`'s (`_size_note`) gives
+  `total_cells`, `field_cells`, `budget`, `budget_binding`, the field and
+  result verdicts in one `verification` string, `first_width` per wall
+  patch (smallest..largest spoke first width for the asked one, in
+  percent), `worst_jump` (quality's interface measure on the sized session,
+  with the counts above 2.5/5/20), `jump_cost`, `splits`, `moves`, `guard`,
+  `refused`, `note`, empty ones left out. Parameter kinds `blocks` (block IDs) and `numbers` (a list of
   floats, e.g. a bbox) serve `smooth`.
 - `blockdrawer/command_line.py`: shared shell-like tokenization for textual
   commands and OpenFOAM command prefixes. POSIX hosts use normal shell escaping;

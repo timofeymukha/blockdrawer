@@ -1,6 +1,6 @@
 import unittest
 
-from blockdrawer.commands import apply_commands, batch_digest
+from blockdrawer.commands import apply_commands, batch_digest, format_digest
 from blockdrawer.domain import TopologyError
 from blockdrawer.history import ModelHistory
 from blockdrawer.model import MeshModel, edge_key
@@ -125,6 +125,24 @@ class SizeTests(unittest.TestCase):
                 first_width=0.01, core_size=0.1, patch_first_widths=(("nope", 0.01),)
             ))
 
+    def test_the_quiet_note_carries_what_step_5_reads(self) -> None:
+        model = channel()
+        batch = apply_commands(model, ["size first_width=0.005 core_size=0.1 wall_aspect=10"])
+        result = batch.results[0].result
+        digest = batch_digest(model, batch)
+        (note,) = digest["notes"]
+        self.assertIn(note["budget_binding"], (True, False))
+        self.assertEqual(note["budget_binding"], result["budget_binding"])
+        self.assertRegex(note["verification"], r"^field \d+ faces >70, max [0-9.]+, skew [0-9.]+ \| result ")
+        (band,) = result["bands"]
+        self.assertEqual(band["asked"], 0.005)
+        self.assertRegex(note["first_width"], r"^wall [0-9.e-]+\.\.[0-9.e-]+ for 0\.005 \([+-]\d+%\.\.[+-]\d+%\)$")
+        worst = result["worst_interfaces"][0]
+        self.assertTrue(note["worst_jump"].startswith(f"{worst['jump']:.3g} at {worst['edge']}"))
+        text = "\n".join(format_digest(1, digest))
+        self.assertNotIn("…", text)
+        self.assertNotIn("=None", text)
+
     def test_the_command_is_one_undoable_action(self) -> None:
         model = channel()
         history = ModelHistory(model)
@@ -137,6 +155,8 @@ class SizeTests(unittest.TestCase):
         (note,) = batch_digest(model, batch)["notes"]
         self.assertEqual(note["op"], "size")
         self.assertEqual(len(note["splits"]), 1)
+        self.assertIn("first_width", note)
+        self.assertIn("faces >70", note["verification"])
         scoped = apply_commands(o_grid(), [
             "size first_width=0.01 core_size=0.4 blocks=b1 first_widths=wall=0.005",
         ]).results[0].result

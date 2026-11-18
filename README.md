@@ -789,9 +789,16 @@ skewness 4 from an input below is refused. Strips the
 spent state leaves coarse between finer neighbours at both ends are split
 and the budget spent again when that lowers the jumps. `keep_counts=true`
 recomputes the gradings only. The report gives the cells, the field's own
-cells and jump cost against the result's, the interface jumps above 2.5, 5
-and 20 and the worst ones, the moves, the guard's refusals, the splits and
-the links left out of sync. Measured (shape, size, polish, checkMesh, budget
+cells and jump cost against the result's, whether the budget stopped the
+spending (`budget_binding`; false when no move that lowers the jumps was
+left or the guard refused them), the interface jumps above 2.5, 5 and 20
+and the worst ones, the first widths each wall patch's spokes got against
+the one asked (`bands`), the moves, the guard's refusals, the splits and
+the links left out of sync; the quiet digest (`apply --quiet`, MCP default)
+carries all of it as short strings. The worst jump is `quality`'s own
+measure on the sized session: `quality` after a later `smooth` reads a
+different one because the polish moves vertices (three cylinders: 6.14
+after `size`, 5.59 after the final `smooth`). Measured (shape, size, polish, checkMesh, budget
 = the reference's cells; references: hand meshes and the previous fixed
 sizing): the backward step 15,204 cells, 0 degrees, worst jump 1.1 (hand
 23,598, 1.1); the square cylinder 2.2 against 6.0 and the three foils 9.1
