@@ -108,8 +108,8 @@ JSON); ask for the part you need rather than the whole session.
 
 The procedure is the repository skill .claude/skills/mesh-blocking/SKILL.md:
 Step 2 (choose the route: operators by hand or the topology engine),
-Step 3 (build), Step 4 (shape: smooth mode=shape), Step 5 (size, and the
-method=distance decision from its verification), Step 6 (polish: smooth),
+Step 3 (build), Step 4 (shape: smooth mode=shape), Step 5 (size, and what its
+verification means for the polish), Step 6 (polish: smooth),
 Step 7 (judge: quality_report, then check_mesh) and Step 8 (deliver); its
 reference files (engine.md, sizing.md, failures.md, examples/) are opened
 from those steps. Read it before building or judging a mesh. Pseudo-2D cases

@@ -68,21 +68,32 @@ Choose by what has been measured, not by what a route intends:
 | Single sharp airfoil, C-shaped far field (A-airfoil) | engine C-grid | 263 s | 200 blocks, resolved, Mesh OK 45.1 deg | engine README table |
 | Smooth bodies, clusters, simple channels | engine | seconds | e.g. `two_circles` 32 blocks resolved, Mesh OK 63.3 deg; `periodic_hill` resolved 36.2 deg | engine README table |
 | 30P30N (slat, main, flap) | engine (`--wake --hull`) | minutes per run | 203 blocks, admissible not resolved; 5,486 cells, Mesh OK, max 77.9 deg, 60 faces above 70; defects left: the cove seam sliver (b21/b31 at v12), the slot strips | `engine.md`; review measurements in README (`smooth`, `size`) |
+| Internal flow with a body (cylinder in a channel) | operators by hand | 14 build commands, 4.5 min | 36 blocks, 21,824 cells, Mesh OK, 0 faces above 70, max 35.6 deg | benchmark round 1, one trial |
+| Junction (Y-shaped channels) | operators by hand; the branch's blocks from vertices | 23 build commands, 4.5 min | 12 blocks, 41,946 cells, Mesh OK, max 40.0 deg (no wall bands: fine columns run through the junction) | benchmark round 1, one trial |
+| Periodic passage round a body (compressor cascade) | operators by hand; stations typed and projected, blocks from vertices | 104 commands, 17 min | 44 blocks, 62,788 cells, Mesh OK, max 64.7 deg (average 28.8), skewness 3.26 | benchmark round 1, one trial; the engine refuses a `cyclic` pair from the command line |
+| Multi-element airfoil with coves, engine not allowed | operators by hand plus two vertex scripts (cove pocket fill, hull) | 259 commands, 64 min | 538 blocks, 378,785 cells, Mesh OK, 0 faces above 70, max 62.3 deg, skewness 3.59 | benchmark round 1, one trial |
 
-Rules that follow from the table:
+Rules that follow from the table; the first that matches decides:
 
-- **A domain the operators can state** (stations, polar patches, bands along
-  walls, rings round curves, boxes) - build it by hand with the operators. It
-  is minutes, and every result above came out Mesh OK.
-- **A single body, a cluster of smooth bodies, a simple internal domain, a
-  sharp airfoil in a C-shaped far field** - try the engine first
-  (`engine.md`), in the background (minutes per run); fall back to the
-  operators on a refusal.
-- **Multi-element, cove, groove** - the engine builds 30P30N with defects
-  left; anything with pockets the operators can state goes by hand.
-- A session written by a layout script that computes vertices is the last
-  resort, when no operator can express a region (two-way conform across a
-  box whose sides carry different stations, a loop fill - neither exists).
+1. **A periodic (`cyclic`) passage with a body in it, internal flow with a
+   body, a junction** - build it by hand with the operators. The
+   engine refuses a `cyclic` pair from the command line and a reflex corner
+   on a guide wall; every such case above came out Mesh OK by hand.
+2. **A single body, a cluster of smooth bodies, a simple internal domain
+   with no body and no periodic pair, a sharp airfoil in a C-shaped far
+   field** - try the engine first (`engine.md`), in the background (a
+   C-grid run took 8 minutes on two cores); fall back to the operators on a
+   refusal. A blunt base wider than about two percent of the perimeter has
+   no template there (`engine.md`).
+3. **Multi-element, cove, groove** - the engine builds 30P30N with defects
+   left; by hand it took an hour and two vertex scripts; a groove or pocket
+   the operators can state goes by hand.
+4. **Anything else the operators can state** (stations, polar patches,
+   bands along walls, rings round curves, boxes) - by hand: minutes.
+5. A session written by a layout script that computes vertices is the last
+   resort, when no operator can express a region (two-way conform across a
+   box whose sides carry different stations, a fill between existing
+   fronts - neither exists).
 
 ## Step 3 - Build
 
@@ -165,12 +176,15 @@ on continuity. Read:
 - `worst_jump` (with the counts above 2.5, 5, 20; `quality`'s measure,
   which the polish then changes), `splits`, `refused`, `guard`, `note`.
 
-Go on when `verification.result` has no face above 70. **If
-`verification.field` has faces above 70**, size again from the same shaped
-session with `method=distance` (the wall-distance sizing), polish both,
-and keep the one `check` finds fewer such faces in, then the better jump
-histogram. This rests on one session (fine 30P30N: distance 0 faces at
-68.8 deg, directional 6 at 85.8; README, `size`). A `size refused` error
+Go on when `verification.result` has no face above 70. Faces above 70 in
+`verification.field` may go in the polish (Step 6; they did on three
+cylinders): polish and `check` first. Where `check` still finds them, locate the block (`check`
+maps the set) and use `failures.md`. `method=distance` is not a general
+retry: it helped on one session (fine 30P30N: 0 faces above 70 at 68.8 deg
+against 6 at 85.8) and was worse on both others measured (NACA 4412 C-grid:
+2,088 faces above 70, max 81.5; three cylinders: skewness 3.85 and a jump
+of 19.2 where the default's polish had already cleared the faces). Try it
+only as a comparison kept when `check` says so. A `size refused` error
 means the counts would take checkMesh's skewness past 4 in a tapered block:
 split that block or keep the counts. Jumps that spending leaves are mostly
 topological (`sizing.md`).

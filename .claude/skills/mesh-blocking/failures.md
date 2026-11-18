@@ -33,7 +33,8 @@ shows why.
 
 | Signature | Cause | Tool |
 |---|---|---|
-| Faces above 70 in one tapered block after the polish, also in `size`'s `verification.field` | the counts the field gives that block | `size ... method=distance` and compare by `check`; else `repair_block`; else split the block (`split_edge`) |
+| Faces above 70 in one tapered block after the polish, also in `size`'s `verification.field` | the counts the field gives that block | `repair_block`; else split the block (`split_edge`); `size ... method=distance` only as a comparison kept when `check` prefers it (better on the fine 30P30N, worse on NACA 4412 and three cylinders) |
+| A face above 70 in cells far thinner than tall, at a far-field corner | wall-fine spacing carried out along a count component (the C-grid's streamwise component) | `set_edge_grading EDGE start_width W` on the far edges, then `check` |
 | `size refused`: skewness past 4 | a tapered block with few cells across | `split_edge` through it, or `size ... keep_counts=true` on counts you chose |
 | Two opposite edges graded towards opposite ends | crossed gradings shear every cell between them; the corner screen does not see it | `repair_block` (regrade move) or `set_edge_grading` |
 | Size jump around a short edge carrying many cells | the edge shares a count component with a long fine edge; counts are never lowered | `set_edge_cells` on that component, then `size FIRST CORE keep_counts=true` |

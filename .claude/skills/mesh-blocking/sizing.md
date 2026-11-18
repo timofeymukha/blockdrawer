@@ -75,14 +75,17 @@ more faces above 70, a worst face more than 0.5 degrees higher, a fold, or
 skewness past 4. So:
 
 - `result` above 70 degrees where `field` was not: cannot happen; report it.
-- `field` with faces above 70: the counts the field gives a tapered block
-  leave them, and spending does not remove them. Size again from the same
-  shaped session with `method=distance`, polish both, `check` both, keep the
-  one with fewer faces above 70, then the better jump histogram. Measured on
-  one session only: fine 30P30N, `method=distance` 452,791 cells, Mesh OK,
-  0 faces above 70, max 68.83; directional 450,609 cells, 6 at 85.8 (README,
-  `method=distance`). On every other session measured the directional
-  default was better.
+- `field` with faces above 70: the counts the field gives a block leave
+  them, and spending does not remove them. Polish (`smooth`) and `check`
+  first: the polish may clear them (it did on three cylinders). Where `check` still finds them,
+  locate the block (`check` maps the set) and go to `failures.md`; a face in
+  cells far thinner than they are tall is wall-fine spacing carried out by
+  a count component (NACA 4412: one face at 70.6 at the far-field corner,
+  fixed by `set_edge_grading ... start_width` on two edges there).
+  `method=distance` is a comparison, not a retry: fine 30P30N 0 faces above
+  70 (max 68.83) against the default's 6 at 85.8, but NACA 4412 2,088
+  faces above 70 (max 81.5) and three cylinders skewness 3.85 and a jump of
+  19.2 where the default's polish had none (README, `method=distance`).
 
 ## What the measurements say
 
@@ -103,7 +106,8 @@ size, polish.)
   - A thin strip beside an edge that needs fine cells at both ends, whose
     split would leave a sliver (three ellipses, b67/b73, jump 25).
   - Faces above 70 degrees the field state itself has (fine 30P30N, b21,
-    b39, b53): `method=distance`, or `failures.md`.
+    b39, b53): `failures.md`; there `method=distance` was the one that
+    removed them.
 
 ## Sizing by hand
 

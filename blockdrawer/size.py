@@ -616,8 +616,8 @@ def size_model(
     if field_faces:
         result.note = " ".join(filter(None, [result.note, (
             f"the field's own state has {field_faces} face(s) above 70 degrees "
-            "(verification.field) that spending does not remove; size again with "
-            "method=distance and keep the mesh check finds fewer such faces in"
+            "(verification.field) that spending does not remove; polish and check "
+            "first, then see failures.md for the blocks check names"
         )]))
     _replace(model, working)
     return result

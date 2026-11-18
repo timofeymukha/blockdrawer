@@ -31,8 +31,8 @@ them in the canvas widgets.
 - Meshing methodology for agents: `.claude/skills/mesh-blocking/`.
   `SKILL.md` is the procedure (at most 250 lines, a test keeps it there):
   Steps 1-8 - collect, choose the route from a table of measured outcomes,
-  build (operators by hand or the engine), shape, size (with the
-  `method=distance` decision), polish, judge, deliver - each with its
+  build (operators by hand or the engine), shape, size (`method=distance`
+  only as a comparison), polish, judge, deliver - each with its
   command, what to read and the numbers that mean go on. Reference files
   opened from those steps: `engine.md` (the engine per configuration, its
   options and report), `sizing.md` (inputs, `verification`, measured

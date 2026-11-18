@@ -819,15 +819,18 @@ at 68.8. Check fine sessions and correct those blocks by hand.
 of commit 9a84f29): counts from the wall distance alone, wall-normal edges
 graded, tangential ones uniform, no budget spending, `interface_growth`
 unmatched unless given. It is verified and reported the same way
-(`verification.field` equals `verification.result`). The decision point,
-which rests on one session so far: run `size`; if `verification.field`
-shows faces above 70 degrees, run it again with `method=distance` and keep
-the mesh `check` finds fewer such faces in, then the better jump
-histogram. On the fine 30P30N (`smooth mode=shape allow_stale_fold=true`,
-`size 5e-5 1.0 growth=1.08 wall_aspect=25 count_rule=max method=distance`,
-`smooth`) it gives 452,791 cells, Mesh OK, 0 faces above 70, max 68.83
-degrees, where the default gives 6 at 85.8; everywhere else the default was
-better.
+(`verification.field` equals `verification.result`). It is a comparison,
+not a general retry. On the fine 30P30N (`smooth mode=shape
+allow_stale_fold=true`, `size 5e-5 1.0 growth=1.08 wall_aspect=25
+count_rule=max method=distance`, `smooth`) it gives 452,791 cells, Mesh OK,
+0 faces above 70, max 68.83 degrees, where the default gives 6 at 85.8.
+In the first benchmark round two agents followed the earlier advice to
+retry with it whenever `verification.field` had faces above 70, and it was
+worse on both: the NACA 4412 C-grid 88,555 cells with 2,088 faces above 70
+(max 81.5) where one face at 70.6 was left; three cylinders skewness 3.85
+and a worst jump of 19.2, where the default's polish had already cleared
+the faces. Polish and `check` first; keep a `method=distance` mesh only
+when `check` prefers it.
 
 Known limit - counts are never lowered: spending only adds cells, so a
 count the field sets too high stays. On the coarse 30P30N the 0.0019-long
