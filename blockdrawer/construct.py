@@ -28,7 +28,8 @@ computed:
     Assign every exterior edge chosen by a selector - within a tolerance of
     reference curves, inside a box, along the exterior chain between two
     vertices (all given selectors must hold) - to a patch, created if
-    missing.
+    missing. A curve is closed implicitly, as ``add_ring`` closes it, where
+    the closing segment's edges have their blocks outside it.
 
 Every operator works on a copy and replaces the model only when the result
 validates, so each is one atomic edit and one history entry. A block that
@@ -234,15 +235,6 @@ def _extent(points: Sequence[Point]) -> float:
     xs = [p[0] for p in points]
     ys = [p[1] for p in points]
     return math.hypot(max(xs) - min(xs), max(ys) - min(ys)) if points else 0.0
-
-
-def _closes(points: Sequence[Point]) -> bool:
-    """An open point list closes when its end gap is no longer than twice
-    its median segment: the supplied body files leave the loop implied."""
-    if len(points) < 3:
-        return False
-    segments = sorted(math.dist(a, b) for a, b in zip(points, points[1:]))
-    return math.dist(points[0], points[-1]) <= 2.0 * segments[len(segments) // 2] + 1.0e-12
 
 
 def _inside(point: Point, polygon: Sequence[Point]) -> bool:
@@ -1160,15 +1152,26 @@ def set_boundary_by(
             x0, y0, x1, y1 = bbox
             chosen = {e for e in chosen if all(x0 <= p[0] <= x1 and y0 <= p[1] <= y1 for p in samples[e])}
         if curves:
-            lines = []
+            on_curves: set[EdgeKey] = set()
             for curve in curves:
                 points = _curve_polygon(working, curve)
                 limit = tolerance or 1.0e-3 * _extent(points)
-                lines.append((points, _closes(points), limit))
-            chosen = {e for e in chosen if any(
-                all(_distance_to(p, points, closed) <= limit for p in samples[e])
-                for points, closed, limit in lines
-            )}
+                for e in chosen:
+                    if all(_distance_to(p, points, False) <= limit for p in samples[e]):
+                        on_curves.add(e)
+                    elif len(points) >= 3 \
+                            and all(_distance_to(p, points, True) <= limit for p in samples[e]) \
+                            and not _inside(_block_centre(working, occurrences[e][0][0]), points):
+                        # Along the closing segment from the last point to
+                        # the first, with its block outside the closed
+                        # curve: the curve bounds a body and is closed
+                        # implicitly, as add_ring closes it (a blunt base
+                        # whose corner points are not repeated). An open
+                        # wall whose chord bounds the domain itself (a
+                        # cavity lid, a U-bend's inlet) has its blocks
+                        # inside and is left alone.
+                        on_curves.add(e)
+            chosen &= on_curves
         if between:
             chosen &= set(_exterior_path(working, exterior, between[0], between[1]))
         if not chosen:
@@ -1184,6 +1187,11 @@ def set_boundary_by(
         return result
 
     return _atomic(model, work)
+
+
+def _block_centre(model: MeshModel, block: Block) -> Point:
+    return (sum(model.vertices[v].x for v in block.vertices) / 4.0,
+            sum(model.vertices[v].y for v in block.vertices) / 4.0)
 
 
 def _exterior_path(model, exterior, start, end) -> list[EdgeKey]:

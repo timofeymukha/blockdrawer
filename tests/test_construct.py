@@ -200,6 +200,34 @@ class BoundaryTests(unittest.TestCase):
         self.assertTrue(all(name == "side" for name in chain.edge_boundaries.values()))
 
 
+    def test_a_curve_closed_implicitly_takes_its_closing_segment_only_round_a_body(self) -> None:
+        # A plate with a round nose whose blunt base (x = 1) is the implied
+        # closing segment: four times the point spacing, so the gap rule
+        # alone left it open and the base edge unassigned after add_ring.
+        points = [(1.0 - k * 0.01, 0.02) for k in range(101)]
+        points += [(0.02 * math.cos(math.pi / 2 + math.pi * k / 20), 0.02 * math.sin(math.pi / 2 + math.pi * k / 20))
+                   for k in range(1, 20)]
+        points += [(k * 0.01, -0.02) for k in range(101)]
+        text = ";".join(f"{x},{y}" for x, y in points)
+        model = apply_commands(MeshModel(box=(5, 5, 6, 6)), [
+            f"add_curve {text} name=plate", "add_ring plate 0.01 count=12",
+            "set_boundary_by wall type=wall curves=plate",
+        ]).model
+        base = [e for e in model.edge_boundaries
+                if all(abs(model.vertices[v].x - 1.0) < 1e-12 for v in e)]
+        self.assertEqual(len(base), 1)
+        self.assertEqual(len(model.edge_boundaries), 13)
+        # An open U whose chord is the domain's own lid: the lid's block is
+        # inside the closed curve, so the lid is not the U's.
+        cavity = apply_commands(MeshModel(box=(0, 0, 1, 1)), [
+            "add_curve 0,1;0,0;1,0;1,1 name=walls",
+            "set_boundary_by walls type=wall curves=walls",
+        ]).model
+        self.assertEqual(len(cavity.edge_boundaries), 3)
+        lid = edge_key(*(v.id for v in cavity.vertices.values() if v.y == 1.0))
+        self.assertNotIn(lid, cavity.edge_boundaries)
+
+
 class OperatorContractTests(unittest.TestCase):
     def test_one_history_entry_and_determinism(self) -> None:
         commands = [

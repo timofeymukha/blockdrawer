@@ -1430,7 +1430,9 @@ _register(CommandSpec(
         "exterior edge chosen by all the given selectors: within tolerance "
         "(default a thousandth of the curve's size) of the curves, inside "
         "bbox, on the shortest exterior chain between two vertices; "
-        "unassigned=true leaves assigned edges alone."
+        "unassigned=true leaves assigned edges alone. A curve is closed from "
+        "its last point to its first where the edge's block lies outside it "
+        "(a body's implied base), not where the chord bounds the domain."
     ),
     (
         Parameter("name", "str", "patch name"),

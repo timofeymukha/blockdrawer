@@ -384,7 +384,11 @@ them in the canvas widgets.
   places stations at curve corners (`CORNER_ANGLE`) and by arc length,
   spline wall edges through the curve's points (at most
   `MAX_SPLINE_POINTS`, none within a thousandth of a station). Curves
-  without a repeated end point are closed implicitly. No engine code.
+  without a repeated end point are closed implicitly; `set_boundary_by
+  curves=` agrees: an edge along the closing segment is taken when its
+  block lies outside the closed curve (the curve bounds a body: a blunt
+  base whose corners are not repeated), not when inside (an open wall whose
+  chord bounds the domain, a cavity lid). No engine code.
 - `blockdrawer/size_distance.py`: item 3's sizing (commit 9a84f29),
   unchanged, behind `size method=distance`: the scalar wall-distance field,
   wall-normal edges graded from their finer end, tangential edges uniform,

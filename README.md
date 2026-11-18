@@ -501,7 +501,9 @@ refused by name; `id=PREFIX` names new vertices `PREFIX_0, ...` and blocks
   arc length, wall edges as splines through the curve's points.
 - `set_boundary_by NAME [type=T] [curves=...] [bbox=...] [between=A,B]
   [unassigned=true]` - every exterior edge all given selectors choose, the
-  patch created when missing.
+  patch created when missing. A curve whose end point is not repeated is
+  closed as `add_ring` closes it where the mesh lies outside it (a blunt
+  base), not where the closing chord bounds the domain itself (a cavity lid).
 
 Measured (`review_operators/` beside the trial data): the 27-block backward
 step in 8 commands (`add_grid` with one skip box and six `set_boundary_by`;
