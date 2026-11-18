@@ -21,9 +21,10 @@ computed:
     every spoke to a rectangle (a box corner taken by the nearest spoke).
 ``add_ring``
     A band round a closed reference curve: vertices on the curve at its
-    sharp corners and at a count or at given arc-length fractions, wall
-    edges as splines through the curve's own points, then the band as
-    ``add_band`` builds it.
+    sharp corners, at given arc-length fractions, where the outward normal
+    has given angles, optionally at rounded convex corners (``tips``), and
+    by a count spread between them; wall edges as splines through the
+    curve's own points, then the band as ``add_band`` builds it.
 ``set_boundary_by``
     Assign every exterior edge chosen by a selector - within a tolerance of
     reference curves, inside a box, along the exterior chain between two
@@ -54,8 +55,16 @@ Point = tuple[float, float]
 # blocks (each turning at most FAN_SECTOR) instead of one mitred spoke.
 FAN_ANGLE = math.radians(60.0)
 FAN_SECTOR = math.radians(90.0)
-# A curve vertex turning more than this is a sharp corner add_ring keeps.
+# A curve vertex turning more than this is a sharp corner add_ring keeps
+# (the default of its corner option).
 CORNER_ANGLE = math.radians(30.0)
+# A rounded convex corner (add_ring tips=true): the wall turns at least
+# TIP_TURN within TIP_WINDOW of the perimeter either side of a vertex.
+TIP_TURN = math.radians(45.0)
+TIP_WINDOW = 0.01
+# A tip this close (fraction of the perimeter) to a corner, a fraction or a
+# normal station is that station.
+TIP_MERGE = 0.001
 # A mitred spoke is at most this many band heights long.
 MITRE_LIMIT = 3.0
 # Interior points kept per spline edge.
@@ -874,6 +883,18 @@ def _band_to_box(build, chain, position, spokes, box, edge_path):
             raise TopologyError(f"no spoke left for the box corner {corner}")
         hits[target] = list(corner)
         snapped.add(target)
+    for e in range(edge_count):
+        a, b = e, (e + 1) % count
+        quad = [position[chain.vertices[a]], position[chain.vertices[b]], tuple(hits[b]), tuple(hits[a])]
+        if not _ordered_convex(quad, chain.side):
+            def where(k: int) -> str:
+                tag = " (a box corner)" if k in snapped else ""
+                return f"{chain.vertices[k]}'s spoke runs to ({hits[k][0]:.6g}, {hits[k][1]:.6g}){tag}"
+            raise TopologyError(
+                f"the block from edge {chain.vertices[a]}-{chain.vertices[b]} to the box would fold: "
+                f"{where(a)} and {where(b)}; put a station whose outward normal points at the box "
+                "corner (add_ring normals=...), or move the box"
+            )
     outer = [build.vertex((h[0], h[1])) for h in hits]
     for e in range(edge_count):
         a, b = e, (e + 1) % count
@@ -1017,15 +1038,27 @@ def add_ring(
     *,
     count: int = 0,
     fractions: Sequence[float] = (),
+    normals: Sequence[float] = (),
+    corner: float = math.degrees(CORNER_ANGLE),
+    tips: bool = False,
     rows: int = 1,
     growth: float = 1.0,
     prefix: str | None = None,
 ) -> ConstructResult:
-    """A band round a closed reference curve, its wall edges on the curve."""
+    """A band round a closed reference curve, its wall edges on the curve.
+
+    Stations: every curve vertex turning more than ``corner`` degrees, the
+    arc-length ``fractions``, the point where the outward normal has each of
+    the ``normals`` angles (refused unless there is exactly one), with
+    ``tips`` the peak of every rounded convex corner (`_tip_stations`), and
+    ``count`` edges spread by arc length between them."""
     if height <= 0.0:
         raise TopologyError("height must be positive")
-    if count < 0 or (not count and not fractions):
-        raise TopologyError("give count (edges round the curve) or fractions")
+    if count < 0 or (not count and not fractions and not normals):
+        raise TopologyError("give count (edges round the curve), fractions or normals")
+    if not 0.0 < corner < 180.0:
+        raise TopologyError("corner is an angle in degrees between 0 and 180")
+    corner_angle = math.radians(corner)
 
     def work(working: MeshModel) -> ConstructResult:
         loop = _curve_polygon(working, curve)
@@ -1036,17 +1069,32 @@ def add_ring(
         for k in range(n):
             lengths.append(lengths[-1] + math.dist(loop[k], loop[(k + 1) % n]))
         total = lengths[-1]
-        corners = []
-        for k in range(n):
-            a, p, b = loop[k - 1], loop[k], loop[(k + 1) % n]
-            t1 = _unit(p[0] - a[0], p[1] - a[1])
-            t2 = _unit(b[0] - p[0], b[1] - p[1])
-            turn = math.acos(max(-1.0, min(1.0, t1[0] * t2[0] + t1[1] * t2[1])))
-            if turn > CORNER_ANGLE:
-                corners.append(lengths[k])
+        area = sum(loop[k][0] * loop[(k + 1) % n][1] - loop[(k + 1) % n][0] * loop[k][1] for k in range(n))
+        orientation = 1.0 if area > 0.0 else -1.0
+        turning = _turning(loop)
+        corners = [lengths[k] for k in range(n) if abs(turning[k]) > corner_angle]
         stations = set(corners)
+        explicit = set(corners)
+        notes = []
+        if corners:
+            notes.append(f"{len(corners)} corner(s) above {corner:g} degrees")
         if fractions:
-            stations.update((f % 1.0) * total for f in fractions)
+            explicit.update((f % 1.0) * total for f in fractions)
+        for angle in normals:
+            explicit.add(_normal_station(loop, lengths, turning, orientation, corner_angle, angle))
+        if normals:
+            notes.append(f"{len(normals)} station(s) by normal")
+        stations.update(explicit)
+        if tips:
+            found = [
+                tip for tip in _tip_stations(loop, lengths, turning, orientation, corner_angle)
+                if all(_cyclic_gap(tip, other, total) > TIP_MERGE * total for other in explicit)
+            ]
+            stations.update(found)
+            notes.append(f"{len(found)} tip(s)" + (
+                " at fraction " + ", ".join(f"{round(t / total, 6) % 1.0:.4g}" for t in sorted(found))
+                if found else ""
+            ))
         if count:
             anchors = sorted(stations) or [0.0]
             pieces = [(anchors[k], anchors[(k + 1) % len(anchors)] + (total if k + 1 == len(anchors) else 0.0))
@@ -1101,9 +1149,165 @@ def add_ring(
         chain = _Chain(ids, interiors, kinds, True, side)
         _band(build, chain, height, rows, growth, None)
         build.finish()
-        return build.result("add_ring")
+        result = build.result("add_ring")
+        result.note = f"{len(ordered)} stations: " + ("; ".join(notes) or "by arc length")
+        return result
 
     return _atomic(model, work)
+
+
+def _turning(loop: Sequence[Point]) -> list[float]:
+    """Signed turning (radians, left positive) at every vertex of a closed loop."""
+    n = len(loop)
+    out = []
+    for k in range(n):
+        a, p, b = loop[k - 1], loop[k], loop[(k + 1) % n]
+        t1 = _unit(p[0] - a[0], p[1] - a[1])
+        t2 = _unit(b[0] - p[0], b[1] - p[1])
+        out.append(math.atan2(t1[0] * t2[1] - t1[1] * t2[0], t1[0] * t2[0] + t1[1] * t2[1]))
+    return out
+
+
+def _cyclic_gap(a: float, b: float, total: float) -> float:
+    gap = abs(a - b) % total
+    return min(gap, total - gap)
+
+
+def _tip_stations(loop, lengths, turning, orientation, corner_angle) -> list[float]:
+    """Arc lengths of the rounded convex corners of a closed loop.
+
+    A vertex's turning is spread over the half segments either side of it
+    (a turning density); a stretch where the wall turns convexly by at
+    least ``TIP_TURN`` within ``TIP_WINDOW`` of the perimeter either side of
+    a vertex is a rounded corner - an elliptic nose, an airfoil's leading
+    edge - and its station is the turning midpoint of the window about the
+    vertex where that turning peaks.  Vertices sharper than the corner
+    threshold are stations of their own and carry no turning here; a
+    circle of any size turns 7.2 degrees in such a window and has none."""
+    n = len(loop)
+    total = lengths[-1]
+    window = TIP_WINDOW * total
+    convex = [0.0 if abs(t) > corner_angle else orientation * t for t in turning]
+    segment = [lengths[k + 1] - lengths[k] for k in range(n)]
+    # Vertex k's turning spreads uniformly from the middle of the segment
+    # before it to the middle of the one after it.
+    lo = [lengths[k] - 0.5 * segment[k - 1] for k in range(n)]
+
+    # The cumulative turning is piecewise linear over the knots lo[0..n-1],
+    # lo[0] + total, and grows by the loop's whole convex turning per lap.
+    knots = lo + [lo[0] + total]
+    cumulative = [0.0]
+    for k in range(n):
+        cumulative.append(cumulative[-1] + convex[k])
+    lap = cumulative[-1]
+
+    def integral(x: float) -> float:
+        laps = math.floor((x - lo[0]) / total)
+        x -= laps * total
+        k = max(0, min(n - 1, _bisect(knots, x) - 1))
+        width = knots[k + 1] - knots[k]
+        f = 0.0 if width <= 0.0 else (x - knots[k]) / width
+        return laps * lap + cumulative[k] + convex[k] * min(1.0, max(0.0, f))
+
+    def turned(start: float, stop: float) -> float:
+        """Convex turning spread over the arc [start, stop]."""
+        return integral(stop) - integral(start)
+
+    if not any(c > 0.0 for c in convex):
+        return []
+    sums = [turned(lengths[k] - window, lengths[k] + window) for k in range(n)]
+    tight = [s >= TIP_TURN for s in sums]
+    if all(tight) or not any(tight):
+        return []
+    # Runs of tight vertices, cyclically; one tip per run at its peak.
+    start = next(k for k in range(n) if not tight[k])
+    runs, current = [], []
+    for step in range(1, n + 1):
+        k = (start + step) % n
+        if tight[k]:
+            current.append(k)
+        elif current:
+            runs.append(current)
+            current = []
+    if current:
+        runs.append(current)
+    stations = []
+    for run in runs:
+        peak = max(sums[k] for k in run)
+        plateau = [k for k in run if sums[k] >= peak * (1.0 - 1.0e-9)]
+        centre = plateau[len(plateau) // 2]
+        a, b = lengths[centre] - window, lengths[centre] + window
+        half = 0.5 * turned(a, b)
+        low, high = a, b
+        for _ in range(60):
+            middle = 0.5 * (low + high)
+            if turned(a, middle) < half:
+                low = middle
+            else:
+                high = middle
+        stations.append((0.5 * (low + high)) % total)
+    return stations
+
+
+def _normal_station(loop, lengths, turning, orientation, corner_angle, angle: float) -> float:
+    """The arc length where the loop's outward normal points at ``angle``
+    degrees (counter-clockwise from +x); refused unless there is exactly
+    one such point.  A smooth vertex's normal bisects its two segments' and
+    varies linearly between vertices; at a corner sharper than the corner
+    threshold every normal between its two segments' is at the corner."""
+    n = len(loop)
+    total = lengths[-1]
+
+    def outward(k: int) -> float:   # segment k -> k+1
+        a, b = loop[k], loop[(k + 1) % n]
+        tx, ty = b[0] - a[0], b[1] - a[1]
+        return math.atan2(-orientation * tx, orientation * ty)
+
+    samples: list[tuple[float, float]] = []
+    for k in range(n):
+        before, after = outward(k - 1), outward(k)
+        if abs(turning[k]) > corner_angle:
+            samples.append((lengths[k], before))
+            samples.append((lengths[k], before + _wrap(after - before)))
+        else:
+            samples.append((lengths[k], before + 0.5 * _wrap(after - before)))
+    target = math.radians(angle)
+    hits: list[float] = []
+    flat = False
+    for index in range(len(samples)):
+        s0, a0 = samples[index]
+        s1, a1 = samples[(index + 1) % len(samples)]
+        if index + 1 == len(samples):
+            s1 += total
+        sweep = _wrap(a1 - a0)
+        offset = _wrap(target - a0)
+        if sweep > 0.0 and 0.0 <= offset < sweep or sweep < 0.0 and sweep < offset <= 0.0:
+            hits.append((s0 + (s1 - s0) * offset / sweep) % total)
+        elif sweep == 0.0 and abs(offset) <= 1.0e-12:
+            hits.extend([s0 % total, s1 % total])
+            flat = True
+    distinct: list[float] = []
+    for hit in sorted(hits):
+        if all(_cyclic_gap(hit, other, total) > 1.0e-9 * total for other in distinct):
+            distinct.append(hit)
+    if len(distinct) != 1:
+        where = ", ".join(f"{h / total:.4g}" for h in distinct[:6])
+        raise TopologyError(
+            f"the outward normal points at {angle:g} degrees "
+            + ("along a straight stretch" if flat else
+               f"at {len(distinct)} places (fractions {where}{'...' if len(distinct) > 6 else ''})"
+               if distinct else "nowhere")
+            + " on the curve: a normal station needs exactly one; give fractions there"
+        )
+    return distinct[0]
+
+
+def _wrap(angle: float) -> float:
+    """``angle`` in (-pi, pi]."""
+    wrapped = math.fmod(angle + math.pi, 2.0 * math.pi)
+    if wrapped <= 0.0:
+        wrapped += 2.0 * math.pi
+    return wrapped - math.pi
 
 
 def _bisect(values: Sequence[float], x: float) -> int:

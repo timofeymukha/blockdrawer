@@ -182,6 +182,88 @@ class BandTests(unittest.TestCase):
         self.assertEqual(len(model.blocks), 1 + 8 + 4)
 
 
+def wall_stations(model, curve_points):
+    """The ring's vertices lying on the curve."""
+    from blockdrawer.construct import _distance_to
+
+    return sorted(
+        (round(v.x, 6), round(v.y, 6)) for v in model.vertices.values()
+        if _distance_to((v.x, v.y), curve_points, True) < 1e-9
+    )
+
+
+class RingStationTests(unittest.TestCase):
+    def ellipse(self, a, b, n):
+        return [(a * math.cos(2 * math.pi * k / n), b * math.sin(2 * math.pi * k / n)) for k in range(n)]
+
+    def build(self, points, ring):
+        text = ";".join(f"{x},{y}" for x, y in points)
+        batch = apply_commands(MeshModel(box=(20, 20, 21, 21)), [f"add_curve {text} name=c", ring])
+        return batch.model, batch.results[1].result
+
+    def test_tips_put_a_station_at_each_rounded_nose_and_none_on_a_circle(self) -> None:
+        # A 10:1 ellipse with 21 stations by arc length from (1, 0): the
+        # far nose (-1, 0) falls in the middle of an edge.
+        points = self.ellipse(1.0, 0.1, 400)
+        model, _ = self.build(points, "add_ring c 0.03 count=21")
+        self.assertNotIn((-1.0, 0.0), wall_stations(model, points))
+        model, result = self.build(points, "add_ring c 0.03 count=21 tips=true")
+        stations = wall_stations(model, points)
+        self.assertIn((-1.0, 0.0), [(round(x, 6), round(abs(y), 6)) for x, y in stations])
+        self.assertIn("2 tip(s)", result["note"])
+        circle = self.ellipse(1.0, 1.0, 64)
+        model, result = self.build(circle, "add_ring c 0.1 count=8 tips=true")
+        self.assertEqual(len(wall_stations(model, circle)), 8)
+        self.assertIn("0 tip(s)", result["note"])
+
+    def test_the_corner_threshold_is_an_option(self) -> None:
+        # A regular octagon turns 45 degrees at each vertex.
+        octagon = self.ellipse(1.0, 1.0, 8)
+        model, _ = self.build(octagon, "add_ring c 0.1 count=4")
+        self.assertEqual(len(wall_stations(model, octagon)), 8)
+        model, _ = self.build(octagon, "add_ring c 0.1 count=4 corner=50")
+        self.assertEqual(len(wall_stations(model, octagon)), 4)
+
+    def test_stations_by_outward_normal(self) -> None:
+        points = self.ellipse(1.0, 0.25, 300)
+        model, result = self.build(points, "add_ring c 0.05 normals=90,180,270,0 count=4")
+        stations = wall_stations(model, points)
+        for expected in ((0.0, 0.25), (-1.0, 0.0), (0.0, -0.25), (1.0, 0.0)):
+            self.assertTrue(any(math.dist(expected, s) < 1e-6 for s in stations), expected)
+        self.assertIn("4 station(s) by normal", result["note"])
+        # A normal held along a flat side, or met more than once, is refused.
+        square = [(-1, -1), (1, -1), (1, 1), (-1, 1)]
+        with self.assertRaises(Exception) as caught:
+            self.build(square, "add_ring c 0.1 normals=90")
+        self.assertIn("straight stretch", str(caught.exception))
+        dented = [(math.cos(t) * (1.0 - 0.4 * math.exp(-((t - math.pi / 2) / 0.3) ** 2)),
+                   math.sin(t) * (1.0 - 0.4 * math.exp(-((t - math.pi / 2) / 0.3) ** 2)))
+                  for t in (2 * math.pi * k / 200 for k in range(200))]
+        with self.assertRaises(Exception) as caught:
+            self.build(dented, "add_ring c 0.02 normals=60")
+        self.assertIn("3 places", str(caught.exception))
+
+    def test_normal_stations_carry_a_band_to_the_box_corners(self) -> None:
+        # A plate with a round nose: by arc length alone one band block
+        # takes both left box corners and would fold; the refusal names
+        # them. Stations whose normals point at the corners build.
+        points = [(1.0 - k * 0.01, 0.02) for k in range(101)]
+        points += [(0.02 * math.cos(math.pi / 2 + math.pi * k / 20), 0.02 * math.sin(math.pi / 2 + math.pi * k / 20))
+                   for k in range(1, 20)]
+        points += [(k * 0.01, -0.02) for k in range(101)]
+        text = ";".join(f"{x},{y}" for x, y in points)
+        start = [f"add_curve {text} name=plate"]
+        rest = ["set_boundary_by wall type=wall curves=plate",
+                "add_band bbox=-0.5,-0.5,1.5,0.5 to_box=-0.4,-0.3,1.4,0.3"]
+        with self.assertRaises(Exception) as caught:
+            apply_commands(MeshModel(box=(-3, -3, -2, -2)), start + ["add_ring plate 0.01 count=20"] + rest)
+        self.assertIn("(a box corner)", str(caught.exception))
+        model = apply_commands(MeshModel(box=(-3, -3, -2, -2)),
+                               start + ["add_ring plate 0.01 count=20 normals=143,180,217"] + rest).model
+        corners = {(round(v.x, 9), round(v.y, 9)) for v in model.vertices.values()}
+        self.assertTrue({(-0.4, -0.3), (-0.4, 0.3), (1.4, -0.3), (1.4, 0.3)} <= corners)
+
+
 class BoundaryTests(unittest.TestCase):
     def test_selectors_combine(self) -> None:
         model = apply_commands(MeshModel(box=(0, 0, 2, 1)), ["split_edge v0-v1 0.5"]).model

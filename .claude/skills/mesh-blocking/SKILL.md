@@ -109,10 +109,13 @@ Rules that follow from the table; the first that matches decides:
    - `add_grid center=X,Y rs=... thetas=... period=DEG outside=BODY` - a
      polar patch (arcs), for O-rings and grooves.
    - `add_ring CURVE HEIGHT count=N` - a wall band round a closed curve, a
-     fan at each sharp corner (trailing edge).
+     fan at each sharp corner (trailing edge); `tips=true` adds a station at
+     each rounded nose, `normals=140,180,220` where the outward normal has
+     those angles, `corner=DEG` sets which vertices are corners.
    - `add_band bbox=... height=H rows=N` - more rows along the unassigned
      exterior edges in a box; `add_band bbox=... to_box=...` - carry them to
-     a rectangle (put spokes at its corners).
+     a rectangle (spokes at its corners: ring stations by `normals=` aimed
+     at them).
    - `add_grid xs=... ys=... outside=BODIES` again for the H-grid round what
      is built: existing vertices on its cell sides become stations.
 4. `set_boundary_by NAME type=wall curves=BODY`, `set_boundary_by NAME

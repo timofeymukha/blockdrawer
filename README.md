@@ -496,9 +496,20 @@ refused by name; `id=PREFIX` names new vertices `PREFIX_0, ...` and blocks
   tan(turn/2)` along the edge beside it, past a short edge's length - is
   refused with the corner, the edge and the largest height that builds. An
   offset spline keeps only the points that run forwards between its ends.
-- `add_ring CURVE HEIGHT count=N | fractions=...` - a band round a closed
-  reference curve: vertices on the curve at its sharp corners and spread by
-  arc length, wall edges as splines through the curve's points.
+- `add_ring CURVE HEIGHT count=N | fractions=... | normals=... [corner=DEG]
+  [tips=true]` - a band round a closed reference curve: vertices on the
+  curve at its corners (turning more than `corner`, default 30 degrees), at
+  the given arc-length fractions, where the outward normal points at each
+  `normals` angle (degrees from +x; exactly one such point, else refused),
+  with `tips=true` at the peak of each rounded convex corner (the wall
+  turning 45 degrees within a hundredth of the perimeter either side: an
+  elliptic nose, a leading edge), and spread by arc length between them;
+  wall edges as splines through the curve's points. The result's note lists
+  the stations. Tips are off by default: on 10:1, 4:1 and 5:1 ellipses they
+  cost 0.4 to 1.1 degrees of sampled non-orthogonality at default counts.
+  For `to_box`, aim ring stations at the box corners with `normals=`; a
+  band block that would fold against the box is refused with the spokes and
+  corners named.
 - `set_boundary_by NAME [type=T] [curves=...] [bbox=...] [between=A,B]
   [unassigned=true]` - every exterior edge all given selectors choose, the
   patch created when missing. A curve whose end point is not repeated is

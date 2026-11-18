@@ -1329,8 +1329,8 @@ def _run_add_ring(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
 
     return add_ring(
         model, args["curve"], args["height"], count=args["count"],
-        fractions=args["fractions"], rows=args["rows"], growth=args["growth"],
-        prefix=args["id"],
+        fractions=args["fractions"], normals=args["normals"], corner=args["corner"],
+        tips=args["tips"], rows=args["rows"], growth=args["growth"], prefix=args["id"],
     ).to_data()
 
 
@@ -1405,18 +1405,29 @@ _register(CommandSpec(
     "add_ring",
     (
         "Add a band of blocks round a closed reference curve: vertices on the "
-        "curve at its sharp corners and at count edges spread by arc length "
-        "(or at the given arc-length fractions from its first point), wall "
+        "curve at its corners (vertices turning more than corner degrees), "
+        "at the given arc-length fractions from its first point, where the "
+        "outward normal points at each of the normals angles (degrees "
+        "counter-clockwise from +x; exactly one such point is required), "
+        "with tips=true at the peak of each rounded convex corner (a nose "
+        "turning 45 degrees within a hundredth of the perimeter either "
+        "side), and count edges spread by arc length between them; wall "
         "edges as splines through the curve's points, then the band as "
         "add_band builds it, height high."
     ),
     (
         Parameter("curve", "curve", "closed reference curve (ID or name)"),
         Parameter("height", "float", "band height"),
-        Parameter("count", "int", "edges round the curve (0: fractions only)",
+        Parameter("count", "int", "edges round the curve (0: stations only)",
                   required=False, default=0),
         Parameter("fractions", "numbers", "arc-length fractions of extra stations",
                   required=False, default=()),
+        Parameter("normals", "numbers", "outward-normal angles (degrees) of extra stations",
+                  required=False, default=()),
+        Parameter("corner", "float", "a vertex turning more than this many degrees is a station",
+                  required=False, default=30.0),
+        Parameter("tips", "bool", "a station at the peak of each rounded convex corner",
+                  required=False, default=False),
         Parameter("rows", "int", "rows of blocks", required=False, default=1),
         Parameter("growth", "float", "row height ratio", required=False, default=1.0),
         _ID,
@@ -2004,12 +2015,15 @@ def _note(result: CommandResult) -> dict[str, Any] | None:
     if result.name == "size":
         return {**base, **_size_note(data)}
     if result.name in ("add_grid", "add_band", "add_ring"):
-        return {
+        note = {
             **base,
             "blocks": len(data.get("created_blocks", [])),
             "reused_vertices": data.get("reused_vertices"),
             "skipped_cells": data.get("skipped_cells"),
         }
+        if data.get("note"):
+            note["note"] = data["note"]
+        return note
     if result.name == "set_boundary_by":
         return {**base, "edges": data.get("edges")}
     if result.name == "split_edge":

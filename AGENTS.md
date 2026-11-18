@@ -380,9 +380,26 @@ them in the canvas widgets.
   along the chord between its offset ends, clear of both by a thousandth
   (`_monotone_points`, a longest increasing run): a mitre or a wall curving
   tighter than the offset put points behind an end, and the hooked spline
-  made the next band fail as misoriented. `add_ring`
-  places stations at curve corners (`CORNER_ANGLE`) and by arc length,
-  spline wall edges through the curve's points (at most
+  made the next band fail as misoriented. `_band_to_box` refuses a block
+  that would fold before building, naming the spokes and the box corners
+  they were snapped to. `add_ring`
+  places stations at curve corners (vertices turning more than `corner`,
+  default `CORNER_ANGLE`), at `fractions`, at `normals` (the point where
+  the outward normal has each angle: vertex normals bisect their segments
+  and vary linearly between vertices, a corner sweeps between its two
+  segments' normals in place; refused unless there is exactly one point,
+  a straight stretch named; `_normal_station`), with `tips` (off by
+  default) at rounded convex corners (`_tip_stations`: vertex turning
+  spread over the half segments beside it, a run of vertices about which
+  the wall turns convexly at least `TIP_TURN` within `TIP_WINDOW` of the
+  perimeter either side, the station at the turning midpoint of the
+  window about the run's peak; corners carry no turning there; a tip
+  within `TIP_MERGE` of another station is that station) and by arc length
+  between all of them, reporting the stations in its `note`. Tips are off
+  because on 10:1, 4:1 and 5:1 ellipses they cost 0.4 to 1.1 degrees of
+  sampled non-orthogonality at default counts and the blunt plate's
+  `to_box` needed the normal stations anyway. Wall edges are splines
+  through the curve's points (at most
   `MAX_SPLINE_POINTS`, none within a thousandth of a station). Curves
   without a repeated end point are closed implicitly; `set_boundary_by
   curves=` agrees: an edge along the closing segment is taken when its
