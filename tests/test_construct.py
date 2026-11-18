@@ -555,6 +555,29 @@ class StationTests(unittest.TestCase):
         self.assertIn("Vertex ID s_1 is already used", str(caught.exception))
 
 
+class BlockFromPointsTests(unittest.TestCase):
+    def test_a_block_from_coordinates_needs_no_vertex_ids(self) -> None:
+        model = apply_commands(MeshModel(box=(-4, 0, 0, 1)), [
+            "add_grid xs=-4,0,0.75,6 ys=0,1",
+            "add_vertex -1.0 2.5 id=bl",
+            "add_vertex -0.25 2.75 id=br",
+        ]).model
+        batch = apply_commands(model, ["add_block_from_vertices bl,br points=0,1;0.75,1"])
+        block = batch.results[0].result["block"]
+        corners = {vertex for b in batch.model.blocks if b.id == block for vertex in b.vertices}
+        self.assertEqual(corners, {"bl", "br", vertex_at(model, 0, 1), vertex_at(model, 0.75, 1)})
+        # Points alone, and a typo refused with the nearest vertex.
+        apply_commands(model, ["add_block_from_vertices points=0,1;0.75,1;-0.25,2.75;-1,2.5"])
+        with self.assertRaises(Exception) as caught:
+            apply_commands(model, ["add_block_from_vertices bl,br points=0,1;0.7501,1"])
+        text = str(caught.exception)
+        self.assertIn("no vertex at (0.7501, 1)", text)
+        self.assertIn(f"the nearest is {vertex_at(model, 0.75, 1)} at (0.75, 1)", text)
+        with self.assertRaises(Exception) as caught:
+            apply_commands(model, ["add_block_from_vertices bl,br points=0,1"])
+        self.assertIn("four vertices", str(caught.exception))
+
+
 class OperatorContractTests(unittest.TestCase):
     def test_one_history_entry_and_determinism(self) -> None:
         commands = [

@@ -628,7 +628,16 @@ def _run_add_block(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
 def _run_add_block_from_vertices(
     model: MeshModel, args: dict[str, Any]
 ) -> dict[str, Any]:
-    block = model.add_block_from_vertices(args["vertices"])
+    identifiers = list(args["vertices"])
+    if args["points"]:
+        from .construct import resolve_points
+
+        identifiers += resolve_points(model, args["points"])
+    if len(identifiers) != 4:
+        raise TopologyError(
+            f"a block takes four vertices (IDs and points together), got {len(identifiers)}"
+        )
+    block = model.add_block_from_vertices(identifiers)
     return _block_data(model, block.id)
 
 
@@ -1067,8 +1076,18 @@ _register(CommandSpec(
 ))
 _register(CommandSpec(
     "add_block_from_vertices",
-    "Create a block from four existing vertices given in any order.",
-    (Parameter("vertices", "vertices", "four vertex IDs, e.g. v1,v2,v5,v6"),),
+    (
+        "Create a block from four existing vertices given in any order: by "
+        "ID, or by points x,y;x,y each naming the vertex there (within the "
+        "construction operators' tolerance, a billionth of the drawing's "
+        "size), or both, four in all."
+    ),
+    (
+        Parameter("vertices", "vertices", "vertex IDs, e.g. v1,v2,v5,v6",
+                  required=False, default=()),
+        Parameter("points", "points", "coordinates of existing vertices, x,y;x,y",
+                  required=False, default=()),
+    ),
     _run_add_block_from_vertices,
 ))
 _register(CommandSpec(

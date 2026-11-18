@@ -2214,3 +2214,19 @@ def _strictly_inside(point: Point, quad: Sequence[Point]) -> bool:
         signs.append(cross / max(math.dist(a, b) ** 2, 1.0e-300))
     return all(s > 1.0e-9 for s in signs) or all(s < -1.0e-9 for s in signs)
 
+
+
+def resolve_points(model: MeshModel, points: Sequence[Point]) -> list[str]:
+    """The existing vertex at each point, within the construction operators'
+    coordinate tolerance; refused naming the nearest vertex otherwise."""
+    build = _Build(model, None)
+    out = []
+    for x, y in points:
+        found = build.find(x, y)
+        if found is None:
+            nearest = min(model.vertices.values(), key=lambda v: math.hypot(v.x - x, v.y - y), default=None)
+            near = (f"; the nearest is {nearest.id} at ({nearest.x:.12g}, {nearest.y:.12g}), "
+                    f"{math.hypot(nearest.x - x, nearest.y - y):.3g} away" if nearest is not None else "")
+            raise TopologyError(f"no vertex at ({x:.12g}, {y:.12g}){near}: give its ID, or add_vertex first")
+        out.append(found)
+    return out

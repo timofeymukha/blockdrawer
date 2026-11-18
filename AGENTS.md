@@ -1135,7 +1135,10 @@ them in the canvas widgets.
   in any order, sorts them counter-clockwise, requires a strictly convex block,
   and rejects duplicate/non-manifold/misoriented topology. Existing edge cell
   counts take precedence and opposite-edge constraints propagate through the new
-  block.
+  block. The registry command also takes `points=x,y;x,y`, each resolved to
+  the existing vertex within the construction operators' tolerance
+  (`construct.resolve_points`; refused naming the nearest vertex and its
+  distance), so a batch need not probe IDs; IDs and points make four.
 - In the GUI, `N` starts four-vertex block selection and `Esc` cancels it. Staged
   vertices are numbered and clicking one again deselects it. Only successful
   completion enters history; it is one undoable action.

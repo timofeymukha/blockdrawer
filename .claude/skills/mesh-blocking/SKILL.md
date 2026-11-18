@@ -121,6 +121,7 @@ Rules that follow from the table; the first that matches decides:
      through the standalone vertices on it or new stations facing the
      opposite side's; `side2=B,...,C` names one. A station mismatch or a
      non-convex block is refused, saying where to split or add a station.
+   - `add_block_from_vertices A,B points=X,Y;X,Y` - one block, corners by ID or coordinates.
    - `add_grid xs=... ys=... outside=BODIES` again for the H-grid round what
      is built: existing vertices on its cell sides become stations.
 4. `set_boundary_by NAME type=wall curves=BODY`, `set_boundary_by NAME

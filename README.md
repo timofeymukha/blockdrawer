@@ -551,6 +551,14 @@ refused by name; `id=PREFIX` names new vertices `PREFIX_0, ...` and blocks
   closed as `add_ring` closes it where the mesh lies outside it (a blunt
   base), not where the closing chord bounds the domain itself (a cavity lid).
 
+One block from corners by coordinates: `add_block_from_vertices bl,br
+points=0,1;0.9138,1` takes each point as the existing vertex there (within a
+billionth of the drawing's size; a miss is refused naming the nearest vertex
+and its distance), so a batch need not look up the IDs `add_grid` gave. The
+round-1 junction's branch (two `add_vertex`, a block from probed IDs,
+`split_edge` and `slide_vertex`) is two `add_stations` and two blocks: same
+vertices to 6e-13, same checkMesh numbers.
+
 Measured (`review_operators/` beside the trial data): the 27-block backward
 step in 8 commands (`add_grid` with one skip box and six `set_boundary_by`;
 `size`: 21,750 cells, Mesh OK, 0 degrees); the grooved tandem in 14 (two
