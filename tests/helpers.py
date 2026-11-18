@@ -106,3 +106,31 @@ def build_periodic_rows(
         model.set_edge_boundary(edge_key(grid[i, 2], grid[i + 1, 2]), "upper")
     model.set_export_settings(z_cells, 0.0, 0.1, 1.0, "front", "patch", "back", "patch")
     return model
+
+
+def build_sheared_periodic_strip(cyclic: bool = True) -> MeshModel:
+    """Four parallelogram blocks leaning three units over one, periodic
+    between y = 0 and y = 1 by the translation (3, 1): every face, coupled
+    ones included, is non-orthogonal by atan(3) = 71.57 degrees."""
+    from blockdrawer.domain import Block, Vertex
+    from blockdrawer.model import edge_key
+
+    model = MeshModel(initialize=False)
+    for i in range(5):
+        model.vertices[f"l{i}"] = Vertex(f"l{i}", float(i), 0.0)
+        model.vertices[f"u{i}"] = Vertex(f"u{i}", float(i) + 3.0, 1.0)
+    for i in range(4):
+        model.blocks.append(Block(f"b{i}", (f"l{i}", f"l{i+1}", f"u{i+1}", f"u{i}")))
+    for current in model.edges():
+        model.edge_cells[current] = 2
+    model.validate()
+    model.set_edge_cells(edge_key("l0", "u0"), 3)
+    model.add_boundary("lower")
+    model.add_boundary("upper")
+    if cyclic:
+        model.set_boundary_type("lower", "cyclic", neighbour_patch="upper")
+    for i in range(4):
+        model.set_edge_boundary(edge_key(f"l{i}", f"l{i+1}"), "lower")
+        model.set_edge_boundary(edge_key(f"u{i}", f"u{i+1}"), "upper")
+    model.set_export_settings(1, 0.0, 0.1, 1.0, "front", "empty", "back", "empty")
+    return model

@@ -58,6 +58,12 @@ class CyclicPair:
             sine * x + cosine * y + self.translation[1],
         )
 
+    def apply_inverse(self, x: float, y: float) -> tuple[float, float]:
+        """The image of a point on the second patch on the first."""
+        cosine, sine = math.cos(self.rotation), math.sin(self.rotation)
+        x, y = x - self.translation[0], y - self.translation[1]
+        return cosine * x + sine * y, -sine * x + cosine * y
+
     def partner(self, edge: EdgeKey) -> tuple[EdgeKey, bool] | None:
         """The partner of an edge on either patch and whether aligned."""
         current = edge_key(*edge)

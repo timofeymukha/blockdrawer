@@ -11,9 +11,11 @@ from blockdrawer.command_line import split_command_line
 from blockdrawer.foam import write_block_mesh_dict
 from blockdrawer.model import MeshModel, edge_key
 from blockdrawer.preview import build_mesh_preview
+from blockdrawer.sampling import sample_model
 from blockdrawer.symmetry import symmetrize_model
 from tests.helpers import (
-    build_periodic_rows, build_ring_model, center_vertex_ids,
+    build_periodic_rows, build_ring_model, build_sheared_periodic_strip,
+    center_vertex_ids,
 )
 
 
@@ -128,6 +130,20 @@ class OpenFoamIntegrationTests(unittest.TestCase):
                 self._assert_block_mesh_accepts(model)
                 result = run_mesh_check(model, locate=False)
                 self.assertTrue(result.ok, result.problems or result.fatal_errors)
+
+    def test_sampled_measures_match_check_mesh_across_a_cyclic_pair(self) -> None:
+        model = build_sheared_periodic_strip()
+        sampled = sample_model(model, None).summary()
+        result = run_mesh_check(model, locate=False)
+        self.assertTrue(result.block_mesh.ok, result.fatal_errors)
+        geometry = result.geometry
+        self.assertEqual(
+            sampled["severe_faces"], geometry["severe_non_orthogonal_faces"]
+        )
+        self.assertAlmostEqual(
+            sampled["max_non_orthogonality"], geometry["max_non_orthogonality"], places=3
+        )
+        self.assertAlmostEqual(sampled["max_skewness"], geometry["max_skewness"], places=3)
 
     def test_block_mesh_accepts_automatic_cyclic_z_patch_pair(self) -> None:
         model = MeshModel()

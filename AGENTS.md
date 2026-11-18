@@ -165,8 +165,17 @@ them in the canvas widgets.
   `boundaryFaceSkewness` on domain-boundary sides) into `max_skewness` per
   block and in the summary and the quality verdict; it matched checkMesh to
   two decimals on the engine, 30P30N and sized sessions (and overestimates
-  the grooved tandem's 0.93 as 1.12). `blocks=` samples a subset, leaving
-  out faces shared with blocks outside it. `smooth` and `size` refuse a
+  the grooved tandem's 0.93 as 1.12). A `cyclic` side is coupled, as in
+  checkMesh: both its skewness and non-orthogonality are measured against
+  the partner cell's centre carried across the pair's motion
+  (`cyclic.match_cyclic_pair`), on both sides (checkMesh counts both halves
+  of a severe coupled face); a pair that does not correspond falls back to
+  the boundary measure. The boundary formula on the benchmark cascade's
+  periodic side read 5.25 where checkMesh read 3.26; coupled it gives
+  3.259 = checkMesh, and the sheared periodic strip in the tests matches
+  checkMesh's 53 faces above 70 and skewness 0.45. `blocks=` samples a
+  subset, leaving out faces shared with blocks outside it (and a coupled
+  side whose partner's block is left out). `smooth` and `size` refuse a
   result above 4 (checkMesh's limit) from an input below it.
   `repair.py` judges its candidates with `block_grid`/`cell_angles`; item
   2's smoother is meant to use the same code. Pure Python, standard library.

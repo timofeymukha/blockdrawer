@@ -3,6 +3,7 @@ import unittest
 
 from blockdrawer.domain import EdgeGeometry, edge_key
 from blockdrawer.model import MeshModel
+from tests.helpers import build_sheared_periodic_strip
 from blockdrawer.sampling import (
     SEVERE_NON_ORTHOGONALITY,
     block_grid,
@@ -60,6 +61,21 @@ class GridTests(unittest.TestCase):
 
 
 class ModelSampleTests(unittest.TestCase):
+    def test_cyclic_faces_are_measured_as_coupled_faces(self) -> None:
+        # checkMesh measures a cyclic face against the partner cell's centre
+        # carried across the pair (OpenFOAM v2606 on this strip: 53 faces
+        # above 70 degrees, max 71.5651, skewness 0.45); as plain boundary
+        # faces they read skewness 2.0 and are not counted.
+        coupled = sample_model(build_sheared_periodic_strip()).summary()
+        self.assertEqual(coupled["severe_faces"], 53)
+        self.assertAlmostEqual(coupled["max_skewness"], 0.45, places=9)
+        self.assertAlmostEqual(
+            coupled["max_non_orthogonality"], math.degrees(math.atan(3.0)), places=9
+        )
+        plain = sample_model(build_sheared_periodic_strip(cyclic=False)).summary()
+        self.assertEqual(plain["severe_faces"], 37)
+        self.assertAlmostEqual(plain["max_skewness"], 2.0, places=9)
+
     def test_square_is_orthogonal(self) -> None:
         sample = sample_model(MeshModel())
         (block,) = sample.blocks

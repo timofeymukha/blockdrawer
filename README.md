@@ -544,7 +544,10 @@ face normal; on the 30P30N sessions and three engine outputs the sampled
 maximum and severe-face count equalled checkMesh's. The verdict also gives
 the maximum face skewness, measured as checkMesh measures it (it fails a
 mesh above 4); sampled and checkMesh values agreed to two decimals on the
-engine, 30P30N and sized sessions. Beside it, the corner
+engine, 30P30N and sized sessions. Faces on a `cyclic` pair are measured as
+the coupled faces checkMesh sees, against the partner cell across the pair
+(measured as plain boundary faces they read skewness 5.25 on a periodic
+cascade where checkMesh read 3.26). Beside it, the corner
 screen reports per-block corner angles measured from the first mesh cell,
 non-orthogonality, equiangle skewness, corner cell aspect ratios, cell-to-cell
 growth, and the cell size jump across every internal edge, with warnings at

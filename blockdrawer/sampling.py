@@ -16,7 +16,10 @@ counts and grading with blockMesh's edge-weighted transfinite interpolation
   shared-edge face counts for the block that comes first in block order,
   because blockMesh numbers cells block by block and makes the lower cell
   of a face its owner - so the per-block counts line up with checkMesh's
-  ``nonOrthoFaces`` set mapped to blocks.
+  ``nonOrthoFaces`` set mapped to blocks. A face on a ``cyclic`` patch is
+  coupled, as checkMesh treats it: measured against its partner cell's
+  centre carried across the pair's motion (:mod:`blockdrawer.cyclic`), on
+  both sides, and not with the boundary-face skewness formula.
 
 At the real counts the face measure reproduces checkMesh's maximum
 non-orthogonality on the extruded mesh; above ``max_cells`` a side it is
@@ -31,7 +34,8 @@ from dataclasses import dataclass
 import math
 from typing import Any, Collection, Sequence
 
-from .domain import Block, EdgeKey, edge_key
+from .cyclic import CyclicPair, cyclic_pairs
+from .domain import Block, EdgeKey, TopologyError, edge_key
 from .model import MeshModel
 from .preview import _block_mesh_point, _directed_edge_samples, _sample_indices
 
@@ -476,7 +480,12 @@ def sample_model(
         grids.append(grid)
         angles.append(measured)
         tallies.append(tally)
+    coupled = _coupled_partners(model)
     for current, occurrences in shared.items():
+        if current in coupled:
+            if len(occurrences) == 1:
+                _measure_coupled(current, occurrences[0], coupled[current], shared, tallies)
+            continue
         if len(occurrences) == 1 and users.get(current, 1) == 1:
             # A side on the domain boundary: checkMesh measures its faces'
             # skewness too.
@@ -521,3 +530,50 @@ def sample_model(
         for grid, measured, tally in zip(grids, angles, tallies)
     )
     return ModelSample(blocks, max_cells)
+
+
+def _coupled_partners(model: MeshModel) -> dict[EdgeKey, tuple[EdgeKey, bool, Any]]:
+    """Each cyclic edge's partner, whether their canonical directions agree,
+    and the map carrying a point from the partner's side to this one. A pair
+    that does not correspond (export refuses it) is left to the
+    boundary-face measure."""
+    if not any(boundary.kind == "cyclic" for boundary in model.boundaries.values()):
+        return {}
+    try:
+        pairs: list[CyclicPair] = cyclic_pairs(model, check_nodes=False)
+    except TopologyError:
+        return {}
+    result: dict[EdgeKey, tuple[EdgeKey, bool, Any]] = {}
+    for pair in pairs:
+        for match in pair.matches:
+            result[match.first] = (match.second, match.aligned, pair.apply_inverse)
+            result[match.second] = (match.first, match.aligned, pair.apply)
+    return result
+
+
+def _measure_coupled(
+    current: EdgeKey,
+    occurrence: tuple[int, bool, list[Point], list[Point]],
+    partner: tuple[EdgeKey, bool, Any],
+    shared: dict[EdgeKey, list[tuple[int, bool, list[Point], list[Point]]]],
+    tallies: list[_FaceTally],
+) -> None:
+    """checkMesh's measure of one side of a cyclic pair: each face against
+    the partner cell's centre carried across the coupling."""
+    other, aligned, carry = partner
+    owner, canonical, side_nodes, owner_cells = occurrence
+    found = shared.get(other)
+    if not found or len(found) != 1:
+        return  # the partner's block was left out of the sample
+    partner_cells = list(found[0][3])
+    if len(partner_cells) != len(owner_cells):
+        return  # counts differ: the pair would not export
+    if not aligned:
+        partner_cells.reverse()
+    tally = tallies[owner]
+    for k, own in enumerate(owner_cells):
+        nei = carry(*partner_cells[k])
+        start, end = side_nodes[k], side_nodes[k + 1]
+        tally.add(_non_orthogonality(own, nei, start, end, canonical), start, end)
+        tally.skew(_skewness(own, nei, start, end), start, end)
+
