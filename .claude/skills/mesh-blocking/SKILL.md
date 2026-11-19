@@ -170,8 +170,8 @@ The step is optional (the 949-block high-lift trial left it out). Then:
   `shape_length_ratio` (cascade 0.4; three cylinders 0.3: 12 jumps above 5
   -> 0).
 - "already fold ... on the count-free block map, in BLOCK (N)": those
-  blocks fold whatever their counts (a side crosses its opposite); render
-  and fix them (move a station, split) or leave the step out.
+  blocks fold at even spacing (the real counts need not: high-lift);
+  render and fix them (move a station, split) or leave the step out.
 
 ## Step 5 - Size
 
@@ -231,7 +231,7 @@ slide=true`): keep it when `check` agrees, not in Step 4.
 
 Go on when `Mesh OK`, no face above 70 (or the brief's tolerance), skewness
 under 4. Otherwise open `failures.md` with the blocks `check` named; after
-a fix go back to Step 4 (shape) or Step 5 (counts).
+a fix go back to Step 5 (counts) or Step 6 (polish).
 
 ## Step 8 - Deliver
 
