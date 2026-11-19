@@ -27,7 +27,7 @@ from .commands import (
     apply_commands as _apply_commands,
     batch_digest,
     command_specs,
-    format_result,
+    format_results,
     read_command_lines,
 )
 from .describe import (
@@ -276,7 +276,7 @@ def edit_session(
     data.update(batch_digest(model, batch))
     if detail:
         data["results"] = [result.to_data() for result in batch.results]
-        data["log"] = [format_result(result) for result in batch.results]
+        data["log"] = format_results(batch.results)
     return data
 
 

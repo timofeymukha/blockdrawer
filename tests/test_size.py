@@ -1,6 +1,6 @@
 import unittest
 
-from blockdrawer.commands import apply_commands, batch_digest, format_digest
+from blockdrawer.commands import apply_commands, batch_digest, format_digest, format_results
 from blockdrawer.domain import TopologyError
 from blockdrawer.history import ModelHistory
 from blockdrawer.model import MeshModel, edge_key
@@ -142,6 +142,13 @@ class SizeTests(unittest.TestCase):
         text = "\n".join(format_digest(1, digest))
         self.assertNotIn("…", text)
         self.assertNotIn("=None", text)
+        # The long form (apply without --quiet) shows the same note under
+        # the full result line, so nothing the quiet note shows is elided.
+        lines = format_results(batch.results)
+        self.assertTrue(lines[0].startswith("1. size: "))
+        self.assertTrue(lines[1].startswith("   note: "))
+        for field in ("verification", "first_width", "worst_jump"):
+            self.assertIn(f"{field}={note[field]}", lines[1])
 
     def test_the_command_is_one_undoable_action(self) -> None:
         model = channel()

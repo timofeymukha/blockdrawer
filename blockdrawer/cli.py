@@ -30,7 +30,7 @@ from .commands import (
     batch_digest,
     command_specs,
     format_digest,
-    format_result,
+    format_results,
     read_command_lines,
     spec_help_text,
 )
@@ -595,7 +595,7 @@ def _cmd_apply(args: argparse.Namespace) -> int:
         lines = format_digest(len(batch.results), digest)
     else:
         data["results"] = [result.to_data() for result in batch.results]
-        lines = [format_result(result) for result in batch.results]
+        lines = format_results(batch.results)
     if saved:
         lines.append(f"Saved {destination}")
     else:

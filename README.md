@@ -584,7 +584,11 @@ several commands may be given at once, read from a file with `-f`, or piped thro
 generated batch of thousands of commands in a few lines: the commands
 counted by name, the vertex, block, curve and patch IDs created and removed
 (runs written `v4..v93`) and the results worth reading - repairs, splits,
-merges, fits and spacing links left out of sync.
+merges, fits and spacing links left out of sync. Without `--quiet` every
+command's result is printed on one line, nested values elided, and a command
+that has a digest note (a `size`'s verification verdicts, first widths and
+worst jump among them) gets that note on an indented `note:` line beneath,
+so the long form never shows less than the quiet one.
 
 ```bash
 blockdrawer-cli apply case.json --in-place \

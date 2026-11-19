@@ -875,7 +875,11 @@ them in the canvas widgets.
   session, and nothing is written when any step fails. The error names the
   failing step and repeats the offending command. Without `-o` or `--in-place`
   the result is reported but not saved. `--quiet` (the MCP default) reports
-  the batch digest instead of every command's result.
+  the batch digest instead of every command's result. Without it each
+  command's one-line result (nested values elided) is followed by its
+  digest note, when it has one, on an indented `note:` line
+  (`format_results`), so the long form shows at least what the quiet one
+  does; the MCP `detail=true` log uses the same lines.
 - Describe and quality JSON is meant to be diffed between edits. Keep field
   names stable, keep floats unrounded, and add fields rather than renaming them.
   Text output rounds to six significant digits. JSON warning lists keep

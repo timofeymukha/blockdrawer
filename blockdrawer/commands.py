@@ -1971,6 +1971,25 @@ def format_result(result: CommandResult) -> str:
     return ": ".join(parts)
 
 
+def format_results(results: Iterable[CommandResult]) -> list[str]:
+    """Text lines for a batch's full results: one :func:`format_result` line
+    per command and, under a command that has a digest note, that note on
+    an indented ``note:`` line.
+
+    The full line elides values nested two levels deep, so the note is what
+    guarantees that the long form shows at least what the quiet digest
+    shows (a ``size``'s verification verdicts, first widths and worst jump).
+    """
+    lines: list[str] = []
+    for result in results:
+        lines.append(format_result(result))
+        note = _note(result)
+        if note:
+            detail = {key: value for key, value in note.items() if key not in ("index", "op")}
+            lines.append(f"   note: {_summarize(detail)}")
+    return lines
+
+
 def _summarize(data: Any, *, depth: int = 0) -> str:
     if isinstance(data, dict):
         items = []
