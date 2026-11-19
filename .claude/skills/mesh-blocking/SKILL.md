@@ -210,10 +210,10 @@ in a tapered block: split that block or keep the counts.
 non-orthogonality checkMesh measures, never raising a block's worst face,
 wall-band spokes within 5 percent of their length, edges within 50 percent, no
 size jump past 2.5 created; applied only when the sampled check at 256 cells a
-side is no worse. `hold=V1,V2` keeps vertices you placed on purpose;
+side is no worse and checkMesh's aspect limit 1000 is not crossed (`reason`
+says when it bound). `hold=V1,V2` keeps vertices you placed on purpose;
 `blocks=`/`bbox=` limit it. Read `reason`. `slide=true` also slides boundary
-vertices along their smooth boundary; it changed little (README, `smooth
-slide=true`): keep it when `check` agrees, not in Step 4.
+vertices along their boundary; it changed little: keep it when `check` agrees.
 
 ## Step 7 - Judge
 

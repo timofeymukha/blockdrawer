@@ -853,6 +853,23 @@ was nothing to gain. On the engine's 30P30N it took checkMesh from 60 faces
 above 70 degrees (max 77.9) to none (max 68.7) in 10 s, and the 475k-cell
 version from 8725 to 4716 in 68 s.
 
+The polish keeps checkMesh's cell aspect ratio limit as `size` does: a
+result crossing 1000, or gaining cells above it when already above, is
+scaled back like a result that fails the rest of the check; when the full
+displacement crossed it, the optimisation runs once more with the free
+vertices of the blocks it took past the limit held, and the result with
+fewer faces above 70 degrees (then the lower maximum) is applied. `reason`
+says when the limit bound and the result lists `aspect_blocks`; `mode=shape`
+judges stale counts, so the limit does not apply there. Measured with the
+polish before and after on the 20 corpus sessions' sized states (default
+chain) and the skill's C-grid example sized at a first width of 1e-4: the
+20 never crossed the limit and are byte-identical; the C-grid went from
+checkMesh failing (aspect 1356, 40 cells; 10 faces above 70, max 75.42) to
+Mesh OK (aspect 978, applied at half the displacement; 11 faces above 70,
+max 76.15), and without its wake spread from 339 cells above the limit
+(6390) to 284 (6194; max 61.52 -> 63.18, the held second run taken) -
+still failing, since `size` left it above.
+
 `smooth slide=true` also slides boundary vertices along their boundary - a
 gate in the wrong place along a wall is what a person moves first. A vertex
 slides when its two exterior edges are one patch (not `cyclic`), the

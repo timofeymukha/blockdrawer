@@ -192,6 +192,81 @@ class SmoothTests(unittest.TestCase):
         self.assertIn("remove_control_point", shaped.reason)
         self.assertNotIn("whatever its counts", shaped.reason)
 
+    def test_the_polish_does_not_cross_the_aspect_ratio_limit(self) -> None:
+        from blockdrawer import smooth as module
+
+        self.assertIn("max_aspect_ratio", module._verdict(sample_model(two_by_two(), 64)))
+        calls = []
+
+        def crossed_at_full_scale(before, before_high, after, after_high):
+            calls.append(after)
+            return len(calls) == 1
+
+        with mock.patch.object(module, "aspect_worse", side_effect=crossed_at_full_scale):
+            model = two_by_two()
+            result = smooth_model(model)
+        self.assertTrue(result.applied)
+        self.assertLess(result.scale, 1.0)
+        self.assertIn("aspect ratio limit 1000 bound: at 1 of the optimised displacement", result.reason)
+        with mock.patch.object(module, "aspect_worse", return_value=True):
+            model = two_by_two()
+            before = positions(model)
+            refused = smooth_model(model)
+        self.assertFalse(refused.applied)
+        self.assertIn("not applied: checkMesh's aspect ratio limit 1000 bound", refused.reason)
+        self.assertEqual(positions(model), before)
+        # Shape mode judges stale counts: the limit is not applied there.
+        with mock.patch.object(module, "aspect_worse", return_value=True):
+            shaped = smooth_model(two_by_two((0.7, 0.65)), options=SmoothOptions(mode="shape"))
+        self.assertTrue(shaped.applied, shaped.reason)
+
+    def test_the_blocks_taken_past_the_limit_are_held_in_a_second_run(self) -> None:
+        from blockdrawer import smooth as module
+
+        calls = []
+
+        def crossed(before, before_high, after, after_high):
+            # The full displacement crosses, in all four blocks; nothing after.
+            calls.append(after)
+            return len(calls) <= 5
+
+        with mock.patch.object(module, "aspect_worse", side_effect=crossed):
+            result = smooth_model(two_by_two())
+        self.assertEqual(sorted(result.aspect_blocks), ["b0", "b1", "b2", "b3"])
+        self.assertEqual(sorted(result.to_data()["aspect_blocks"]), ["b0", "b1", "b2", "b3"])
+        # Every free vertex held in the second run: nothing to gain there, so
+        # the scaled-back result stands.
+        self.assertTrue(result.applied)
+        self.assertLess(result.scale, 1.0)
+
+    def test_a_second_run_holds_the_vertices_of_the_blocks_past_the_limit(self) -> None:
+        from blockdrawer import smooth as module
+
+        first_run = 5 + len(module.FALLBACK_SCALES)
+        calls = []
+
+        def crossed(before, before_high, after, after_high):
+            # The first run crosses at every scale (and in all four blocks);
+            # the second runs with every free vertex held (nothing left to move).
+            calls.append(after)
+            return len(calls) <= first_run
+
+        with mock.patch.object(module, "aspect_worse", side_effect=crossed), \
+                mock.patch.object(module, "select_free", wraps=module.select_free) as free:
+            model = two_by_two()
+            result = smooth_model(model)
+        self.assertEqual(free.call_args_list[1].kwargs["hold"], ("v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8"))
+        self.assertFalse(result.applied)
+        self.assertIn("not applied", result.reason)
+
+    def test_the_aspect_rule(self) -> None:
+        from blockdrawer.sampling import aspect_worse
+
+        self.assertFalse(aspect_worse(500.0, 0, 999.0, 0))
+        self.assertTrue(aspect_worse(986.0, 0, 1356.0, 40))
+        self.assertFalse(aspect_worse(1800.0, 40, 2400.0, 40))
+        self.assertTrue(aspect_worse(1800.0, 40, 1700.0, 41))
+
     def test_the_command_is_one_undoable_action(self) -> None:
         model = two_by_two()
         history = ModelHistory(model)

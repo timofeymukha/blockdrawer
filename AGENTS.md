@@ -291,7 +291,16 @@ them in the canvas widgets.
   `size_slack`, an interface jump below `size_ceiling` (`SIZE_CEILING` = 5)
   not past it. The result is verified with `sample_model` at 256 cells a
   side and applied only when untangled, with no more severe faces and no
-  higher maximum, else scaled back by halves; one `MeshModel.move_vertices`
+  higher maximum and - the polish only - not crossing checkMesh's aspect
+  ratio limit 1000 nor gaining cells above it (`sampling.aspect_worse`,
+  shared with `size`; measured as the sample measures it, the export
+  settings' depth included), else scaled back by halves; when the full
+  displacement crossed the limit, `smooth_model` runs the optimisation
+  once more with the free vertices of the blocks it took past the limit
+  held and applies whichever result has fewer faces above 70, then the
+  lower maximum (`_smooth_once`, `aspect_blocks` in the result and the
+  digest note; `reason` says how the limit bound). `mode=shape` judges
+  stale counts (size sets new ones), so the limit does not apply there; one `MeshModel.move_vertices`
   call (atomic, curves carried by the chord similarity), so one history
   entry. Measured trade-offs are in the README. Boundary vertices never move.
   `mode="shape"` (`smooth mode=shape`) runs the same optimiser on the

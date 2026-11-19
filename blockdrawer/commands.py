@@ -2352,6 +2352,7 @@ def _note(result: CommandResult) -> dict[str, Any] | None:
             "max_pair_change": data.get("max_pair_change") if data.get("mode") == "shape" else None,
             "max_pair": data.get("max_pair") if data.get("mode") == "shape" else None,
             "max_spread_growth": data.get("max_spread_growth") if data.get("mode") == "shape" else None,
+            "aspect_blocks": data.get("aspect_blocks"),
             "reason": data.get("reason"),
         }
     if result.name == "slide_vertex":

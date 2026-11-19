@@ -55,6 +55,15 @@ SEVERE_ANGLE = 90.0 - SEVERE_NON_ORTHOGONALITY
 ASPECT_LIMIT = 1000.0
 
 
+def aspect_worse(before: float, before_high: int, after: float, after_high: int) -> bool:
+    """Whether a change breaks checkMesh's aspect ratio limit as ``size`` and
+    the polish keep it: a state at or below ``ASPECT_LIMIT`` may not cross
+    it, and a state above it may not gain cells above it."""
+    if after <= ASPECT_LIMIT:
+        return False
+    return before <= ASPECT_LIMIT or after_high > before_high
+
+
 @dataclass(frozen=True)
 class BlockGrid:
     """One block's sampled mesh nodes: ``nodes[row][column]``, rows along y."""

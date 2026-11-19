@@ -88,7 +88,7 @@ from .cyclic import CyclicMatch, cyclic_pairs
 from .domain import EdgeKey, TopologyError, edge_key
 from .model import MeshModel
 from .session import from_data, to_data
-from .sampling import ASPECT_LIMIT as _ASPECT_LIMIT
+from .sampling import ASPECT_LIMIT as _ASPECT_LIMIT, aspect_worse
 from .smooth import VERIFY_CELLS  # the verification's resolution, smooth's
 
 
@@ -157,13 +157,8 @@ FIELD_MODES = (1.0, 0.5, 0.25)
 TIGHTEN_ROUNDS = 20
 
 
-def _aspect_worse(before: float, before_high: int, after: float, after_high: int) -> bool:
-    """Whether a change breaks checkMesh's aspect ratio limit as ``size``
-    keeps it: a state at or below ``ASPECT_LIMIT`` may not cross it, and a
-    state above it may not gain cells above it."""
-    if after <= ASPECT_LIMIT:
-        return False
-    return before <= ASPECT_LIMIT or after_high > before_high
+# checkMesh's aspect ratio limit as size keeps it (shared with smooth's polish).
+_aspect_worse = aspect_worse
 
 
 @dataclass(frozen=True)

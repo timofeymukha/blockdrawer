@@ -58,7 +58,15 @@ from typing import Any, Iterable, Sequence
 
 from .domain import EdgeKey, TopologyError, edge_key
 from .model import MeshModel
-from .sampling import FOLD_CELLS, SEVERE_NON_ORTHOGONALITY, ModelSample, folded_blocks, sample_model
+from .sampling import (
+    ASPECT_LIMIT,
+    FOLD_CELLS,
+    SEVERE_NON_ORTHOGONALITY,
+    ModelSample,
+    aspect_worse,
+    folded_blocks,
+    sample_model,
+)
 from .session import from_data, to_data
 from .slide import SLIDE_TOLERANCE
 
@@ -206,11 +214,16 @@ class SmoothResult:
     # spread grew (1 when none did), and its shortest member (``a-b``).
     max_spread_growth: float = 1.0
     spread_edge: str | None = None
+    # The polish: the blocks whose cells the full optimised displacement
+    # took past checkMesh's aspect ratio limit (empty when it did not bind).
+    aspect_blocks: tuple[str, ...] = ()
 
     def to_data(self) -> dict[str, Any]:
         extra: dict[str, Any] = {}
         if self.mode != "real":
             extra = {"real_before": self.real_before, "real_after": self.real_after}
+        if self.aspect_blocks:
+            extra["aspect_blocks"] = list(self.aspect_blocks)
         if self.sliders:
             extra.update({
                 "sliders": self.sliders,
@@ -257,11 +270,26 @@ def _verdict(sample: ModelSample) -> dict[str, Any]:
         "folded_cells": summary.get("folded_cells", 0),
         "worst_block": summary.get("worst_block"),
         "max_skewness": summary.get("max_skewness", 0.0),
+        "max_aspect_ratio": summary.get("max_aspect_ratio", 0.0),
+        "high_aspect_cells": summary.get("high_aspect_cells", 0),
+        "worst_aspect_block": summary.get("worst_aspect_block"),
     }
 
 
 # checkMesh fails a mesh whose face skewness exceeds this.
 SKEWNESS_LIMIT = 4.0
+
+
+def _aspect_text(refusals, before: dict[str, Any]) -> str:
+    """The aspect ratio limit as it bound the polish, for its reason."""
+    scale, ratio, cells, block = refusals[0]
+    was = (f"from {before['max_aspect_ratio']:.4g}" if before["max_aspect_ratio"] <= ASPECT_LIMIT
+           else f"above it already ({before['high_aspect_cells']} cell(s)), to {cells}")
+    return (
+        f"checkMesh's aspect ratio limit {ASPECT_LIMIT:g} bound: at {scale:g} of the optimised "
+        f"displacement the sampled maximum would be {ratio:.4g} in {block} ({cells} cell(s) above), "
+        + was
+    )
 
 
 def _no_worse(after: dict[str, Any], before: dict[str, Any]) -> bool:
@@ -1560,8 +1588,58 @@ def smooth_model(
     hold: Sequence[str] = (),
     options: SmoothOptions | None = None,
 ) -> SmoothResult:
-    """Smooth ``model`` in place when that is no worse; see the module docstring."""
+    """Smooth ``model`` in place when that is no worse; see the module docstring.
+
+    The polish keeps checkMesh's aspect ratio limit as ``size`` does
+    (`sampling.aspect_worse`): a result crossing 1000, or gaining cells
+    above it when already above, is scaled back like any other result that
+    fails the verification. When the full displacement crossed it, the
+    optimisation runs once more with the free vertices of the blocks it
+    took past the limit held - those moves refused - and the result with
+    fewer faces above 70 degrees, then the lower maximum, is applied."""
     options = options or SmoothOptions()
+    first = from_data(to_data(model))
+    result = _smooth_once(first, blocks=blocks, bbox=bbox, hold=hold, options=options)
+    if not result.aspect_blocks:
+        if result.applied:
+            for key, value in first.__dict__.items():
+                setattr(model, key, value)
+        return result
+    corners = {v for block in model.blocks if block.id in result.aspect_blocks for v in block.vertices}
+    retry_model = from_data(to_data(model))
+    retry = _smooth_once(retry_model, blocks=blocks, bbox=bbox, hold=tuple(hold) + tuple(sorted(corners)),
+                         options=options)
+    better = retry.applied and (
+        not result.applied
+        or retry.after["severe_faces"] < result.after["severe_faces"]
+        or (retry.after["severe_faces"] == result.after["severe_faces"]
+            and retry.after["max_non_orthogonality"] < result.after["max_non_orthogonality"])
+    )
+    chosen, chosen_model = (retry, retry_model) if better else (result, first)
+    if better:
+        chosen = replace(
+            retry,
+            reason=retry.reason + (
+                f"; with the vertices of {', '.join(result.aspect_blocks)} held (the full displacement "
+                "took them past checkMesh's aspect ratio limit 1000), better than the scaled-back result"
+            ),
+            aspect_blocks=result.aspect_blocks,
+        )
+    if chosen.applied:
+        for key, value in chosen_model.__dict__.items():
+            setattr(model, key, value)
+    return chosen
+
+
+def _smooth_once(
+    model: MeshModel,
+    *,
+    blocks: Sequence[str] | None = None,
+    bbox: Sequence[float] | None = None,
+    hold: Sequence[str] = (),
+    options: SmoothOptions,
+) -> SmoothResult:
+    """One optimisation and its verified application (`smooth_model`)."""
     if options.samples < 1 or options.power <= 0.0 or options.band_tolerance < 0.0:
         raise TopologyError("smooth needs samples >= 1, power > 0 and band_tolerance >= 0")
     if options.mode not in ("real", "shape"):
@@ -1633,10 +1711,11 @@ def smooth_model(
             options.mode, real_before, real_after if applied else real_before,
             len(chains), slid_count if applied else 0, max_slide if applied else 0.0,
             boundary[0] if applied else 0.0, boundary[1] if applied else 0.0,
-            *ratios, len(lines), line_fixed, *pair, *spread,
+            *ratios, len(lines), line_fixed, *pair, *spread, aspect_blocks=tuple(aspect_blocks),
         )
 
     real_after: dict[str, Any] | None = None
+    aspect_blocks: list[str] = []
     slid_count = 0
     max_slide = 0.0
     boundary = (0.0, 0.0)
@@ -1684,6 +1763,9 @@ def smooth_model(
         )
     stale_refusals: list[tuple[float, str]] = []
     deviation_refusals: list[float] = []
+    # Scales refused for crossing checkMesh's aspect ratio limit (the
+    # polish only: shape mode's real counts are stale, size sets new ones).
+    aspect_refusals: list[tuple[float, float, int, Any]] = []
     for scale in (1.0, *FALLBACK_SCALES):
         scaled = {
             vertex_id: (
@@ -1721,6 +1803,19 @@ def smooth_model(
         after = judge(working)
         if not _no_worse(after, before):
             continue
+        if not shape and aspect_worse(before["max_aspect_ratio"], before["high_aspect_cells"],
+                                      after["max_aspect_ratio"], after["high_aspect_cells"]):
+            aspect_refusals.append((scale, after["max_aspect_ratio"], after["high_aspect_cells"],
+                                    after["worst_aspect_block"]))
+            if not aspect_blocks:
+                was = {item.block_id: item for item in sample_model(model, options.verify_cells).blocks}
+                aspect_blocks.extend(
+                    item.block_id for item in sample_model(working, options.verify_cells).blocks
+                    if item.block_id in was and aspect_worse(
+                        was[item.block_id].max_aspect_ratio, was[item.block_id].high_aspect_cells,
+                        item.max_aspect_ratio, item.high_aspect_cells)
+                )
+            continue
         if shape:
             real_sample = sample_model(working, options.verify_cells)
             real_after = _verdict(real_sample)
@@ -1747,6 +1842,8 @@ def smooth_model(
             f"faces above {SEVERE_NON_ORTHOGONALITY:g} degrees {before['severe_faces']} -> "
             f"{after['severe_faces']}"
         )
+        if aspect_refusals:
+            reason += "; " + _aspect_text(aspect_refusals, before) + f", so applied at {scale:g}"
         if shape:
             reason = (
                 "shape " + reason + " on the count-free block map; the stored counts and "
@@ -1783,6 +1880,13 @@ def smooth_model(
             False,
             f"not applied: a re-cut boundary edge would leave the input boundary by more than "
             f"{SLIDE_TOLERANCE:g} of its chain's length",
+            sweeps=sweeps, rounds=rounds,
+        )
+    if aspect_refusals:
+        return result(
+            False,
+            "not applied: " + _aspect_text(aspect_refusals, before) + " at every scale that passed "
+            "the other checks",
             sweeps=sweeps, rounds=rounds,
         )
     if stale_refusals:
