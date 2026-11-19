@@ -792,3 +792,146 @@ class OperatorContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def lens_points(count=40, chord=1.0, thickness=0.12):
+    """A symmetric lens from (0, 0) to (chord, 0): sharp corners at both
+    ends (turning about 160 degrees), anticlockwise from the trailing edge."""
+    upper = [(chord * (1 - k / count), thickness * math.sin(math.pi * (1 - k / count)))
+             for k in range(count)]
+    lower = [(chord * k / count, -thickness * math.sin(math.pi * k / count)) for k in range(count)]
+    return ";".join(f"{x},{y}" for x, y in upper + lower)
+
+
+class OpenCornerTests(unittest.TestCase):
+    def _ring(self, *extra):
+        model = MeshModel(box=(5, 5, 6, 6))
+        return apply_commands(model, [
+            f"add_curve {lens_points()} name=lens",
+            "add_ring lens 0.05 count=20 " + " ".join(extra),
+            "remove_edge v0-v1",
+        ])
+
+    def test_fan_false_leaves_every_fanning_corner_open(self) -> None:
+        fanned = self._ring().model
+        opened_batch = self._ring("fan=false")
+        opened = opened_batch.model
+        # The two sharp ends fan with two kites each by default; open, none.
+        self.assertEqual(len(fanned.blocks) - len(opened.blocks), 4)
+        occurrences = opened.edge_occurrences()
+        te = next(v for v in opened.vertices.values() if abs(v.x - 1.0) < 1e-9 and abs(v.y) < 1e-9)
+        spokes = [e for e, items in occurrences.items() if te.id in e and len(items) == 1
+                  and e not in opened.edge_geometry]
+        # Two exterior spokes leave the corner, each normal to its own side.
+        self.assertEqual(len(spokes), 2)
+        note = opened_batch.results[1].result["note"]
+        self.assertIn("left open", note)
+        self.assertIn(te.id, note)
+
+    def test_open_at_picks_the_nearest_corner_and_refuses_a_concave_one(self) -> None:
+        one = self._ring("open_at=1.01,0").model
+        both = self._ring("fan=false").model
+        fanned = self._ring().model
+        self.assertEqual(len(fanned.blocks) - len(one.blocks), 2)
+        self.assertEqual(len(one.blocks) - len(both.blocks), 2)
+        with self.assertRaises(Exception) as caught:
+            apply_commands(MeshModel(box=(0, 0, 1, 1)), [
+                "add_grid xs=0,1,2 ys=0,1,2 skip=1,1,2,2",
+                "add_band bbox=-1,-1,3,3 height=0.1 open_at=1,1",
+            ])
+        self.assertIn("not convex", str(caught.exception))
+        with self.assertRaises(Exception):
+            self._ring("fan=false open_at=1,0")
+
+
+class RowTests(unittest.TestCase):
+    def test_a_chain_carried_to_a_line_at_stations(self) -> None:
+        # The right side of the unit square, carried to x = 3 with rows at x = 1.5 and 2.
+        batch = apply_commands(MeshModel(), [
+            "split_edge v1-v2 0.5",
+            "add_rows bbox=0.9,-0.1,1.1,1.1 direction=1,0 to_x=3 stations=1.5,2 id=R",
+        ])
+        model = batch.model
+        self.assertEqual(len(model.blocks), 2 + 6)
+        xs = sorted({round(v.x, 9) for v in model.vertices.values()})
+        self.assertEqual(xs, [0.0, 1.0, 1.5, 2.0, 3.0])
+        note = batch.results[1].result["note"]
+        self.assertIn("3 row(s) of 2 block(s) to x = 3", note)
+        self.assertIn("far row", note)
+
+    def test_oblique_rows_by_count_and_growth_and_by_distance(self) -> None:
+        model = apply_commands(MeshModel(), [
+            "add_rows edges=v1-v2 direction=1,1 to_x=2 rows=2 growth=2",
+        ]).model
+        far = sorted((round(v.x, 9), round(v.y, 9)) for v in model.vertices.values() if v.x > 1.5)
+        self.assertEqual(far, [(2.0, 1.0), (2.0, 2.0)])
+        # Row heights 1:2 along each point's path: the middle row a third of the way.
+        middle = sorted((round(v.x, 9), round(v.y, 9)) for v in model.vertices.values() if 1.0 < v.x < 1.5)
+        self.assertEqual(middle, [(round(1 + 1 / 3, 9), round(1 / 3, 9)), (round(1 + 1 / 3, 9), round(4 / 3, 9))])
+        moved = apply_commands(MeshModel(), ["add_rows edges=v2-v3 direction=0,1 distance=0.5 stations=0.1"]).model
+        self.assertEqual(sorted({round(v.y, 9) for v in moved.vertices.values()}), [0.0, 1.0, 1.1, 1.5])
+
+    def test_spread_widens_the_rows_across_the_carry(self) -> None:
+        batch = apply_commands(MeshModel(), ["add_rows edges=v1-v2 direction=1,0 to_x=3 stations=2 spread=3"])
+        model = batch.model
+        far = sorted(round(v.y, 9) for v in model.vertices.values() if abs(v.x - 3.0) < 1e-12)
+        # The far row three times as wide about the chain's middle y = 0.5.
+        self.assertEqual(far, [-1.0, 2.0])
+        middle = sorted(round(v.y, 9) for v in model.vertices.values() if abs(v.x - 2.0) < 1e-12)
+        self.assertEqual(middle, [-0.5, 1.5])
+        self.assertIn("widened 3 times", batch.results[0].result["note"])
+
+    def test_rows_reuse_and_conform_to_what_is_there(self) -> None:
+        # A block already right of the square, with a vertex on the bottom path.
+        model = apply_commands(MeshModel(), [
+            "add_vertex 2 0 id=a", "add_vertex 3 0 id=b", "add_vertex 3 -1 id=c", "add_vertex 2 -1 id=d",
+            "add_block_from_vertices a,b,c,d",
+        ]).model
+        batch = apply_commands(model, ["add_rows edges=v1-v2 direction=1,0 to_x=3"])
+        built = batch.model
+        # a (2, 0) lies on v1's path: it becomes a station and is reused.
+        self.assertIn("a", batch.results[0].result["note"])
+        self.assertTrue(any("a" in block.vertices and "v2" not in block.vertices and "b" in block.vertices
+                            for block in built.blocks))
+        built.validate()
+
+    def test_rows_are_one_undoable_action_with_a_digest_note(self) -> None:
+        model = MeshModel()
+        history = ModelHistory(model)
+        batch = apply_commands(model, ["add_rows edges=v1-v2 direction=1,0 to_x=2 rows=2"])
+        history.record(batch.model)
+        self.assertEqual(len(batch.model.blocks), 3)
+        self.assertEqual(len(history.undo().blocks), 1)
+        (note,) = batch_digest(model, batch)["notes"]
+        self.assertEqual(note["op"], "add_rows")
+        self.assertIn("far row", note["note"])
+
+    def test_a_direction_into_the_chain_or_short_of_the_line_is_refused(self) -> None:
+        with self.assertRaises(Exception) as caught:
+            apply_commands(MeshModel(), ["add_rows edges=v1-v2 direction=-1,0 distance=0.5"])
+        self.assertIn("strictly convex", str(caught.exception))
+        with self.assertRaises(Exception) as caught:
+            apply_commands(MeshModel(), ["add_rows edges=v1-v2 direction=1,0 to_x=0.5"])
+        self.assertIn("does not reach x = 0.5", str(caught.exception))
+        with self.assertRaises(Exception) as caught:
+            apply_commands(MeshModel(), ["add_rows edges=v1-v2 direction=1,0 to_x=3 stations=4"])
+        self.assertIn("station 4", str(caught.exception))
+        with self.assertRaises(Exception):
+            apply_commands(MeshModel(), ["add_rows edges=v1-v2 direction=0,1 to_x=3"])
+
+    def test_a_wake_band_from_an_open_trailing_edge_in_two_commands(self) -> None:
+        batch = apply_commands(MeshModel(box=(5, 5, 6, 6)), [
+            f"add_curve {lens_points()} name=lens",
+            "add_ring lens 0.05 count=20 fan=false",
+            "remove_edge v0-v1",
+            "add_rows bbox=0.99,-0.06,1.03,0.06 direction=1,0 to_x=3 rows=3 growth=1.5 id=W",
+        ])
+        model = batch.model
+        wake = [block for block in model.blocks if block.id.startswith("W_b")]
+        self.assertEqual(len(wake), 6)
+        # The wake strip continues both band rows: its far row lies on x = 3.
+        far = [v for v in model.vertices.values() if abs(v.x - 3.0) < 1e-12]
+        self.assertEqual(len(far), 3)
+        model.validate()
+
+

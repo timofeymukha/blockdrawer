@@ -473,7 +473,7 @@ blockdrawer-cli commands                           # lists every editing command
 
 ### Construction operators
 
-Six registry commands build whole rows and patches of blocks so a layout is
+Seven registry commands build whole rows and patches of blocks so a layout is
 stated, not computed (every one atomic, one history entry, a non-convex block
 refused by name; `id=PREFIX` names new vertices `PREFIX_0, ...` and blocks
 `PREFIX_b0, ...`):
@@ -500,6 +500,43 @@ refused by name; `id=PREFIX` names new vertices `PREFIX_0, ...` and blocks
   tan(turn/2)` along the edge beside it, past a short edge's length - is
   refused with the corner, the edge and the largest height that builds. An
   offset spline keeps only the points that run forwards between its ends.
+  `fan=false` leaves every corner that would fan open, `open_at=X,Y;...`
+  the convex corner nearest each point (`add_ring` takes both): the band
+  ends on each side at the spoke normal to that side and the wedge between
+  the two spokes is left for what comes next - a wake band. `between=A,B`
+  selects the unassigned exterior chain joining two vertices.
+- `add_rows edges=... | bbox=... | between=A,B direction=DX,DY to_x=X |
+  to_y=Y | distance=D [stations=... | rows=N growth=G]` - rows of blocks
+  carrying a chain of exterior edges along a direction: every point of the
+  chain (vertices and the interior points of curved edges) moves along it
+  to the line `x = X` or `y = Y`, each its own distance, or by `distance`.
+  The rows between lie at `stations` (x values with `to_x`, y values with
+  `to_y`, distances with `distance`: each row on one such line) or are
+  `rows` rows whose heights along every point's path grow by `growth`;
+  `spread=S` widens them along the target line, to S times the chain's
+  width on the far row (a wake band that widens: carried at constant width
+  from a trailing edge, the wall's clustering ran to the outlet in one
+  `size` strip, checkMesh aspect ratio 6390 on the skill's C-grid example).
+  Vertices are reused by coordinate, and with `conform` (default) an
+  existing exterior vertex on a point's path becomes a station; a row
+  vertex that would cut an existing edge, a block over an existing block or
+  vertex, and a block that would not be strictly convex (a direction into
+  the chain's blocks) are refused. The note gives the far row in the
+  chain's order. `add_grid` makes rectangles from station lists and
+  `add_band to_box` sends spokes along the wall normals to a box; this
+  carries a given chain along one direction. A trailing edge left open and
+  its two spokes carried downstream is a C-grid's wake band:
+  `add_ring airfoil 0.05 count=40 fan=false`, then `add_rows
+  bbox=... direction=1,0 to_x=1.6`. Re-expressed round-2 trials, default
+  chain and checkMesh against the trial's own batch on the same code: the
+  airfoil in a tunnel, the same 208 blocks in 31 commands for 36 (the fan
+  removed and three typed vertices and two blocks became one `add_rows`),
+  Mesh OK 128,982 cells and 25.43 degrees against 128,902 and 26.08 (the
+  vertex IDs differ, so the smoother's order); the cascade, the same 50
+  blocks in 37 commands for 52 (the spokes turned across the wake by two
+  `move_vertex`, the wake strips one `add_rows ... to_x=2 rows=3`),
+  Mesh OK 49,182 cells, 60.62 degrees, skewness 2.86 against 50,974, 60.57
+  and 2.53.
 - `add_ring CURVE HEIGHT count=N | fractions=... | normals=... [corner=DEG]
   [tips=true]` - a band round a closed reference curve: vertices on the
   curve at its corners (turning more than `corner`, default 30 degrees), at

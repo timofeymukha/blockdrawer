@@ -482,8 +482,8 @@ them in the canvas widgets.
   +5 points and the mean falls): every term held, jumps above 2.5 257 ->
   177, mean worst deviation 20.4 -> 12.7 percent.
 - `blockdrawer/construct.py`: construction operators behind the registry
-  commands `add_grid`, `add_band`, `add_ring`, `add_stations`, `add_fill`
-  and `set_boundary_by`, derived
+  commands `add_grid`, `add_band`, `add_rows`, `add_ring`, `add_stations`,
+  `add_fill` and `set_boundary_by`, derived
   from what the two hand builds coded themselves (coordinate-deduplicated
   vertices, polar points, ray-square hits, offset circles, arcs, edge
   marking). Each runs on a copy (`_atomic`) through `_Build`: vertices
@@ -521,7 +521,34 @@ them in the canvas widgets.
   a segment in `spline_hooks` (round 2: 49 of the high-lift build's 202
   splines hooked, a station falling just past a curve point). `_band_to_box` refuses a block
   that would fold before building, naming the spokes and the box corners
-  they were snapped to. `add_ring`
+  they were snapped to. `fan=false` (`add_band`, `add_ring`) leaves every
+  convex corner that would fan open, `open_at` points the chain vertex
+  nearest each (refused at a chain end or a corner not convex on the
+  band's side): two spokes, each normal to its own side, and no blocks
+  between them (`_band`'s `open_corners`; the note names the corners,
+  `_opened_note`). `between=A,B` selects the shortest unassigned exterior
+  chain joining two vertices (`_select_chain`, `_exterior_path`).
+  `add_rows` carries a chain (as `_model_chain` reads it) along a
+  direction: each point - vertices and the interior points of curved
+  edges - travels to the line `x = to_x`/`y = to_y` (its own distance,
+  `reach`) or by `distance`; rows at `stations` (absolute: x, y or
+  distance, each row on one line) or at the `rows`/`growth` fractions of
+  each point's travel; with `conform` an existing exterior vertex on a
+  point's path adds its station. `spread` widens the rows along the
+  target line (normal to the direction with `distance`): a point's offset
+  from the middle of the chain's extent grows linearly with its travel
+  fraction to `spread` times on the far row (the skill's C-grid example:
+  with the wake band at constant width the wall's clustering ran to the
+  outlet in one `size` strip, aspect 6390). Refused before anything is
+  built: a point not reaching the line, a station outside every point's
+  travel, a block not strictly convex in construction order (a direction
+  into the chain's blocks), a row vertex inside an existing straight
+  exterior edge, a block over an existing block or vertex
+  (`_refuse_overlap` with a row label). The map from chain to row is
+  affine, so lines stay lines and polyLines polyLines; arcs (except with
+  `distance` and no spread, a translation) and splines become splines
+  through the carried points (`unhooked_points`), straight on the target
+  line. `add_ring`
   places stations at curve corners (vertices turning more than `corner`,
   default `CORNER_ANGLE`), at `fractions`, at `normals` (the point where
   the outward normal has each angle: vertex normals bisect their segments

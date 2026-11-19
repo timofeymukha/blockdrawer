@@ -19,12 +19,20 @@ computed:
     convex corner sharper than ``FAN_ANGLE``, open ends following the
     boundary they meet; offset arcs stay arcs. ``to_box`` instead carries
     every spoke to a rectangle (a box corner taken by the nearest spoke).
+    ``fan=false`` (or ``open_at`` points) leaves a convex corner open: the
+    band ends on each side at the spoke normal to that side.
+``add_rows``
+    Rows of blocks carrying a chain of exterior edges along a direction to
+    a line ``x = X`` or ``y = Y``, or by a distance, at given stations or
+    rows with growth: a wake band from a trailing edge left open, a duct
+    extended to its outlet.
 ``add_ring``
     A band round a closed reference curve: vertices on the curve at its
     sharp corners, at given arc-length fractions, where the outward normal
     has given angles, optionally at rounded convex corners (``tips``), and
     by a count spread between them; wall edges as splines through the
-    curve's own points, then the band as ``add_band`` builds it.
+    curve's own points (none whose segment would run backwards), then the
+    band as ``add_band`` builds it.
 ``add_stations``
     Standalone vertices on a reference curve: a count spread over it or a
     section of it, arc-length fractions, or where it crosses given x or y;
@@ -131,6 +139,9 @@ class _Build:
         self.reused: set[str] = set()
         self.curved: dict[EdgeKey, tuple[str, str, str, tuple[Point, ...]]] = {}
         self.existing_edges = set(model.edge_cells)
+        # Chain vertices whose corner a band left open, and its front (`_band`).
+        self.opened: list[str] = []
+        self.front: list[str] = []
         coordinates = [abs(v.x) + abs(v.y) for v in model.vertices.values()] or [1.0]
         self.tol = 1.0e-9 * max(1.0, max(coordinates))
         if prefix is not None and (not prefix or any(c.isspace() for c in prefix)):
@@ -542,9 +553,14 @@ def _left(t: Point) -> Point:
 
 
 def _band(build: _Build, chain: _Chain, height: float, rows: int, growth: float,
-          box: Sequence[float] | None) -> list[str]:
+          box: Sequence[float] | None, open_corners: Sequence[int] | str = ()) -> list[str]:
     """Build the band; return its front's vertices (the outermost row, or
-    the box ends of the spokes) in the chain's order."""
+    the box ends of the spokes) in the chain's order.
+
+    ``open_corners`` (chain indices, or ``"all"`` for every corner that
+    would get a fan) are convex corners left open: the band ends on each
+    side at the spoke normal to that side and the wedge between the two
+    spokes is not built."""
     model = build.model
     position = {v: (model.vertices[v].x, model.vertices[v].y) for v in chain.vertices}
     count = len(chain.vertices)
@@ -590,15 +606,29 @@ def _band(build: _Build, chain: _Chain, height: float, rows: int, growth: float,
 
     # spokes per vertex: list of (direction, length factor); fans add mid points
     spokes: list[list[tuple[Point, float]]] = []
+    opened: set[int] = set()
+    asked = None if open_corners == "all" else set(open_corners)
     for k in range(count):
         incoming = (k - 1) % count if (chain.closed or k > 0) else None
         outgoing = k if (chain.closed or k < count - 1) else None
+        if asked is not None and k in asked and (incoming is None or outgoing is None):
+            raise TopologyError(f"{chain.vertices[k]} is an end of the chain, not a corner to leave open")
         if incoming is not None and outgoing is not None:
             n_in = normal(tangent_in(incoming))
             n_out = normal(tangent_out(outgoing))
             t_out = tangent_out(outgoing)
             turn = math.acos(max(-1.0, min(1.0, n_in[0] * n_out[0] + n_in[1] * n_out[1])))
             convex = n_in[0] * t_out[0] + n_in[1] * t_out[1] < -1.0e-12
+            if box is None and (k in asked if asked is not None else convex and turn > FAN_ANGLE):
+                if not convex:
+                    raise TopologyError(
+                        f"the corner at {chain.vertices[k]} is not convex on the band's side "
+                        f"(it turns {math.degrees(turn):.1f} degrees the other way): only a convex "
+                        "corner can be left open"
+                    )
+                spokes.append([(n_in, 1.0), (n_out, 1.0)])
+                opened.add(k)
+                continue
             if box is None and convex and turn > FAN_ANGLE:
                 sectors = max(1, math.ceil(turn / FAN_SECTOR - 1.0e-9))
                 start = math.atan2(n_in[1], n_in[0])
@@ -658,7 +688,7 @@ def _band(build: _Build, chain: _Chain, height: float, rows: int, growth: float,
                 yield (("edge", e), [point_at(a, sa, f0, h), point_at(b, 0, f0, h),
                                      point_at(b, 0, f1, h), point_at(a, sa, f1, h)], chain.side)
             for k in range(count):
-                fan = spokes[k]
+                fan = spokes[k] if k not in opened else spokes[k][:1]
                 for s in range(0, len(fan) - 1, 2):
                     if r == 1:
                         yield (("fan", k), [position[chain.vertices[k]], point_at(k, s, f1, h),
@@ -701,9 +731,9 @@ def _band(build: _Build, chain: _Chain, height: float, rows: int, growth: float,
                 outer = _offset_interior(edge_path(e), chain, height * fractions[r],
                                          spokes[a][sa], spokes[b][sb])
                 build.curve(ids[3], ids[2], chain.kinds[e], outer)
-        # fans
+        # fans (none at a corner left open)
         for k in range(count):
-            fan = spokes[k]
+            fan = spokes[k] if k not in opened else spokes[k][:1]
             for s in range(0, len(fan) - 1, 2):
                 if r == 1:
                     ids = [chain.vertices[k], vid(k, s, 1), vid(k, s + 1, 1), vid(k, s + 2, 1)]
@@ -718,6 +748,8 @@ def _band(build: _Build, chain: _Chain, height: float, rows: int, growth: float,
             identifier = vid(k, spoke, rows)
             if not front or front[-1] != identifier:
                 front.append(identifier)
+    build.opened = [chain.vertices[k] for k in sorted(opened)]
+    build.front = list(front)
     return front
 
 
@@ -1038,6 +1070,51 @@ def _select_exterior(model: MeshModel, bbox: Sequence[float], unassigned: bool) 
     return chosen
 
 
+def _corner_choice(fan: bool, open_at: Sequence[Point], box: bool) -> None:
+    if not fan and open_at:
+        raise TopologyError("give fan=false (every corner that would fan left open) or open_at, not both")
+    if box and (open_at or not fan):
+        raise TopologyError("to_box builds no fan: fan and open_at do not apply")
+
+
+def _open_indices(chain: _Chain, position, fan: bool, open_at: Sequence[Point]):
+    """The chain corners to leave open: ``"all"`` with ``fan=false``, else
+    the chain vertex nearest each ``open_at`` point."""
+    if not fan:
+        return "all"
+    chosen = []
+    for point in open_at:
+        nearest = min(range(len(chain.vertices)), key=lambda k: math.dist(position(chain.vertices[k]), point))
+        chosen.append(nearest)
+    return chosen
+
+
+def _opened_note(build: _Build) -> str:
+    if not build.opened:
+        return ""
+    return f"corner(s) left open, no fan: {', '.join(build.opened)}"
+
+
+def _select_chain(model: MeshModel, edges, bbox, between) -> list[EdgeKey]:
+    """A band's or rows' chain: the edges given, the unassigned exterior
+    edges inside ``bbox``, or the shortest chain of unassigned exterior
+    edges ``between`` two vertices."""
+    if not (edges or bbox or between):
+        raise TopologyError("select the chain by edges, bbox (its unassigned exterior edges) "
+                            "or between=A,B (the unassigned exterior chain joining two vertices)")
+    if edges:
+        return list(edges)
+    if bbox:
+        if len(bbox) != 4:
+            raise TopologyError("bbox takes xmin, ymin, xmax, ymax")
+        return _select_exterior(model, bbox, unassigned=True)
+    if len(between) != 2:
+        raise TopologyError("between takes two vertices")
+    occurrences = model.edge_occurrences()
+    free = sorted(e for e, items in occurrences.items() if len(items) == 1 and e not in model.edge_boundaries)
+    return _exterior_path(model, free, between[0], between[1])
+
+
 def add_band(
     model: MeshModel,
     *,
@@ -1047,33 +1124,271 @@ def add_band(
     rows: int = 1,
     growth: float = 1.0,
     to_box: Sequence[float] = (),
+    fan: bool = True,
+    open_at: Sequence[Point] = (),
+    between: Sequence[str] = (),
     prefix: str | None = None,
 ) -> ConstructResult:
-    """One or more rows of blocks along a chain of exterior edges."""
+    """One or more rows of blocks along a chain of exterior edges.
+
+    ``fan=false`` leaves every convex corner that would get a fan open, and
+    ``open_at`` the corner nearest each point: the band ends on each side at
+    the spoke normal to that side."""
     if bool(to_box) == (height > 0.0):
         raise TopologyError("give a positive height or to_box, not both")
     if rows < 1 or (to_box and rows != 1):
         raise TopologyError("rows must be at least 1 (1 with to_box)")
     if growth <= 0.0:
         raise TopologyError("growth must be positive")
+    _corner_choice(fan, open_at, bool(to_box))
 
     def work(working: MeshModel) -> ConstructResult:
-        if edges:
-            chosen = list(edges)
-        elif bbox:
-            if len(bbox) != 4:
-                raise TopologyError("bbox takes xmin, ymin, xmax, ymax")
-            chosen = _select_exterior(working, bbox, unassigned=True)
-        else:
-            raise TopologyError("select the chain by edges or by bbox (its unassigned exterior edges)")
+        chosen = _select_chain(working, edges, bbox, between)
         if not chosen:
             raise TopologyError("no exterior edge selected")
         chain = _model_chain(working, chosen)
         build = _Build(working, prefix)
-        front = _band(build, chain, height, rows, growth, tuple(to_box) or None)
+        where = {v: (working.vertices[v].x, working.vertices[v].y) for v in chain.vertices}
+        opened = _open_indices(chain, where.__getitem__, fan, open_at)
+        front = _band(build, chain, height, rows, growth, tuple(to_box) or None, opened)
         build.finish()
         result = build.result("add_band")
-        result.note = _front_note(chain, front, bool(to_box))
+        result.note = "; ".join(part for part in (_front_note(chain, front, bool(to_box)), _opened_note(build)) if part)
+        return result
+
+    return _atomic(model, work)
+
+
+# ---------------------------------------------------------------------------
+# add_rows
+# ---------------------------------------------------------------------------
+
+
+def add_rows(
+    model: MeshModel,
+    *,
+    edges: Sequence[EdgeKey] = (),
+    bbox: Sequence[float] = (),
+    direction: Sequence[float] = (),
+    to_x: float | None = None,
+    to_y: float | None = None,
+    distance: float = 0.0,
+    rows: int = 1,
+    growth: float = 1.0,
+    stations: Sequence[float] = (),
+    conform: bool = True,
+    between: Sequence[str] = (),
+    spread: float = 1.0,
+    prefix: str | None = None,
+) -> ConstructResult:
+    """Rows of blocks carrying a chain of exterior edges along ``direction``.
+
+    Every point of the chain (its vertices and the interior points of its
+    curved edges) moves along the direction to the line ``x = to_x`` or
+    ``y = to_y`` - each point its own distance - or by ``distance``; the
+    far row is the chain's image there.  The rows between are at
+    ``stations`` (x values with ``to_x``, y values with ``to_y``,
+    distances with ``distance``: every row on one such line) or, without
+    them, ``rows`` rows whose heights along each point's path grow by
+    ``growth``.  Vertices are reused by coordinate; with ``conform`` an
+    existing exterior vertex lying on a point's path becomes a station, so
+    the rows meet what is already there.  A wake band from a trailing edge
+    left open (`add_ring fan=false`) to the outlet, or a duct extended to
+    its outlet, is one command.
+
+    ``spread`` widens the rows: across the carry (along the target line;
+    normal to the direction with ``distance``) every point's offset from
+    the middle of the chain's extent grows linearly with its travel, to
+    ``spread`` times it on the far row - a wake band that is thin at a
+    trailing edge and wide at the outlet, so the wall's clustering is not
+    carried to the outlet in one strip."""
+    if len(direction) != 2 or math.hypot(direction[0], direction[1]) <= 0.0:
+        raise TopologyError("direction takes dx,dy, not zero")
+    targets = [to_x is not None, to_y is not None, distance > 0.0]
+    if sum(targets) != 1:
+        raise TopologyError("give one of to_x, to_y or a positive distance")
+    if distance < 0.0:
+        raise TopologyError("distance must be positive")
+    d = _unit(direction[0], direction[1])
+    if to_x is not None and abs(d[0]) <= 1.0e-12:
+        raise TopologyError("the direction never reaches a line x = constant")
+    if to_y is not None and abs(d[1]) <= 1.0e-12:
+        raise TopologyError("the direction never reaches a line y = constant")
+    if rows < 1 or growth <= 0.0:
+        raise TopologyError("rows must be at least 1 and growth positive")
+    if stations and rows != 1:
+        raise TopologyError("give rows (with growth) or stations, not both")
+    if spread <= 0.0:
+        raise TopologyError("spread must be positive (1: no widening)")
+    lateral = (0.0, 1.0) if to_x is not None else (1.0, 0.0) if to_y is not None else (-d[1], d[0])
+
+    def reach(p: Point) -> float:
+        """How far along the direction the point travels to the target."""
+        if to_x is not None:
+            return (to_x - p[0]) / d[0]
+        if to_y is not None:
+            return (to_y - p[1]) / d[1]
+        return distance
+
+    def travel(p: Point, value: float, absolute: bool) -> float:
+        """The distance along the direction to a row: a fraction of the
+        point's reach, or an absolute station (x, y or a distance)."""
+        if not absolute:
+            return value * reach(p)
+        if to_x is not None:
+            return (value - p[0]) / d[0]
+        if to_y is not None:
+            return (value - p[1]) / d[1]
+        return value
+
+    def work(working: MeshModel) -> ConstructResult:
+        chosen = _select_chain(working, edges, bbox, between)
+        if not chosen:
+            raise TopologyError("no exterior edge selected")
+        chain = _model_chain(working, chosen)
+        build = _Build(working, prefix)
+        position = {v: (working.vertices[v].x, working.vertices[v].y) for v in chain.vertices}
+        count = len(chain.vertices)
+        edge_count = count if chain.closed else count - 1
+        build.scale(max(abs(c) for p in position.values() for c in p)
+                    + max(abs(reach(p)) for p in position.values()))
+        target = (f"x = {to_x:g}" if to_x is not None else f"y = {to_y:g}" if to_y is not None
+                  else f"a distance {distance:g}")
+        for vertex, p in position.items():
+            if reach(p) <= build.tol:
+                raise TopologyError(
+                    f"{vertex} ({p[0]:.6g}, {p[1]:.6g}) does not reach {target} along the direction "
+                    f"({d[0]:.4g}, {d[1]:.4g}): the line must lie ahead of every chain vertex"
+                )
+        for e in range(edge_count):
+            for p in chain.interiors[e]:
+                if reach(p) <= build.tol:
+                    raise TopologyError(f"the curved edge from {chain.vertices[e]} crosses {target}")
+        translation = distance > 0.0 and spread == 1.0
+        if not translation:
+            # An arc carried by different distances is no longer an arc:
+            # its rows follow samples of it as splines.
+            for e in range(edge_count):
+                if chain.kinds[e] == "arc":
+                    a, b = chain.vertices[e], chain.vertices[(e + 1) % count]
+                    key = edge_key(a, b)
+                    fractions = [k / 8.0 for k in range(1, 8)]
+                    chain.interiors[e] = tuple(working.edge_points(
+                        key, fractions if key[0] == a else [1.0 - f for f in fractions]))
+        absolute = bool(stations)
+        if absolute:
+            values = sorted(set(stations))
+        else:
+            weights = [growth ** r for r in range(rows)]
+            values = [sum(weights[:r]) / sum(weights) for r in range(1, rows)]
+        # Existing exterior vertices on a point's path become stations.
+        taken = []
+        if conform:
+            occurrences = working.edge_occurrences()
+            rim = sorted({v for e, items in occurrences.items() if len(items) == 1 for v in e} - set(chain.vertices))
+            for vertex_id in rim:
+                q = (working.vertices[vertex_id].x, working.vertices[vertex_id].y)
+                for p in position.values():
+                    along = (q[0] - p[0]) * d[0] + (q[1] - p[1]) * d[1]
+                    across = abs((q[0] - p[0]) * d[1] - (q[1] - p[1]) * d[0])
+                    if across <= build.tol and build.tol < along < reach(p) - build.tol:
+                        if absolute:
+                            value = q[0] if to_x is not None else q[1] if to_y is not None else along
+                        else:
+                            value = along / reach(p)
+                        if all(abs(value - kept) > build.tol for kept in values):
+                            values.append(value)
+                            taken.append(vertex_id)
+                        break
+            values = sorted(values)
+        for value in values:
+            for vertex, p in position.items():
+                t = travel(p, value, absolute)
+                if not build.tol < t < reach(p) - build.tol:
+                    raise TopologyError(
+                        f"the station {value:g} is not between {vertex} and {target} along the direction"
+                    )
+        # The rows in order along the direction (by the first vertex's
+        # travel), the target last.
+        first = position[chain.vertices[0]]
+        rows_at = sorted(((value, absolute) for value in values), key=lambda row: travel(first, *row))
+        rows_at.append((1.0, False))
+
+        offsets = [p[0] * lateral[0] + p[1] * lateral[1] for p in position.values()]
+        middle = 0.5 * (min(offsets) + max(offsets))
+
+        def carried(p: Point, row: int) -> Point:
+            if row == 0:
+                return p
+            t = travel(p, *rows_at[row - 1])
+            widen = (spread - 1.0) * (t / reach(p)) * (p[0] * lateral[0] + p[1] * lateral[1] - middle)
+            return p[0] + t * d[0] + widen * lateral[0], p[1] + t * d[1] + widen * lateral[1]
+
+        quads = []
+        for row in range(1, len(rows_at) + 1):
+            for e in range(edge_count):
+                a, b = chain.vertices[e], chain.vertices[(e + 1) % count]
+                corners = [carried(position[a], row - 1), carried(position[b], row - 1),
+                           carried(position[b], row), carried(position[a], row)]
+                if not _ordered_convex(corners, chain.side):
+                    raise TopologyError(
+                        f"the row {row} block from edge {a}-{b} would not be strictly convex: the "
+                        f"direction ({d[0]:.4g}, {d[1]:.4g}) must leave the chain on the side away "
+                        "from its blocks, and the rows must not cross"
+                    )
+                quads.append(((e, row - 1), corners))
+        _refuse_overlap(working, quads, {}, lambda e, r: f"the row {r + 1} block from edge "
+                        f"{chain.vertices[e]}-{chain.vertices[(e + 1) % count]}")
+        before_rim = [
+            current for current, items in working.edge_occurrences().items()
+            if len(items) == 1 and current not in working.edge_geometry
+        ]
+        ids: dict[tuple[int, int], str] = {}
+        for row in range(len(rows_at) + 1):
+            for k, vertex in enumerate(chain.vertices):
+                if row == 0:
+                    ids[k, row] = vertex
+                    continue
+                point = carried(position[vertex], row)
+                if build.find(*point) is None:
+                    for current in before_rim:
+                        pa, pb = working.vertices[current[0]], working.vertices[current[1]]
+                        if _segment_distance(point, (pa.x, pa.y), (pb.x, pb.y)) <= build.tol and \
+                                min(math.dist(point, (pa.x, pa.y)), math.dist(point, (pb.x, pb.y))) > build.tol:
+                            raise TopologyError(
+                                f"a row vertex at ({point[0]:.6g}, {point[1]:.6g}) would fall inside the "
+                                f"existing edge {current[0]}-{current[1]} and leave it non-conformal: "
+                                "split that edge there first, or give a station there"
+                            )
+                ids[k, row] = build.vertex(point)
+        for row in range(1, len(rows_at) + 1):
+            for e in range(edge_count):
+                a, b = e, (e + 1) % count
+                build.block([ids[a, row - 1], ids[b, row - 1], ids[b, row], ids[a, row]], expect=chain.side)
+                interior = chain.interiors[e]
+                if not interior:
+                    continue
+                pa, pb = carried(position[chain.vertices[a]], row), carried(position[chain.vertices[b]], row)
+                moved = [carried(p, row) for p in interior]
+                if all(_segment_distance(p, pa, pb) <= build.tol * 10 for p in moved):
+                    continue
+                if chain.kinds[e] == "arc" and translation:
+                    build.curve(ids[a, row], ids[b, row], "arc", moved)
+                else:
+                    build.curve(ids[a, row], ids[b, row], "spline" if chain.kinds[e] != "polyLine" else "polyLine",
+                                unhooked_points(pa, moved, pb) if chain.kinds[e] != "polyLine" else moved)
+        build.finish()
+        result = build.result("add_rows")
+        far = [ids[k, len(rows_at)] for k in range(count)]
+        parts = [f"{len(rows_at)} row(s) of {edge_count} block(s) to {target}"
+                 + (f", widened {spread:g} times" if spread != 1.0 else ""),
+                 f"far row along the chain {chain.vertices[0]}..{chain.vertices[-1]}, in its order: "
+                 f"{_id_list(far, 12)}" + ("" if chain.closed else
+                                          f"; its ends {far[0]} (beside {chain.vertices[0]}) and "
+                                          f"{far[-1]} (beside {chain.vertices[-1]})")]
+        if taken:
+            parts.append(f"stations from existing vertices on the paths: {_id_list(taken)}")
+        result.note = "; ".join(parts)
         return result
 
     return _atomic(model, work)
@@ -1096,6 +1411,8 @@ def add_ring(
     tips: bool = False,
     rows: int = 1,
     growth: float = 1.0,
+    fan: bool = True,
+    open_at: Sequence[Point] = (),
     prefix: str | None = None,
 ) -> ConstructResult:
     """A band round a closed reference curve, its wall edges on the curve
@@ -1106,13 +1423,16 @@ def add_ring(
     arc-length ``fractions``, the point where the outward normal has each of
     the ``normals`` angles (refused unless there is exactly one), with
     ``tips`` the peak of every rounded convex corner (`_tip_stations`), and
-    ``count`` edges spread by arc length between them."""
+    ``count`` edges spread by arc length between them. ``fan=false`` leaves
+    every convex corner that would fan open, ``open_at`` the station nearest
+    each point (`_band`)."""
     if height <= 0.0:
         raise TopologyError("height must be positive")
     if count < 0 or (not count and not fractions and not normals):
         raise TopologyError("give count (edges round the curve), fractions or normals")
     if not 0.0 < corner < 180.0:
         raise TopologyError("corner is an angle in degrees between 0 and 180")
+    _corner_choice(fan, open_at, False)
     corner_angle = math.radians(corner)
 
     def work(working: MeshModel) -> ConstructResult:
@@ -1154,61 +1474,70 @@ def add_ring(
             anchors = sorted(stations) or [0.0]
             pieces = [(anchors[k], anchors[(k + 1) % len(anchors)] + (total if k + 1 == len(anchors) else 0.0))
                       for k in range(len(anchors))]
-            for start, end in pieces:
-                share = max(1, round(count * (end - start) / total))
-                for s in range(1, share):
-                    stations.add((start + (end - start) * s / share) % total)
+            for piece_start, piece_end in pieces:
+                share = max(1, round(count * (piece_end - piece_start) / total))
+                for step in range(1, share):
+                    stations.add((piece_start + (piece_end - piece_start) * step / share) % total)
             stations.add(anchors[0] % total)
-        ordered = sorted({round(s, 12) for s in stations})
+        ordered = sorted({round(value, 12) for value in stations})
         if len(ordered) < 3:
             raise TopologyError("a ring needs at least three stations")
 
-        def at(s: float) -> Point:
-            s %= total
-            k = max(0, min(n - 1, _bisect(lengths, s) - 1))
+        def at(arc: float) -> Point:
+            arc %= total
+            k = max(0, min(n - 1, _bisect(lengths, arc) - 1))
             span = lengths[k + 1] - lengths[k]
-            f = 0.0 if span <= 0.0 else (s - lengths[k]) / span
+            f = 0.0 if span <= 0.0 else (arc - lengths[k]) / span
             a, b = loop[k], loop[(k + 1) % n]
             return a[0] + f * (b[0] - a[0]), a[1] + f * (b[1] - a[1])
 
         build = _Build(working, prefix)
         build.scale(_extent(loop) + max(abs(c) for p in loop for c in p))
-        ids = [build.vertex(at(s)) for s in ordered]
+        ids = [build.vertex(at(value)) for value in ordered]
         interiors = []
-        for k, start in enumerate(ordered):
-            end = ordered[(k + 1) % len(ordered)] + (total if k + 1 == len(ordered) else 0.0)
+        for k, first in enumerate(ordered):
+            last = ordered[(k + 1) % len(ordered)] + (total if k + 1 == len(ordered) else 0.0)
             inside = [loop[j % n] for j in range(n * 2)
-                      if start + 1.0e-12 < (lengths[j % n] + (total if j >= n else 0.0)) < end - 1.0e-12]
-            a_point, b_point = at(start), at(end)
+                      if first + 1.0e-12 < (lengths[j % n] + (total if j >= n else 0.0)) < last - 1.0e-12]
+            a_point, b_point = at(first), at(last)
             gap = 1.0e-3 * max(math.dist(a_point, b_point), build.tol)
             inside = [p for p in inside if math.dist(p, a_point) > gap and math.dist(p, b_point) > gap]
             if len(inside) > MAX_SPLINE_POINTS:
                 step = len(inside) / MAX_SPLINE_POINTS
                 inside = [inside[int(i * step)] for i in range(MAX_SPLINE_POINTS)]
             if not inside:
-                inside = [at(0.5 * (start + end))]
+                inside = [at(0.5 * (first + last))]
             interiors.append(unhooked_points(a_point, inside, b_point))
-        area = sum(loop[k][0] * loop[(k + 1) % n][1] - loop[(k + 1) % n][0] * loop[k][1] for k in range(n))
-        side = -1.0 if area > 0.0 else 1.0   # outward: right of an anticlockwise loop
-        for k in range(len(ids)):
-            path = [at(ordered[k]), *interiors[k], at(ordered[(k + 1) % len(ordered)])]
-            straight = all(_segment_distance(p, path[0], path[-1]) <= build.tol * 10 for p in path[1:-1])
-            if not straight:
-                build.curve(ids[k], ids[(k + 1) % len(ids)], "spline", interiors[k])
-        kinds = ["spline"] * len(ids)
-        for k in range(len(ids)):
-            path = [at(ordered[k]), *interiors[k], at(ordered[(k + 1) % len(ordered)])]
-            if all(_segment_distance(p, path[0], path[-1]) <= build.tol * 10 for p in path[1:-1]):
-                interiors[k] = ()
-                kinds[k] = "line"
-        chain = _Chain(ids, interiors, kinds, True, side)
-        _band(build, chain, height, rows, growth, None)
+        band_side = -1.0 if area > 0.0 else 1.0   # outward: right of an anticlockwise loop
+        kinds = _wall_edges(build, ids, interiors, [at(value) for value in ordered], True)
+        chain = _Chain(ids, interiors, kinds, True, band_side)
+        where = {v: (working.vertices[v].x, working.vertices[v].y) for v in chain.vertices}
+        _band(build, chain, height, rows, growth, None, _open_indices(chain, where.__getitem__, fan, open_at))
         build.finish()
         result = build.result("add_ring")
-        result.note = f"{len(ordered)} stations: " + ("; ".join(notes) or "by arc length")
+        result.note = "; ".join(part for part in (
+            f"{len(ordered)} stations: " + ("; ".join(notes) or "by arc length"), _opened_note(build)) if part)
         return result
 
     return _atomic(model, work)
+
+
+def _wall_edges(build: _Build, ids: Sequence[str], interiors: list, points: Sequence[Point],
+                closed: bool) -> list[str]:
+    """Record the wall edges between consecutive stations - splines through
+    their interior points, lines where those lie on the chord - and return
+    each edge's kind; a straight edge's interior is emptied in place."""
+    kinds = []
+    for k in range(len(ids) if closed else len(ids) - 1):
+        following = (k + 1) % len(ids)
+        path = [points[k], *interiors[k], points[following]]
+        if all(_segment_distance(p, path[0], path[-1]) <= build.tol * 10 for p in path[1:-1]):
+            interiors[k] = ()
+            kinds.append("line")
+        else:
+            build.curve(ids[k], ids[following], "spline", interiors[k])
+            kinds.append("spline")
+    return kinds
 
 
 def _turning(loop: Sequence[Point]) -> list[float]:
@@ -2386,9 +2715,13 @@ def _fill_fold_message(model, build, index, i, j, n, m, quad, sign, names) -> st
     )
 
 
-def _refuse_overlap(model: MeshModel, quads, names) -> None:
+def _refuse_overlap(model: MeshModel, quads, names, label=None) -> None:
     """Refuse a fill block lying over an existing block: an existing vertex
-    strictly inside it, or its centre inside an existing block."""
+    strictly inside it, or its centre inside an existing block. ``label``
+    names a block by its (i, j) (default: the fill's column and row)."""
+    if label is None:
+        def label(i: int, j: int) -> str:
+            return f"the fill's block at column {i + 1}, row {j + 1}"
     existing = []
     for block in model.blocks:
         polygon = _block_polygon(model, block)
@@ -2405,16 +2738,15 @@ def _refuse_overlap(model: MeshModel, quads, names) -> None:
         for block, polygon, (x0, y0, x1, y1) in existing:
             if x0 <= centre[0] <= x1 and y0 <= centre[1] <= y1 and _inside(centre, polygon):
                 raise TopologyError(
-                    f"the fill's block at column {i + 1}, row {j + 1} would lie over the existing block "
-                    f"{block.id}: check the corners and sides"
+                    f"{label(i, j)} would lie over the existing block {block.id}: check the corners and sides"
                 )
         for vertex_id, point in every_vertex:
             if vertex_id in corners_here:
                 continue
             if box[0] < point[0] < box[2] and box[1] < point[1] < box[3] and _strictly_inside(point, quad):
                 raise TopologyError(
-                    f"the existing vertex {vertex_id} lies inside the fill's block at column {i + 1}, "
-                    f"row {j + 1}: a side passes the wrong side of it, or it should be a station"
+                    f"the existing vertex {vertex_id} lies inside {label(i, j)}: a side passes the "
+                    "wrong side of it, or it should be a station"
                 )
 
 

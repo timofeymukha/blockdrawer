@@ -1377,7 +1377,19 @@ def _run_add_band(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
 
     return add_band(
         model, edges=args["edges"], bbox=args["bbox"], height=args["height"],
-        rows=args["rows"], growth=args["growth"], to_box=args["to_box"], prefix=args["id"],
+        rows=args["rows"], growth=args["growth"], to_box=args["to_box"], fan=args["fan"],
+        open_at=args["open_at"], between=args["between"], prefix=args["id"],
+    ).to_data()
+
+
+def _run_add_rows(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
+    from .construct import add_rows
+
+    return add_rows(
+        model, edges=args["edges"], bbox=args["bbox"], direction=args["direction"],
+        to_x=args["to_x"], to_y=args["to_y"], distance=args["distance"], rows=args["rows"],
+        growth=args["growth"], stations=args["stations"], conform=args["conform"],
+        between=args["between"], spread=args["spread"], prefix=args["id"],
     ).to_data()
 
 
@@ -1387,7 +1399,8 @@ def _run_add_ring(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
     return add_ring(
         model, args["curve"], args["height"], count=args["count"],
         fractions=args["fractions"], normals=args["normals"], corner=args["corner"],
-        tips=args["tips"], rows=args["rows"], growth=args["growth"], prefix=args["id"],
+        tips=args["tips"], rows=args["rows"], growth=args["growth"],
+        fan=args["fan"], open_at=args["open_at"], prefix=args["id"],
     ).to_data()
 
 
@@ -1425,6 +1438,13 @@ def _run_set_boundary_by(model: MeshModel, args: dict[str, Any]) -> dict[str, An
 _ID = Parameter("id", "optional_str",
                 "name new vertices ID_0, ID_1, ... and blocks ID_b0, ... (default: next vN, bN)",
                 required=False, default=None)
+_FAN = Parameter("fan", "bool",
+                 "false: every convex corner that would get a fan is left open (no blocks between "
+                 "the spokes normal to its two sides)", required=False, default=True)
+_OPEN_AT = Parameter("open_at", "points", "leave open the convex corner nearest each x,y (x,y;x,y)",
+                     required=False, default=())
+_BETWEEN = Parameter("between", "vertices", "select the unassigned exterior chain joining these two vertices",
+                     required=False, default=())
 _register(CommandSpec(
     "add_grid",
     (
@@ -1468,7 +1488,9 @@ _register(CommandSpec(
         "spoke (at most 3 heights long). Open ends follow the boundary they "
         "meet; offset arcs stay arcs. With to_box every spoke runs to that "
         "rectangle instead, a box corner taken by the nearest spoke, and no "
-        "corner gets a fan."
+        "corner gets a fan. fan=false leaves every corner that would fan "
+        "open (open_at=X,Y: the corner nearest each point): two spokes, each "
+        "normal to its side, nothing between them - for a wake band."
     ),
     (
         Parameter("edges", "edges", "the chain's edges", required=False, default=()),
@@ -1479,9 +1501,51 @@ _register(CommandSpec(
         Parameter("growth", "float", "row height ratio", required=False, default=1.0),
         Parameter("to_box", "numbers", "xmin,ymin,xmax,ymax the spokes run to",
                   required=False, default=()),
+        _FAN,
+        _OPEN_AT,
+        _BETWEEN,
         _ID,
     ),
     _run_add_band,
+))
+_register(CommandSpec(
+    "add_rows",
+    (
+        "Carry a chain of exterior edges (edges, the unassigned exterior "
+        "edges inside bbox, or between=A,B: the unassigned chain joining two "
+        "vertices) along direction as rows of blocks: every point of the "
+        "chain moves along it to the line x = to_x or y = to_y (each point "
+        "its own distance) or by distance. The rows between are at stations "
+        "(x values with to_x, y values with to_y, distances with distance; "
+        "each row on one such line) or rows rows whose heights along each "
+        "point's path grow by growth; spread=S widens the far row to S times "
+        "the chain's width across the carry. Vertices are reused by "
+        "coordinate; with conform (default) an existing exterior vertex on a "
+        "point's path becomes a station. A wake band from a trailing edge "
+        "left open (add_ring ... fan=false) to an outlet: add_rows "
+        "edges=SPOKE1,SPOKE2 direction=1,0 to_x=X."
+    ),
+    (
+        Parameter("edges", "edges", "the chain's edges", required=False, default=()),
+        Parameter("bbox", "numbers", "select the unassigned exterior edges inside this box",
+                  required=False, default=()),
+        Parameter("direction", "numbers", "dx,dy the chain is carried along"),
+        Parameter("to_x", "float", "carry every point to the line x = to_x", required=False, default=None),
+        Parameter("to_y", "float", "carry every point to the line y = to_y", required=False, default=None),
+        Parameter("distance", "float", "carry every point this far", required=False, default=0.0),
+        Parameter("rows", "int", "rows of blocks (without stations)", required=False, default=1),
+        Parameter("growth", "float", "row height ratio along each path", required=False, default=1.0),
+        Parameter("stations", "numbers", "rows at these x (to_x), y (to_y) or distances",
+                  required=False, default=()),
+        Parameter("conform", "bool", "take existing exterior vertices on the paths as stations",
+                  required=False, default=True),
+        Parameter("spread", "float", "the far row's width across the carry over the chain's "
+                  "(each point's offset from the chain's middle grows with its travel; 1: none)",
+                  required=False, default=1.0),
+        _BETWEEN,
+        _ID,
+    ),
+    _run_add_rows,
 ))
 _register(CommandSpec(
     "add_ring",
@@ -1498,7 +1562,9 @@ _register(CommandSpec(
         "add_band builds it, height high: a station where the curve turns "
         "convexly by more than 60 degrees gets a fan of corner blocks, one "
         "per 90 degrees of turning or part of it (a square corner one block, "
-        "a sharp trailing edge two or more), every other station one spoke."
+        "a sharp trailing edge two or more), every other station one spoke; "
+        "fan=false (or open_at) leaves such a corner open for a wake band "
+        "(add_rows)."
     ),
     (
         Parameter("curve", "curve", "closed reference curve (ID or name)"),
@@ -1515,6 +1581,8 @@ _register(CommandSpec(
                   required=False, default=False),
         Parameter("rows", "int", "rows of blocks", required=False, default=1),
         Parameter("growth", "float", "row height ratio", required=False, default=1.0),
+        _FAN,
+        _OPEN_AT,
         _ID,
     ),
     _run_add_ring,
@@ -2198,7 +2266,7 @@ def _note(result: CommandResult) -> dict[str, Any] | None:
         }
     if result.name == "size":
         return {**base, **_size_note(data)}
-    if result.name in ("add_grid", "add_band", "add_ring", "add_fill"):
+    if result.name in ("add_grid", "add_band", "add_ring", "add_fill", "add_rows"):
         note = {
             **base,
             "blocks": len(data.get("created_blocks", [])),
