@@ -46,9 +46,13 @@ the geometry's units and knows no construction roles.
    rises with the budget. Every
    move is checked on the sampled grid of the blocks it touches; one that
    folds a cell, adds a face above 70 degrees, raises the worst face past
-   the field's or takes the skewness above 4 is undone. Before spending, a
-   block the field leaves above skewness 4 or with faces above 70 degrees
-   is repaired by the same moves. The spent state is verified against the
+   the field's, takes the skewness above 4 or takes cells past checkMesh's
+   aspect ratio of 1000 is undone. Before spending, a block the field
+   leaves above skewness 4 or with faces above 70 degrees is repaired by
+   the same moves, and a block above aspect ratio 1000 first by releasing
+   a strip through it towards its members' own gradings (``grading=field``'s
+   series), which carries no wall width to where the field wants long
+   cells. The spent state is verified against the
    repaired field state at 256 cells a side (real counts where faces are
    steep) and spending is undone where it added faces; both verdicts are
    reported. Strips the spent state leaves coarse between finer neighbours
@@ -83,6 +87,7 @@ from .cyclic import CyclicMatch, cyclic_pairs
 from .domain import EdgeKey, TopologyError, edge_key
 from .model import MeshModel
 from .session import from_data, to_data
+from .sampling import ASPECT_LIMIT as _ASPECT_LIMIT
 from .smooth import VERIFY_CELLS  # the verification's resolution, smooth's
 
 
@@ -99,6 +104,8 @@ RAISE_STEP = 0.1
 REGRADE_STEPS = (-1.0, -0.5, 0.5, 1.0)
 # checkMesh fails a mesh above this face skewness.
 SKEWNESS_LIMIT = 4.0
+# ... and above this cell aspect ratio (sampling.ASPECT_LIMIT, 1000).
+ASPECT_LIMIT = _ASPECT_LIMIT
 # The per-move guard's resolution: smooth's verification resolution. At 64
 # a side it was blind to blocks of hundreds of cells (the fine 30P30N gained
 # 7 and 53 faces above 70 degrees); at 256 the fine 30P30N sizes in 259 s
@@ -147,6 +154,15 @@ JUMP_LIMIT = 2.5
 FIELD_MODES = (1.0, 0.5, 0.25)
 # Rounds of lowering bounds to the partners' widths (_FieldGrading.tighten).
 TIGHTEN_ROUNDS = 20
+
+
+def _aspect_worse(before: float, before_high: int, after: float, after_high: int) -> bool:
+    """Whether a change breaks checkMesh's aspect ratio limit as ``size``
+    keeps it: a state at or below ``ASPECT_LIMIT`` may not cross it, and a
+    state above it may not gain cells above it."""
+    if after <= ASPECT_LIMIT:
+        return False
+    return before <= ASPECT_LIMIT or after_high > before_high
 
 
 @dataclass(frozen=True)
@@ -655,6 +671,17 @@ def size_model(
             "(verification.field) that spending does not remove; polish and check "
             "first, then see failures.md for the blocks check names"
         )]))
+    high = result.verification.get("result", {}).get("high_aspect_blocks") or []
+    if high:
+        cells_above = sum(item[2] for item in high)
+        named = ", ".join(f"{block} ({ratio:.0f}, {count} cells)" for block, ratio, count in high[:5])
+        more = f" and {len(high) - 5} more block(s)" if len(high) > 5 else ""
+        result.note = " ".join(filter(None, [result.note, (
+            f"{cells_above} cell(s) above checkMesh's aspect ratio limit of {ASPECT_LIMIT:g} "
+            f"left in {named}{more} (verification.result): checkMesh fails; no repair move "
+            "lowered them - grade the thin side of each block coarser at the end where its cells "
+            "are long (set_edge_grading ... start_width) or raise the count along the long side"
+        )]))
     _replace(model, working)
     return result
 
@@ -667,7 +694,8 @@ def _field_pass(working: MeshModel, state: dict, options: SizeOptions) -> tuple[
     verified like spending's; a pass that adds a face above 70 degrees, a
     fold, more than ``VERIFY_TOLERANCE`` on the worst face or skewness past
     4 is dropped whole."""
-    grader = _FieldGrading(working, state["strips"], state["edges"], state["bounds"], options, state["ratios"])
+    grader = _FieldGrading(working, state["strips"], state["edges"], state["bounds"], options, state["ratios"],
+                           state.get("released"))
     grader.tighten(state["counts"], state["links"])
     grader.settle(working, state["counts"], state["scope"], state["links"])
     ratios = dict(state["ratios"])
@@ -690,15 +718,27 @@ def _field_pass(working: MeshModel, state: dict, options: SizeOptions) -> tuple[
     if (summary["severe_faces"] > spent["severe_faces"]
             or summary["folded_cells"] > spent["folded_cells"]
             or summary["max_non_orthogonality"] > spent["max_non_orthogonality"] + VERIFY_TOLERANCE
-            or summary["max_skewness"] > SKEWNESS_LIMIT >= spent["max_skewness"]):
+            or summary["max_skewness"] > SKEWNESS_LIMIT >= spent["max_skewness"]
+            or _aspect_worse(spent["max_aspect_ratio"], spent["high_aspect_cells"],
+                             summary["max_aspect_ratio"], summary["high_aspect_cells"])):
         record["dropped"] = "the verification at 256 cells a side found the pass worse than the spent state"
         return state, record
-    brief = {key: summary[key] for key in (
-        "severe_faces", "max_non_orthogonality", "max_skewness", "folded_cells",
-        "max_aspect_ratio", "worst_aspect_block", "high_aspect_cells",
-    )}
-    trial_state["verification"] = {**state["verification"], "result": brief}
+    trial_state["verification"] = {**state["verification"], "result": _brief(summary)}
     return trial_state, record
+
+
+def _brief(summary: dict) -> dict:
+    """The verdict ``size`` reports for a state (``verification``)."""
+    return {
+        "severe_faces": summary.get("severe_faces", 0),
+        "max_non_orthogonality": summary.get("max_non_orthogonality", 0.0),
+        "max_skewness": summary.get("max_skewness", 0.0),
+        "folded_cells": summary.get("folded_cells", 0),
+        "max_aspect_ratio": summary.get("max_aspect_ratio", 0.0),
+        "worst_aspect_block": summary.get("worst_aspect_block"),
+        "high_aspect_cells": summary.get("high_aspect_cells", 0),
+        "high_aspect_blocks": summary.get("high_aspect_blocks", []),
+    }
 
 
 def _neighbours(model: MeshModel) -> dict[str, set[str]]:
@@ -740,11 +780,7 @@ def _size_by_distance(model, options, blocks, bbox) -> SizeResult:
             f"size refused: the sized mesh's sampled face skewness {skewness:.3g} exceeds "
             f"checkMesh's limit of {SKEWNESS_LIMIT:g} where the input's was {skew_floor:.3g}"
         )
-    verdict = _verify(working, _neighbours(working))[1]
-    brief = {key: verdict[key] for key in (
-        "severe_faces", "max_non_orthogonality", "max_skewness", "folded_cells",
-        "max_aspect_ratio", "worst_aspect_block", "high_aspect_cells",
-    )}
+    brief = _brief(_verify(working, _neighbours(working))[1])
     result = _report(working, cells_before, old.components, old.splits, old.refused, old.budget_factor, old.note,
                      options)
     result.budget = options.budget
@@ -1037,13 +1073,18 @@ class _FieldGrading:
     strip's orientation, cached per count.
     """
 
-    def __init__(self, model: MeshModel, strips, edges, bounds, options: SizeOptions, shared) -> None:
+    def __init__(self, model: MeshModel, strips, edges, bounds, options: SizeOptions, shared,
+                 fixed: dict[int, dict[EdgeKey, float]] | None = None) -> None:
         self.strips = strips
         self.edges = edges
         self.bounds = dict(bounds)
         self.options = options
         self.limit = math.tan(math.radians(SHEAR_ANGLE))
         self.cache: dict[tuple[int, int], dict[EdgeKey, float]] = {}
+        # Strips whose members already have their own gradings (the aspect
+        # repair's releases, ``_spend``): kept as they are, in each strip's
+        # orientation.
+        self.fixed = dict(fixed or {})
         strip_of = {member: index for index, orientation in enumerate(strips) for member in orientation}
         self.strip_of = strip_of
         # The strip's one shared log ratio (``_ratios``, in the strip's
@@ -1101,6 +1142,8 @@ class _FieldGrading:
                 near, far, length)
 
     def logs(self, strip: int, cells: int) -> dict[EdgeKey, float]:
+        if strip in self.fixed:
+            return self.fixed[strip]
         key = (strip, cells)
         if key not in self.cache:
             self.cache[key] = self._solve(strip, cells)
@@ -1206,9 +1249,10 @@ class _FieldGrading:
             return found
 
         def verdict(blocks):
-            summary = sample_model(trial, GUARD_CELLS, blocks=blocks).summary()
+            summary = sample_model(trial, GUARD_CELLS, blocks=blocks, planar=True).summary()
             return (summary.get("folded_cells", 0), summary.get("severe_faces", 0),
-                    summary.get("max_skewness", 0.0), summary.get("max_non_orthogonality", 0.0))
+                    summary.get("max_skewness", 0.0), summary.get("max_non_orthogonality", 0.0),
+                    summary.get("max_aspect_ratio", 0.0), summary.get("high_aspect_cells", 0))
 
         def finest(strip: int) -> float:
             return min(min(self.bounds[(member, member[0])], self.bounds[(member, member[1])])
@@ -1216,11 +1260,12 @@ class _FieldGrading:
 
         # No block may be sheared past the worst face the shared state
         # already has (a pure H-grid stays at 0 degrees), nor past SHEAR_ANGLE.
-        ceiling = min(SHEAR_ANGLE, sample_model(trial, GUARD_CELLS).summary().get("max_non_orthogonality", 0.0))
+        ceiling = min(SHEAR_ANGLE, sample_model(trial, GUARD_CELLS, planar=True).summary().get(
+            "max_non_orthogonality", 0.0))
         order = sorted(
             (strip for strip, orientation in enumerate(self.strips)
              if all(member in scope for member in orientation)
-             and counts[next(iter(orientation))] > 1),
+             and counts[next(iter(orientation))] > 1 and strip not in self.fixed),
             key=lambda strip: (finest(strip), min(self.strips[strip])),
         )
         # Strips whose members meet across an interface: a far-field strip
@@ -1263,6 +1308,7 @@ class _FieldGrading:
                 after = verdict(local)
                 if (after[0] <= before[0] and after[1] <= before[1]
                         and not (after[2] > SKEWNESS_LIMIT >= before[2])
+                        and not _aspect_worse(before[4], before[5], after[4], after[5])
                         and after[3] <= max(ceiling, before[3] + VERIFY_TOLERANCE)):
                     return None
             for strip in group:
@@ -1639,7 +1685,9 @@ def _continuity_splits(working, field_, state, moves, guard, options, budget, bl
         if (_jump_cost(trial, options) >= _jump_cost(state, options)
                 or _max_jump(trial) > _max_jump(state) * (1.0 + 1.0e-9)
                 or verified["severe_faces"] > promised["severe_faces"]
-                or verified["max_non_orthogonality"] > promised["max_non_orthogonality"] + VERIFY_TOLERANCE):
+                or verified["max_non_orthogonality"] > promised["max_non_orthogonality"] + VERIFY_TOLERANCE
+                or _aspect_worse(promised["max_aspect_ratio"], promised["high_aspect_cells"],
+                                 verified["max_aspect_ratio"], verified["high_aspect_cells"])):
             working.__dict__.update(saved.__dict__)
             for item in splits[made:]:
                 refused.append(
@@ -1662,7 +1710,7 @@ def _verify(model: MeshModel, neighbours: dict[str, set[str]]) -> tuple[dict[str
     70 degrees makes its owner block hot, so the totals count every one."""
     from .sampling import sample_model
 
-    coarse = sample_model(model, VERIFY_CELLS)
+    coarse = sample_model(model, VERIFY_CELLS, planar=True)
     blocks = {
         item.block_id: {
             "severe_faces": item.severe_faces,
@@ -1681,7 +1729,7 @@ def _verify(model: MeshModel, neighbours: dict[str, set[str]]) -> tuple[dict[str
         other in coarsened for other in neighbours.get(block, ()))]
     if hot:
         subset = sorted({other for block in hot for other in neighbours.get(block, {block})} | set(hot))
-        real = sample_model(model, None, blocks=subset)
+        real = sample_model(model, None, blocks=subset, planar=True)
         for item in real.blocks:
             if item.block_id in hot:
                 blocks[item.block_id] = {
@@ -1697,10 +1745,17 @@ def _verify(model: MeshModel, neighbours: dict[str, set[str]]) -> tuple[dict[str
         "folded_cells": sum(item["folded_cells"] for item in blocks.values()),
         "max_non_orthogonality": max((item["max_non_orthogonality"] for item in blocks.values()), default=0.0),
         "max_skewness": max((item["max_skewness"] for item in blocks.values()), default=0.0),
-        # checkMesh's cell aspect ratio, reported only: nothing in size acts on it.
+        # checkMesh's cell aspect ratio: the repair lowers it below
+        # ASPECT_LIMIT where it can, the guards keep it there.
         "max_aspect_ratio": max((item["max_aspect_ratio"] for item in blocks.values()), default=0.0),
         "worst_aspect_block": max(blocks, key=lambda block: blocks[block]["max_aspect_ratio"], default=None),
         "high_aspect_cells": sum(item["high_aspect_cells"] for item in blocks.values()),
+        # The blocks above the limit, worst first: [block, ratio, cells above].
+        "high_aspect_blocks": [
+            [block, blocks[block]["max_aspect_ratio"], blocks[block]["high_aspect_cells"]]
+            for block in sorted(blocks, key=lambda block: (-blocks[block]["max_aspect_ratio"], block))
+            if blocks[block]["max_aspect_ratio"] > ASPECT_LIMIT
+        ],
         "real_count_blocks": len(hot),
     }
     return blocks, summary
@@ -1795,8 +1850,17 @@ def _spend(model: MeshModel, state: dict, options: SizeOptions, budget: int, ske
         across.setdefault(component_of[keys[0]], []).append(component_of[keys[1]])
         across.setdefault(component_of[keys[1]], []).append(component_of[keys[0]])
 
+    # Strips the aspect repair gave their members' own gradings
+    # (``repair_aspect``): oriented log ratio per member. Spending neither
+    # regrades nor refits them; a raise keeps their ratios.
+    released: dict[int, dict[EdgeKey, float]] = {}
+
     def total_ratio(current, log=None):
-        value = logs[strip_of[current]] if log is None else log
+        if log is None:
+            own = released.get(strip_of[current])
+            value = logs[strip_of[current]] if own is None else own[current]
+        else:
+            value = log
         return math.exp(value if begin_of[current] == current[0] else -value)
 
     def width(current, vertex, n=None, log=None):
@@ -1889,16 +1953,18 @@ def _spend(model: MeshModel, state: dict, options: SizeOptions, budget: int, ske
 
     def write_regrade(index, value):
         for member in strips[index]:
-            total = total_ratio(member, value)
+            # A released strip keeps its members' own ratios.
+            total = total_ratio(member, None if index in released else value)
             if trial.edge_cells[member] < 2 or abs(total - 1.0) <= 1.0e-9:
                 trial.edge_grading.pop(member, None)
             else:
                 trial.edge_grading[member] = total
 
     def verdict(blocks, cells=GUARD_CELLS):
-        summary = sample_model(trial, cells, blocks=blocks).summary()
+        summary = sample_model(trial, cells, blocks=blocks, planar=True).summary()
         return (summary.get("folded_cells", 0), summary.get("severe_faces", 0),
-                summary.get("max_skewness", 0.0), summary.get("max_non_orthogonality", 0.0))
+                summary.get("max_skewness", 0.0), summary.get("max_non_orthogonality", 0.0),
+                summary.get("max_aspect_ratio", 0.0), summary.get("high_aspect_cells", 0))
 
     # The worst face the result may have: the field's (as repaired) plus
     # VERIFY_TOLERANCE, set once the repair is done.
@@ -1911,7 +1977,8 @@ def _spend(model: MeshModel, state: dict, options: SizeOptions, budget: int, ske
         after = verdict(local)
         if (after[0] <= before[0] and after[1] <= before[1]
                 and (after[3] <= before[3] or after[3] <= guard_ceiling[0])
-                and not (after[2] > SKEWNESS_LIMIT and before[2] <= SKEWNESS_LIMIT)):
+                and not (after[2] > SKEWNESS_LIMIT and before[2] <= SKEWNESS_LIMIT)
+                and not _aspect_worse(before[4], before[5], after[4], after[5])):
             return True
         undo()
         return False
@@ -1921,6 +1988,92 @@ def _spend(model: MeshModel, state: dict, options: SizeOptions, budget: int, ske
     stopped_by_budget = False
     tabu: set[tuple] = set()
     refused = 0
+
+    by_id = {block.id: block for block in model.blocks}
+
+    def shape_trials(worst) -> list[tuple]:
+        """The repair's candidate moves for one block: raise one of its two
+        components (within the budget), take one of its strips towards
+        uniform or half way there, or give one side the grading of its
+        opposite side. Released strips are not regraded."""
+        keys = [edge_key(*worst.directed_edge(k)) for k in range(4)]
+        trials = []
+        for index in sorted({component_of[k] for k in keys[:2]}):
+            n = counts[components[index][0]]
+            raised = min(options.maximum_cells, n + max(1, math.ceil(RAISE_STEP * n)))
+            added = (raised - n) * sum(counts[components[other][0]] for other in across.get(index, ()))
+            if raised > n and cells + added * model.z_cells <= budget:
+                trials.append(("raise", index, raised, added * model.z_cells))
+        values: dict[int, set[float]] = {}
+        for index in {strip_of[k] for k in keys}:
+            values.setdefault(index, set()).update((0.0, 0.5 * logs[index]))
+        for k in range(4):
+            # Side k runs from corner k to k+1, its opposite from k+3 to k+2.
+            here, there = worst.directed_edge(k), worst.directed_edge((k + 2) % 4)
+            key, other = edge_key(*here), edge_key(*there)
+            ratio_there = total_ratio(other) if there[0] == other[0] else 1.0 / total_ratio(other)
+            wanted = 1.0 / ratio_there
+            total = wanted if here[0] == key[0] else 1.0 / wanted
+            values.setdefault(strip_of[key], set()).add(
+                math.log(total) if begin_of[key] == key[0] else -math.log(total))
+        for index in sorted(values):
+            if index in released:
+                continue
+            for value in sorted(values[index]):
+                if abs(value - logs[index]) > 1.0e-9 and all(allowed(m, value) for m in strips[index]):
+                    trials.append(("regrade", index, value, 0))
+        return trials
+
+    def write_release(index, own):
+        for member in strips[index]:
+            value = own[member]
+            total = math.exp(value if begin_of[member] == member[0] else -value)
+            if trial.edge_cells[member] < 2 or abs(total - 1.0) <= 1.0e-9:
+                trial.edge_grading.pop(member, None)
+            else:
+                trial.edge_grading[member] = total
+
+    def try_move(kind, index, value, local):
+        """The local verdict with the move made, the trial left as it was."""
+        if kind == "raise":
+            old = counts[components[index][0]]
+            write_raise(index, value, {})
+            result = verdict(local, VERIFY_CELLS)
+            write_raise(index, old, {})
+        elif kind == "release":
+            before = released.get(index)
+            released[index] = value
+            write_release(index, value)
+            result = verdict(local, VERIFY_CELLS)
+            if before is None:
+                del released[index]
+            else:
+                released[index] = before
+            write_regrade(index, logs[index])
+        else:
+            old = logs[index]
+            write_regrade(index, value)
+            result = verdict(local, VERIFY_CELLS)
+            write_regrade(index, old)
+        return result
+
+    def make_move(kind, index, value, added):
+        nonlocal cells
+        if kind == "raise":
+            moves.append({"kind": "shape", "component": index, "from": counts[components[index][0]],
+                          "to": value, "cells": added})
+            write_raise(index, value, {})
+            for member in components[index]:
+                counts[member] = value
+            cells += added
+        elif kind == "release":
+            moves.append({"kind": "shape", "strip": index, "release": release_mode[index]})
+            released[index] = value
+            write_release(index, value)
+        else:
+            moves.append({"kind": "shape", "strip": index, "from": logs[index], "to": value})
+            write_regrade(index, value)
+            logs[index] = value
 
     def repair_shape() -> None:
         """Repair what the field's counts break before any cell is spent on
@@ -1932,15 +2085,15 @@ def _spend(model: MeshModel, state: dict, options: SizeOptions, budget: int, ske
         above 70 degrees (e3's b77 at five cells across: 4.9 with 10 such
         faces, 3.5 with 15 at seven). Then the block with the worst face
         above 70 degrees, while its count of them or its worst face falls
-        and the skewness stays at or below 4. Candidates: raise one of the
-        block's two components, take one of its strips towards uniform, or
-        give one side the grading of its opposite side.
+        and the skewness stays at or below 4. Candidates (``shape_trials``):
+        raise one of the block's two components, take one of its strips
+        towards uniform, or give one side the grading of its opposite side.
+        No move may take the block's neighbourhood across checkMesh's
+        aspect ratio limit.
         """
-        nonlocal cells
-        by_id = {block.id: block for block in model.blocks}
         skew_phase = skew_floor is not None and skew_floor <= SKEWNESS_LIMIT
         for _repair in range(SHAPE_REPAIRS):
-            summary = sample_model(trial, VERIFY_CELLS).summary()
+            summary = sample_model(trial, VERIFY_CELLS, planar=True).summary()
             if skew_phase and summary.get("max_skewness", 0.0) > SKEWNESS_LIMIT:
                 worst = by_id[summary["worst_skew_block"]]
                 skewed = True
@@ -1949,45 +2102,12 @@ def _spend(model: MeshModel, state: dict, options: SizeOptions, budget: int, ske
                 skewed = False
             else:
                 break
-            keys = [edge_key(*worst.directed_edge(k)) for k in range(4)]
             local = sorted(neighbours.get(worst.id, {worst.id}))
             base = verdict(local, VERIFY_CELLS)
-            trials = []
-            for index in sorted({component_of[k] for k in keys[:2]}):
-                n = counts[components[index][0]]
-                raised = min(options.maximum_cells, n + max(1, math.ceil(RAISE_STEP * n)))
-                added = (raised - n) * sum(counts[components[other][0]] for other in across.get(index, ()))
-                if raised > n and cells + added * model.z_cells <= budget:
-                    trials.append(("raise", index, raised, added * model.z_cells))
-            values: dict[int, set[float]] = {}
-            for index in {strip_of[k] for k in keys}:
-                values.setdefault(index, set()).update((0.0, 0.5 * logs[index]))
-            for k in range(4):
-                # Side k runs from corner k to k+1, its opposite from k+3 to k+2.
-                here, there = worst.directed_edge(k), worst.directed_edge((k + 2) % 4)
-                key, other = edge_key(*here), edge_key(*there)
-                ratio_there = total_ratio(other) if there[0] == other[0] else 1.0 / total_ratio(other)
-                wanted = 1.0 / ratio_there
-                total = wanted if here[0] == key[0] else 1.0 / wanted
-                values.setdefault(strip_of[key], set()).add(
-                    math.log(total) if begin_of[key] == key[0] else -math.log(total))
-            for index in sorted(values):
-                for value in sorted(values[index]):
-                    if abs(value - logs[index]) > 1.0e-9 and all(allowed(m, value) for m in strips[index]):
-                        trials.append(("regrade", index, value, 0))
             best_trial = None
-            for kind, index, value, added in trials:
-                if kind == "raise":
-                    old = counts[components[index][0]]
-                    write_raise(index, value, {})
-                    result = verdict(local, VERIFY_CELLS)
-                    write_raise(index, old, {})
-                else:
-                    old = logs[index]
-                    write_regrade(index, value)
-                    result = verdict(local, VERIFY_CELLS)
-                    write_regrade(index, old)
-                if result[0] > base[0]:
+            for kind, index, value, added in shape_trials(worst):
+                result = try_move(kind, index, value, local)
+                if result[0] > base[0] or _aspect_worse(base[4], base[5], result[4], result[5]):
                     continue
                 if skewed:
                     score = (result[2],)
@@ -2003,19 +2123,142 @@ def _spend(model: MeshModel, state: dict, options: SizeOptions, budget: int, ske
             if best_trial is None:
                 break
             _score, kind, index, value, added = best_trial
-            if kind == "raise":
-                moves.append({"kind": "shape", "component": index, "from": counts[components[index][0]],
-                              "to": value, "cells": added})
-                write_raise(index, value, {})
-                for member in components[index]:
-                    counts[member] = value
-                cells += added
-            else:
-                moves.append({"kind": "shape", "strip": index, "from": logs[index], "to": value})
-                write_regrade(index, value)
-                logs[index] = value
+            make_move(kind, index, value, added)
 
+    release_mode: dict[int, float] = {}
+    grader: list = []
+
+    def strip_jumps(index) -> list[float]:
+        """The interface jumps at the ends of a strip's members."""
+        found = []
+        for pair in strip_pairs[index]:
+            (e1, v1), (e2, v2) = pairs[pair]
+            a, b = width(e1, v1), width(e2, v2)
+            found.append(max(a / b, b / a))
+        return found
+
+    def release_trials(worst) -> list[tuple]:
+        """Each strip through the block, its members going all, half or a
+        quarter of the way from the shared ratio to their own gradings
+        (``grading=field``'s ``_FieldGrading``, each member graded by the
+        field where it lies within the shear limit), further than it went
+        already. Each member end's bound is first lowered to
+        ``interface_growth`` times the widths its partners across block
+        interfaces have now (``_FieldGrading.tighten`` against the state as
+        it is), so a member beside a band keeps the band's widths and the
+        members far from it relax."""
+        if not grader:
+            grader.append(_FieldGrading(model, strips, edges, state["bounds"], options, ratios))
+        own = grader[0]
+        links = state["links"]
+        keys = [edge_key(*worst.directed_edge(k)) for k in range(4)]
+        trials = []
+        for index in sorted({strip_of[k] for k in keys}):
+            member = next(iter(strips[index]))
+            if index not in scoped_strips_set or counts[member] < 2:
+                continue
+            for current in strips[index]:
+                for vertex in current:
+                    key = (current, vertex)
+                    partners = links.get(key, ())
+                    bound = state["bounds"][key]
+                    if partners:
+                        bound = min(bound, cap * min(width(*partner) for partner in partners))
+                    own.bounds[key] = bound
+            for cached in [item for item in own.cache if item[0] == index]:
+                del own.cache[cached]
+            own.shared[index] = logs[index]
+            for mode in FIELD_MODES:
+                if mode <= release_mode.get(index, 0.0):
+                    continue
+                own.mode[index] = mode
+                value = dict(own.logs(index, counts[member]))
+                if all(abs(value[m] - logs[index]) <= 1.0e-9 for m in strips[index]):
+                    continue
+                trials.append(("release", index, value, mode))
+            own.mode[index] = 1.0
+        return trials
+
+    def repair_aspect() -> None:
+        """Lower checkMesh's cell aspect ratio below ``ASPECT_LIMIT`` in
+        each block above it, worst first.
+
+        A cell is long and thin when a strip's one shared ratio carries a
+        wall's first width along its members to where the field asks for
+        cells hundreds of times longer (the shear layers of a blunt plate
+        carried 2e-4 to an outlet with 0.27 long cells). The free moves come
+        first: a strip through the block going part of the way to its
+        members' own gradings (``release_trials``; the worst interface jump
+        at its members' ends may pass neither what it was nor
+        ``JUMP_LIMIT``), and the regrades of ``shape_trials``. A count raise
+        (shorter long cells, at a cost in cells) is tried only when no free
+        move lowers the block's cells above the limit or its worst ratio. No
+        move may fold a cell, add a face above 70 degrees, take the skewness
+        past 4, or take the neighbourhood's worst face past ``SHEAR_ANGLE``
+        (or ``VERIFY_TOLERANCE`` above where it was): members graded apart
+        shear the cells between them, which an H-grid's checkMesh failure
+        is worth up to that angle (a column whose release read 56 degrees
+        took count raises instead). A block no move improves is left, and
+        named in the note."""
+        exhausted: set[str] = set()
+        for _repair in range(SHAPE_REPAIRS):
+            sampled = sample_model(trial, VERIFY_CELLS, planar=True)
+            targets = sorted(
+                (item for item in sampled.blocks
+                 if item.max_aspect_ratio > ASPECT_LIMIT and item.block_id not in exhausted
+                 and item.block_id in by_id),
+                key=lambda item: (-item.max_aspect_ratio, item.block_id),
+            )
+            if not targets:
+                break
+            worst = by_id[targets[0].block_id]
+            local = sorted(neighbours.get(worst.id, {worst.id}))
+            base = verdict(local, VERIFY_CELLS)
+            trials = release_trials(worst) + shape_trials(worst)
+            best_trial = None
+            for paid in (False, True):
+                for kind, index, value, added in trials:
+                    if (kind == "raise") != paid:
+                        continue
+                    if kind != "raise":
+                        jump_before = strip_jumps(index)
+                        saved = released.get(index), logs[index]
+                        if kind == "release":
+                            released[index] = value
+                        else:
+                            released.pop(index, None)
+                            logs[index] = value
+                        jump_after = strip_jumps(index)
+                        if saved[0] is None:
+                            released.pop(index, None)
+                        else:
+                            released[index] = saved[0]
+                        logs[index] = saved[1]
+                        if any(after > max(before, JUMP_LIMIT) * (1.0 + 1.0e-9)
+                               for before, after in zip(jump_before, jump_after)):
+                            continue
+                    result = try_move(kind, index, value, local)
+                    if (result[0] > base[0] or result[1] > base[1]
+                            or result[2] > SKEWNESS_LIMIT >= base[2]
+                            or result[3] > max(SHEAR_ANGLE, base[3] + VERIFY_TOLERANCE)):
+                        continue
+                    score = (result[5], result[4])
+                    better = result[5] < base[5] or (result[5] == base[5] and result[4] < base[4] * (1.0 - 1.0e-3))
+                    if better and (best_trial is None or score < best_trial[0]):
+                        best_trial = (score, kind, index, value, added)
+                if best_trial is not None:
+                    break
+            if best_trial is None:
+                exhausted.add(worst.id)
+                continue
+            _score, kind, index, value, added = best_trial
+            if kind == "release":
+                release_mode[index] = added
+            make_move(kind, index, value, 0 if kind == "release" else added)
+
+    scoped_strips_set = set(scoped_strips)
     repair_shape()
+    repair_aspect()
     # The field's state as repaired: what the returned state is verified
     # against, at the resolution smooth verifies at.
     reference_counts = dict(counts)
@@ -2027,7 +2270,7 @@ def _spend(model: MeshModel, state: dict, options: SizeOptions, budget: int, ske
         best = None
         for index in scoped_strips:
             touched = strip_pairs[index]
-            if not touched:
+            if not touched or index in released:
                 continue
             before = cost_of(touched)
             if before <= 0.0:
@@ -2057,6 +2300,8 @@ def _spend(model: MeshModel, state: dict, options: SizeOptions, budget: int, ske
                 added *= model.z_cells
                 refit: dict[int, float] = {}
                 for strip in strips_of_component.get(index, ()):
+                    if strip in released:
+                        continue
                     options_here = refits(strip, raised)
                     if not options_here:
                         refit = None
@@ -2142,6 +2387,7 @@ def _spend(model: MeshModel, state: dict, options: SizeOptions, budget: int, ske
     field_blocks, field_summary = reference
     ceiling = field_summary.get("max_non_orthogonality", 0.0) + VERIFY_TOLERANCE
     field_skew = field_summary.get("max_skewness", 0.0)
+    field_aspect = field_summary.get("max_aspect_ratio", 0.0), field_summary.get("high_aspect_cells", 0)
     reverted_components: set[int] = set()
     reverted_strips: set[int] = set()
     by_block = {block.id: block for block in model.blocks}
@@ -2150,7 +2396,9 @@ def _spend(model: MeshModel, state: dict, options: SizeOptions, budget: int, ske
         if (summary.get("severe_faces", 0) <= field_summary.get("severe_faces", 0)
                 and summary.get("folded_cells", 0) <= field_summary.get("folded_cells", 0)
                 and summary.get("max_non_orthogonality", 0.0) <= ceiling
-                and not (summary.get("max_skewness", 0.0) > SKEWNESS_LIMIT >= field_skew)):
+                and not (summary.get("max_skewness", 0.0) > SKEWNESS_LIMIT >= field_skew)
+                and not _aspect_worse(*field_aspect, summary.get("max_aspect_ratio", 0.0),
+                                      summary.get("high_aspect_cells", 0))):
             break
         offenders = sorted(
             block for block, item in verified.items()
@@ -2158,6 +2406,8 @@ def _spend(model: MeshModel, state: dict, options: SizeOptions, budget: int, ske
             or item["folded_cells"] > field_blocks[block]["folded_cells"]
             or item["max_non_orthogonality"] > ceiling
             or item["max_skewness"] > SKEWNESS_LIMIT >= field_skew
+            or _aspect_worse(field_blocks[block]["max_aspect_ratio"], field_blocks[block]["high_aspect_cells"],
+                             item["max_aspect_ratio"], item["high_aspect_cells"])
         )
         changed = False
         for ring in range(3):
@@ -2207,21 +2457,10 @@ def _spend(model: MeshModel, state: dict, options: SizeOptions, budget: int, ske
     undone = len(moves) - len(kept)
     final = _verify(trial, neighbours)[1]
 
-    def brief(summary):
-        return {
-            "severe_faces": summary.get("severe_faces", 0),
-            "max_non_orthogonality": summary.get("max_non_orthogonality", 0.0),
-            "max_skewness": summary.get("max_skewness", 0.0),
-            "folded_cells": summary.get("folded_cells", 0),
-            "max_aspect_ratio": summary.get("max_aspect_ratio", 0.0),
-            "worst_aspect_block": summary.get("worst_aspect_block"),
-            "high_aspect_cells": summary.get("high_aspect_cells", 0),
-        }
-
     verification = {
         "cells_per_side": VERIFY_CELLS,
-        "field": brief(field_summary),
-        "result": brief(final),
+        "field": _brief(field_summary),
+        "result": _brief(final),
         "undone_moves": undone,
     }
     new_ratios = dict(ratios)
@@ -2231,16 +2470,17 @@ def _spend(model: MeshModel, state: dict, options: SizeOptions, budget: int, ske
     notes = []
     if refused:
         notes.append(f"{refused} move(s) refused by the sampled check (a folded cell, a face above "
-                     "70 degrees or skewness above 4)")
+                     f"70 degrees, skewness above 4 or cells past aspect ratio {ASPECT_LIMIT:g})")
     if undone:
         notes.append(
             f"{undone} move(s) undone by the verification at {VERIFY_CELLS} cells a side "
             f"(more faces above 70 degrees, a worst face above the field's "
             f"{field_summary.get('max_non_orthogonality', 0.0):.1f} + {VERIFY_TOLERANCE:g}, "
-            "or skewness past 4)"
+            f"skewness past 4 or cells past aspect ratio {ASPECT_LIMIT:g})"
         )
     state = {
         **state, "counts": counts, "ratios": new_ratios, "verification": verification,
         "budget_binding": stopped_by_budget or state.get("factor", 1.0) < 1.0,
+        "released": {index: dict(own) for index, own in released.items()},
     }
     return state, kept, "; ".join(notes)

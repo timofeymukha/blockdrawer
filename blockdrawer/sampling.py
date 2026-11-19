@@ -544,17 +544,20 @@ def sample_model(
     *,
     uniform: int | None = None,
     blocks: Collection[str] | None = None,
+    planar: bool = False,
 ) -> ModelSample:
     """Sample every block and measure its cells and faces, shared edges included.
 
     ``uniform`` samples every block at that many even parameter fractions a
     side instead of its real nodes: the count-free shape of the layout.
     ``blocks`` samples only those blocks; the faces they share with a block
-    left out are not measured.
+    left out are not measured. ``planar`` measures the aspect ratio in the
+    plane, as checkMesh does with both z patches ``empty``, whatever they
+    are: the depth's share is the export settings', not the 2D mesh's.
     """
     tallies: list[_FaceTally] = []
     aspects: list[_AspectTally] = []
-    depth = aspect_depth(model)
+    depth = None if planar else aspect_depth(model)
     angles: list[CellAngles] = []
     grids: list[BlockGrid] = []
     shared: dict[EdgeKey, list[tuple[int, bool, list[Point], list[Point]]]] = {}

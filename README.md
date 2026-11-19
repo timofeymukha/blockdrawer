@@ -962,10 +962,27 @@ taken greedily by the drop in a jump cost (the square of how far each
 interface's log width ratio exceeds log `interface_growth`) per cell, until
 the first raise the budget cannot pay, so more budget never leaves a higher
 cost. A block the field itself leaves above skewness 4 or with faces above
-70 degrees is repaired first, judged at 256 cells a side. Each move is
+70 degrees is repaired first, judged at 256 cells a side, and so is every
+block above checkMesh's cell aspect ratio limit of 1000 (in the plane; the
+z depth is the export settings'): a strip's one shared ratio carries a
+wall's first width along all its members, out to where the field asks for
+cells hundreds of times longer, so the repair releases a strip through the
+block - its members go all, half or a quarter of the way to their own
+series (`grading=field`'s, see below), bounded by `interface_growth` times
+the widths across each interface - when that leaves no interface jump at
+its ends above both 2.5 and what it was, no fold, no new face above 70 and
+the worst face within 20 degrees; only when no such free move helps does it
+raise a count. Each move is
 checked on the sampled grid (256 cells a side) of the blocks it touches and
 undone if it folds a cell, adds a face above 70 degrees, raises the worst
-face past the field's or takes checkMesh's skewness past 4. The result is
+face past the field's, takes checkMesh's skewness past 4 or takes the
+aspect ratio past 1000 (or, above it, adds cells there); blocks left above
+1000 are named in the note and in `verification`'s `high_aspect_blocks`.
+On the round-2 blunt plate (whose default sizing failed checkMesh at
+1846, 1018 after the polish) two releases of its wake strips took the
+field state to 559 and the polished result to 585, with 79,194 cells
+against 94,784 and no jump above 2.5; no other session of the 20-session
+corpus changed. The result is
 then verified against the repaired field state at 256 a side, and at real
 counts for every block with a face above 65 degrees (at 256 the fine
 30P30N's b39 read 6 faces above 70 where checkMesh counts 7): no more faces

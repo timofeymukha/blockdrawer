@@ -606,8 +606,10 @@ class FieldGradingTests(unittest.TestCase):
 
     def test_a_pure_h_grid_is_not_sheared(self) -> None:
         # With no non-orthogonality to begin with, the field may not add
-        # any: a rectangle column keeps its shared grading.
-        options = dict(first_width=0.001, core_size=1.0, growth=1.2, split=False)
+        # any: a rectangle column keeps its shared grading. (At core 1.0
+        # the column's wall cells pass checkMesh's aspect ratio 1000 and
+        # size's aspect repair shears it by 10 degrees to release them.)
+        options = dict(first_width=0.001, core_size=0.5, growth=1.2, split=False)
         shared = _blocks(*_rectangle_column())
         size_model(shared, SizeOptions(**options))
         graded = _blocks(*_rectangle_column())
@@ -686,3 +688,66 @@ class SplitRefusalTests(unittest.TestCase):
         self.assertIn("cutting it at 0.5 would leave the piece of", text)
         named = {token for token in text.replace("-", " ").replace(",", " ").split() if token.startswith("v")}
         self.assertTrue(named <= before, named - before)
+
+
+def plate_wake() -> MeshModel:
+    """A wall 1 long on y = 0 and a wake row 19 long behind it, two rows of
+    blocks: the strip of short transverse sides carries the wall's first
+    width to x = 20, where the field asks for cells 0.5 long."""
+    points = {
+        "a0": (0.0, 0.0), "a1": (1.0, 0.0), "a2": (20.0, 0.0),
+        "c0": (0.0, 0.05), "c1": (1.0, 0.05), "c2": (20.0, 0.05),
+        "d0": (0.0, 1.0), "d1": (1.0, 1.0), "d2": (20.0, 1.0),
+    }
+    quads = [("a0", "a1", "c1", "c0"), ("a1", "a2", "c2", "c1"),
+             ("c0", "c1", "d1", "d0"), ("c1", "c2", "d2", "d1")]
+    model = _blocks(points, quads, ["a0-a1"])
+    return apply_commands(model, ["set_export_settings z_min_patch_type=empty z_max_patch_type=empty"]).model
+
+
+class AspectRatioTests(unittest.TestCase):
+    OPTIONS = dict(first_width=1.0e-4, core_size=0.5, growth=1.15, wall_aspect=25.0)
+
+    def test_a_strip_carrying_a_wall_width_to_a_far_outlet_is_released(self) -> None:
+        from blockdrawer.sampling import ASPECT_LIMIT, sample_model
+
+        model = plate_wake()
+        result = size_model(model, SizeOptions(**self.OPTIONS))
+        verdict = result.verification["result"]
+        self.assertEqual(verdict["high_aspect_cells"], 0)
+        self.assertLess(verdict["max_aspect_ratio"], ASPECT_LIMIT)
+        self.assertEqual(verdict["high_aspect_blocks"], [])
+        self.assertLess(sample_model(model, 256).summary()["max_aspect_ratio"], ASPECT_LIMIT)
+        self.assertTrue(any("release" in move for move in result.moves), result.moves)
+        # The member at the wall keeps the wall's width; the one at the
+        # outlet relaxes.
+        near = model.edge_width_at_vertex(edge_key("a1", "c1"), "a1")
+        far = model.edge_width_at_vertex(edge_key("a2", "c2"), "a2")
+        self.assertLess(near, 1.0e-4)
+        self.assertGreater(far, 4.0 * near)
+        self.assertNotIn("aspect ratio limit", result.note)
+
+    def test_what_the_repair_leaves_is_named(self) -> None:
+        from unittest import mock
+
+        from blockdrawer import size as size_module
+
+        model = plate_wake()
+        with mock.patch.object(size_module, "SHAPE_REPAIRS", 0):
+            result = size_model(model, SizeOptions(**self.OPTIONS))
+        (block, ratio, cells), *_rest = result.verification["result"]["high_aspect_blocks"]
+        self.assertEqual(block, "b1")
+        self.assertGreater(ratio, 1000.0)
+        self.assertIn("above checkMesh's aspect ratio limit of 1000 left in b1", result.note)
+        # Spending added no cell above the limit to what the field had.
+        self.assertLessEqual(cells, result.verification["field"]["high_aspect_cells"])
+
+    def test_the_guard_rule(self) -> None:
+        from blockdrawer.size import _aspect_worse
+
+        self.assertFalse(_aspect_worse(500.0, 0, 999.0, 0))
+        self.assertTrue(_aspect_worse(999.0, 0, 1001.0, 3))
+        # Above the limit already: no more cells above it.
+        self.assertFalse(_aspect_worse(1800.0, 40, 2400.0, 40))
+        self.assertTrue(_aspect_worse(1800.0, 40, 1700.0, 41))
+        self.assertFalse(_aspect_worse(1800.0, 40, 900.0, 0))

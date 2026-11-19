@@ -156,6 +156,9 @@ class AspectRatioTests(unittest.TestCase):
         model.z_max = 0.01
         # Sums over the faces: x and y 2 * 1 * 0.01, z 2 * 1; ratio 100.
         self.assertAlmostEqual(sample_model(model, None).summary()["max_aspect_ratio"], 100.0, places=6)
+        # In the plane (size's measure) only x and y count: a unit square.
+        self.assertAlmostEqual(sample_model(model, None, planar=True).summary()["max_aspect_ratio"], 1.0,
+                               places=6)
 
     def test_a_coarsened_cell_is_measured_per_real_cell(self) -> None:
         model = self._strip(512, 1)

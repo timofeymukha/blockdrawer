@@ -209,7 +209,8 @@ them in the canvas widgets.
   of the face area vectors' Cartesian component magnitudes over the solved
   directions, x and y when both z patches are `empty` (`aspect_depth`),
   else x, y, z and the hydraulic ratio; a coarsened sampled cell's sides
-  divided by the real cells they span) into `max_aspect_ratio`,
+  divided by the real cells they span; `planar=True` takes x and y
+  whatever the z patches, as `size` does) into `max_aspect_ratio`,
   `worst_aspect_cell` and `high_aspect_cells` (above `ASPECT_LIMIT` =
   1000, checkMesh's) per block, and the summary's `worst_aspect_block`;
   it equalled checkMesh to two decimals on the eleven round-2 benchmark
@@ -386,7 +387,26 @@ them in the canvas widgets.
   in the block the field leaves above skewness 4 when the input was below
   (folds refused, faces above 70 allowed: checkMesh fails only the
   skewness), then in the block with the worst face above 70 degrees while
-  that count or the worst face falls. The repaired field state is the
+  that count or the worst face falls, then (`repair_aspect`) in each block
+  above checkMesh's cell aspect ratio `ASPECT_LIMIT` (1000, measured in the
+  plane: `sample_model(planar=True)`, the depth is the export settings'),
+  worst first: free moves before raises - a strip through the block
+  released all, half or a quarter of the way to its members' own
+  `_FieldGrading` series (bounds first lowered to `interface_growth` times
+  the partners' widths now; no interface pair at its members' ends past
+  the larger of its own jump and `JUMP_LIMIT`), or the regrades above -
+  taken when the block's cells above the limit (then its ratio) fall with
+  no fold, no new face above 70, skewness not past 4 and the worst face
+  within `SHEAR_ANGLE` (or 0.5 above where it was). A released strip keeps
+  its per-member ratios (`released`): spending neither regrades nor refits
+  it and `grading=field` leaves it (`_FieldGrading(fixed=...)`). Every
+  guard - the per-move one, the verification, the continuity rounds,
+  `grading=field`'s settle and pass, the repairs themselves - refuses a
+  state that crosses 1000 or gains cells above it (`_aspect_worse`); what
+  is left is listed in `verification`'s `high_aspect_blocks` and named in
+  the note (round-2 blunt plate: field state 1533 -> 559 by two releases,
+  result 585 after the polish against 1018, cells 94,784 -> 79,194). The
+  repaired field state is the
   reference: `_verify` samples at 256 a side and at real counts every
   block whose worst face there exceeds `HOT_ANGLE` (65; at 256 the fine
   30P30N's b39 read 6 faces above 70 where checkMesh counts 7), and the

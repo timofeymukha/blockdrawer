@@ -184,8 +184,8 @@ on continuity. Read:
 - `total_cells`, `budget`, `field_cells`, `budget_binding` - what you pay
   for, and whether the budget stopped the spending.
 - `verification` - faces above 70, worst face, skewness, aspect ratio
-  (checkMesh fails above 1000, block named) for the field's state and the
-  result. Spending adds no face above 70 and does not watch the aspect.
+  (checkMesh fails above 1000, blocks named) for the field's state and the
+  result. Spending adds no face above 70 nor cells above aspect 1000.
 - `first_width` - per wall patch the cell height normal to the wall at the
   spokes, in percent of the one asked, extremes named (`quality` too).
 - `worst_jump` (with the counts above 2.5, 5, 20), `splits`, `refused`,
