@@ -1536,10 +1536,14 @@ def _split_strips(model, field_, state, options, splits, refused) -> bool:
                 break
         if sliver is not None:
             model.__dict__.update(saved.__dict__)
+            # The split is undone, so its vertex does not exist: name the
+            # piece by the existing end it runs from and the edge it is of.
+            end = next(v for v in sliver[0] if v not in split.split_vertex_ids)
+            parent = next((member for member in sorted(component) if end in member), current)
             text = (
-                f"two-ended strip of {'-'.join(current)} not split: the piece "
-                f"{'-'.join(sliver[0])} would be {sliver[1]:.3g} long where cells of "
-                f"{sliver[2]:.3g} are wanted"
+                f"two-ended strip of {'-'.join(current)} not split: cutting it at {fraction:.3g} "
+                f"would leave the piece of {'-'.join(parent)} at {end} {sliver[1]:.3g} long where "
+                f"cells of {sliver[2]:.3g} are wanted"
             )
             if text not in refused:
                 refused.append(text)

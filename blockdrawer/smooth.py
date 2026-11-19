@@ -53,7 +53,7 @@ from typing import Any, Iterable, Sequence
 
 from .domain import EdgeKey, TopologyError, edge_key
 from .model import MeshModel
-from .sampling import SEVERE_NON_ORTHOGONALITY, ModelSample, sample_model
+from .sampling import FOLD_CELLS, SEVERE_NON_ORTHOGONALITY, ModelSample, folded_blocks, sample_model
 from .session import from_data, to_data
 from .slide import SLIDE_TOLERANCE
 
@@ -108,7 +108,7 @@ class SmoothOptions:
     # Its result leaves the counts and grading stale: sizing has to follow.
     mode: str = "real"
     shape_cells: int = 8
-    fold_cells: int = 32
+    fold_cells: int = FOLD_CELLS
     # A shape result whose stored counts and grading would fold a real cell
     # is refused unless this is set (because ``size`` will follow).
     allow_stale_fold: bool = False
@@ -1512,10 +1512,21 @@ def smooth_model(
         return result(False, "nothing to gain: no free vertex (every vertex in scope is on a boundary, "
                       "held" + (f" or on two straight block lines ({line_fixed})" if line_fixed else "") + ")")
     if before["folded_cells"]:
+        where = (
+            f"on the count-free block map ({options.fold_cells} even fractions a side)" if shape
+            else f"at the stored counts and grading ({options.verify_cells} cells a side at most)"
+        )
+        fold_sample = (
+            sample_model(model, uniform=options.fold_cells) if shape
+            else sample_model(model, options.verify_cells)
+        )
         return result(
             False,
-            f"not smoothed: {before['folded_cells']} sampled cell(s) already fold; untangle "
-            "the topology first (repair_block, split_edge or new vertex positions)",
+            f"not smoothed: {before['folded_cells']} sampled cell(s) already fold {where}, in "
+            f"{folded_blocks(fold_sample)}; untangle those blocks first (repair_block, "
+            "split_edge or new vertex positions)"
+            + ("; on the count-free map a block folds when its own sides cross, whatever its "
+               "counts - the shape step can be left out" if shape else ""),
         )
     positions, sweeps, rounds, slides = _optimise(model, free, spokes, options, chains, lines)
     if not positions and not slides:
@@ -1525,7 +1536,7 @@ def smooth_model(
             "face non-orthogonality",
             sweeps=sweeps, rounds=rounds,
         )
-    stale_refusals: list[float] = []
+    stale_refusals: list[tuple[float, str]] = []
     deviation_refusals: list[float] = []
     for scale in (1.0, *FALLBACK_SCALES):
         scaled = {
@@ -1557,10 +1568,11 @@ def smooth_model(
         if not _no_worse(after, before):
             continue
         if shape:
-            real_after = _verdict(sample_model(working, options.verify_cells))
+            real_sample = sample_model(working, options.verify_cells)
+            real_after = _verdict(real_sample)
             if real_after["folded_cells"] and not real_before["folded_cells"] \
                     and not options.allow_stale_fold:
-                stale_refusals.append(scale)
+                stale_refusals.append((scale, folded_blocks(real_sample)))
                 continue
         gained = (
             after["max_non_orthogonality"] < before["max_non_orthogonality"] - 1.0e-6
@@ -1612,7 +1624,9 @@ def smooth_model(
         return result(
             False,
             "not applied: the smoothed shape would fold real cells under the stored counts "
-            "and grading; pass allow_stale_fold=true when size follows",
+            f"and grading (at {stale_refusals[0][0]:g} of the optimised displacement, in "
+            f"{stale_refusals[0][1]}); pass "
+            "allow_stale_fold=true when size follows",
             sweeps=sweeps, rounds=rounds,
         )
     return result(

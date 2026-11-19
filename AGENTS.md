@@ -277,7 +277,10 @@ them in the canvas widgets.
   `size`) while the square cylinder's gain needs 0.089 - keeps the band
   rule, and reports the stale real-count verdict as
   `real_before`/`real_after`; a stale fold is refused unless
-  `allow_stale_fold`. Both modes report `min_edge_ratio`/`min_edge` and
+  `allow_stale_fold`. A refusal over folded cells - already folding on the
+  count-free map or the real counts, or a stale fold - names the folding
+  blocks, most folded first, with their counts (`sampling.folded_blocks`,
+  at most `FOLD_BLOCKS_NAMED`). Both modes report `min_edge_ratio`/`min_edge` and
   `max_edge_ratio`/`max_edge` (edge length over input length, edges with a
   moved end) in the result, the reason text and the digest note.
   `keep_lines=True` (off by default in both modes: measured in the README)
@@ -338,7 +341,9 @@ them in the canvas widgets.
   up to `SPLITS_PER_ROUND` such strips with `split_edge` at the peak,
   refusing a cut that leaves any piece shorter than one cell of the size
   the field wants along it (a 30P30N cut left 0.00065 where 0.017 was
-  wanted), and undoing a round that raises the jump cost (at most
+  wanted; the refusal names the piece by the existing end it runs from
+  and the edge it is of, since the undone split's vertex does not exist),
+  and undoing a round that raises the jump cost (at most
   `SPLIT_ROUNDS`). That is the field's state; `budget` (default
   `DEFAULT_BUDGET` = 1.5 times its cells; a smaller budget coarsens the
   field to budget/1.5 first) is then spent by `_spend`, a greedy optimiser
@@ -431,7 +436,10 @@ them in the canvas widgets.
   with other edges; a band that would fold is refused before any vertex is
   made, naming the edge, the concave corner whose mitre moves the offset
   end `height * tan(turn/2)` along it past its length, and the largest
-  height that builds (bisected over the whole band, `_fold_message`). An
+  height that builds (bisected over the whole band, `_fold_message`).
+  `add_band`'s note gives the front (outermost row, or the box ends of the
+  spokes) in the wall chain's order with its two ends (`_front_note`): new
+  vertex IDs follow creation order, which is not the chain's. An
   offset curved edge keeps only the interior points running monotonically
   along the chord between its offset ends, clear of both by a thousandth
   (`_monotone_points`, a longest increasing run): a mitre or a wall curving
@@ -486,7 +494,12 @@ them in the canvas widgets.
   `_choose_sides` takes the candidates bounding a region with every
   existing side edge's block outside it and no existing vertex inside,
   most existing sides first, then the counter-clockwise reading (a half
-  annulus), else refuses as ambiguous. Opposite sides must have as many
+  annulus), else refuses as ambiguous; with no reading left it refuses
+  naming, per rejected reading, the existing vertices inside or the side
+  edges whose block lies inside (at most `MAX_FILL_REASONS`). The note
+  names the standalone vertices each open side took, and adds a NOTE when
+  a block it built folds on the count-free map (`sampling.FOLD_CELLS`
+  fractions a side; `_uniform_folds`) - a note, not a refusal. Opposite sides must have as many
   edges (`_mismatch_message` names the short side's segments facing the
   long side's extra stations: `split_edge` or a station). Interior
   vertices are blockMesh's edge-weighted transfinite interpolation

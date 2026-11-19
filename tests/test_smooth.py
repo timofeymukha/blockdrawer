@@ -140,6 +140,13 @@ class SmoothTests(unittest.TestCase):
         result = smooth_model(model)
         self.assertFalse(result.applied)
         self.assertIn("fold", result.reason)
+        # The refusal names the folding blocks with their counts, on the
+        # real counts or on the count-free map.
+        self.assertRegex(result.reason, r"at the stored counts .* in b0 \(\d+\)")
+        shaped = smooth_model(model, options=SmoothOptions(mode="shape"))
+        self.assertFalse(shaped.applied)
+        self.assertRegex(shaped.reason, r"on the count-free block map .* in b0 \(\d+\)")
+        self.assertIn("the shape step can be left out", shaped.reason)
 
     def test_the_command_is_one_undoable_action(self) -> None:
         model = two_by_two()
@@ -194,7 +201,10 @@ class ShapeModeTests(unittest.TestCase):
 
         class Folded:
             def __init__(self, sample):
+                from dataclasses import replace
+
                 self.sample = sample
+                self.blocks = (replace(sample.blocks[0], folded_cells=3), *sample.blocks[1:])
 
             def summary(self):
                 return {**self.sample.summary(), "folded_cells": 3}
@@ -213,6 +223,7 @@ class ShapeModeTests(unittest.TestCase):
             refused = smooth_model(model, options=SmoothOptions(mode="shape"))
             self.assertFalse(refused.applied)
             self.assertIn("allow_stale_fold", refused.reason)
+            self.assertIn("in b0 (3)", refused.reason)
             self.assertEqual(positions(model), before)
             calls.clear()
             allowed = smooth_model(

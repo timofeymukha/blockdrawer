@@ -1431,10 +1431,14 @@ _register(CommandSpec(
         "Add a band of blocks along a chain or loop of exterior edges (edges, "
         "or the unassigned exterior edges inside bbox): spokes along the "
         "mitred normals, height high in rows rows (growth: each row's height "
-        "over the previous), a fan of corner blocks at a convex corner sharper "
-        "than 60 degrees, open ends following the boundary they meet, offset "
-        "arcs kept arcs. With to_box every spoke runs to that rectangle "
-        "instead, a box corner taken by the nearest spoke."
+        "over the previous). Where the chain turns convexly by more than "
+        "60 degrees it gets a fan of corner blocks, one per 90 degrees of "
+        "turning or part of it (one block at a square corner, two above a "
+        "90-degree turn); at a smaller turn or a concave corner one mitred "
+        "spoke (at most 3 heights long). Open ends follow the boundary they "
+        "meet; offset arcs stay arcs. With to_box every spoke runs to that "
+        "rectangle instead, a box corner taken by the nearest spoke, and no "
+        "corner gets a fan."
     ),
     (
         Parameter("edges", "edges", "the chain's edges", required=False, default=()),
@@ -1461,7 +1465,10 @@ _register(CommandSpec(
         "turning 45 degrees within a hundredth of the perimeter either "
         "side), and count edges spread by arc length between them; wall "
         "edges as splines through the curve's points, then the band as "
-        "add_band builds it, height high."
+        "add_band builds it, height high: a station where the curve turns "
+        "convexly by more than 60 degrees gets a fan of corner blocks, one "
+        "per 90 degrees of turning or part of it (a square corner one block, "
+        "a sharp trailing edge two or more), every other station one spoke."
     ),
     (
         Parameter("curve", "curve", "closed reference curve (ID or name)"),

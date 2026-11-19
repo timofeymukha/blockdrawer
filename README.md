@@ -488,10 +488,14 @@ refused by name; `id=PREFIX` names new vertices `PREFIX_0, ...` and blocks
   existing edge is refused by name.
 - `add_band edges=... | bbox=... height=H [rows=N growth=G]` or `to_box=...` -
   rows of blocks along a chain or loop of exterior edges (`bbox` takes the
-  unassigned exterior edges inside it): mitred spokes, a fan of corner blocks
-  at a convex corner sharper than 60 degrees, open ends following the
-  boundary they meet, offset arcs kept arcs; `to_box` carries every spoke to a
-  rectangle, its corners taken by the nearest spokes. A band block that would
+  unassigned exterior edges inside it): mitred spokes, and where the chain
+  turns convexly by more than 60 degrees a fan of corner blocks, one per 90
+  degrees of turning or part of it (a square corner gets one block, a sharp
+  trailing edge two), open ends following the boundary they meet, offset
+  arcs kept arcs; `to_box` carries every spoke to a rectangle, its corners
+  taken by the nearest spokes, with no fans. The note gives the front's
+  vertices in the chain's order and its two ends (new IDs are numbered in
+  creation order, not along the chain). A band block that would
   fold - a mitre at a concave corner moves the offset end `height *
   tan(turn/2)` along the edge beside it, past a short edge's length - is
   refused with the corner, the edge and the largest height that builds. An
@@ -542,7 +546,11 @@ refused by name; `id=PREFIX` names new vertices `PREFIX_0, ...` and blocks
   strictly convex is refused with its corners, as is a block over an
   existing block or vertex. Where both readings of the corners bound a
   region (half an annulus between two loops) the counter-clockwise one is
-  taken. Three or five corners give that many blocks round a centre vertex
+  taken; where none does, the refusal names for each reading the existing
+  vertex inside or the side edge whose block lies inside. The note names
+  the standalone vertices each open side took, and says when a block it
+  built folds on the count-free map (32 even fractions a side) - a note,
+  not a refusal. Three or five corners give that many blocks round a centre vertex
   (the triangle and pentagon templates): side k is split where spokes k-1
   and k+1 meet it, which needs its edge count to equal the sum of their
   counts - an even total, and in a triangle each side shorter than the

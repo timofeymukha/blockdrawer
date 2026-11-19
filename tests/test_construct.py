@@ -99,6 +99,37 @@ class BandTests(unittest.TestCase):
         self.assertEqual(len(around), 4)   # the first block, two band blocks, the fan
         self.assertEqual((corner.x, corner.y), (1.0, 0.0))
 
+    def test_the_band_note_gives_the_front_in_chain_order(self) -> None:
+        # A chain of three edges along y = 0; the new front vertices are named
+        # in creation order (B_0 is not at the chain's start), the note in
+        # the chain's order.
+        model = apply_commands(MeshModel(box=(0, 0, 3, 1)), [
+            "split_edge v0-v1 0.3333333333333333 id=s", "split_edge s-v1 0.5 id=t",
+        ]).model
+        result = apply_commands(model, ["add_band edges=v0-s,s-t,t-v1 height=0.2 id=B"]).results[0].result
+        built = apply_commands(model, ["add_band edges=v0-s,s-t,t-v1 height=0.2 id=B"]).model
+        note = result["note"]
+        self.assertIn("front along the wall chain v0..v1, in its order: ", note)
+        front = note.split("in its order: ")[1].split(";")[0].split(", ")
+        xs = [built.vertices[v].x for v in front]
+        self.assertEqual(xs, sorted(xs))
+        self.assertEqual(len(front), 4)
+        self.assertIn(f"its ends {front[0]} (beside v0) and {front[-1]} (beside v1)", note)
+        self.assertNotEqual(front[0], "B_0")
+
+    def test_the_help_states_the_fan_rule_the_band_uses(self) -> None:
+        from blockdrawer.commands import COMMANDS
+        from blockdrawer.construct import FAN_ANGLE, FAN_SECTOR, MITRE_LIMIT
+
+        for name in ("add_band", "add_ring"):
+            text = COMMANDS[name].help
+            self.assertIn(f"more than {math.degrees(FAN_ANGLE):g} degrees", text)
+            self.assertIn(f"one per {math.degrees(FAN_SECTOR):g} degrees of turning", text)
+        self.assertIn(f"at most {MITRE_LIMIT:g} heights", COMMANDS["add_band"].help)
+        # A square corner gets one corner block, a 135-degree turn two.
+        square = apply_commands(MeshModel(box=(0, 0, 1, 1)), ["add_band edges=v0-v1,v1-v2 height=0.25"]).model
+        self.assertEqual(len(square.blocks), 4)
+
     def test_a_ring_of_arcs_runs_to_a_box_with_its_corners(self) -> None:
         model = MeshModel(box=(-3, -3, -2, -2))
         model = apply_commands(model, [
@@ -338,7 +369,7 @@ class FillTests(unittest.TestCase):
         self.assertEqual(len(data["created_blocks"]), 6)
         self.assertIn("2 x 3 blocks", data["note"])
         self.assertIn("the exterior chain", data["note"])
-        self.assertIn("through standalone stations", data["note"])
+        self.assertIn("through standalone stations s", data["note"])
         self.assertIn("new stations facing", data["note"])
         # The matched station mirrors s: fraction 0.375 from the inner arc.
         self.assertEqual(vertex_at(filled, 0, 1.5), "f_0")
@@ -382,6 +413,7 @@ class FillTests(unittest.TestCase):
         batch = apply_commands(model, [f"add_fill {corners} curve3=top id=f"])
         filled = batch.model
         self.assertIn("4 x 1 blocks", batch.results[0].result["note"])
+        self.assertIn("open, through standalone stations t3, t2, t1 along top", batch.results[0].result["note"])
         self.assertEqual(len(filled.blocks), 8)
         # The new top edges follow the curve: splines through its points.
         for k in range(4):
@@ -412,6 +444,30 @@ class FillTests(unittest.TestCase):
             apply_commands(model, [f"add_fill {corners.replace('t3', 't4')} side3={sides}"])
         self.assertIn(f"split_edge {vertex_at(model, 0, 0.2)}-{vertex_at(model, 0.25, 0.2)} 0.",
                       str(caught.exception))
+
+    def test_a_fill_refusal_names_what_rejected_each_reading(self) -> None:
+        model = apply_commands(MeshModel(box=(5, 5, 6, 6)), [
+            "add_vertex 0 0 id=a", "add_vertex 1 0 id=b", "add_vertex 1 1 id=c", "add_vertex 0 1 id=d",
+            "add_vertex 0.5 0.5 id=e",
+        ]).model
+        with self.assertRaises(Exception) as caught:
+            apply_commands(model, ["add_fill a,b,c,d"])
+        text = str(caught.exception)
+        self.assertIn("bound no region", text)
+        self.assertIn("with side1 open, side2 open, side3 open, side4 open: existing vertex e (0.5, 0.5) "
+                      "inside the region", text)
+
+    def test_a_fill_note_says_when_a_block_folds_on_the_count_free_map(self) -> None:
+        # The top side follows a curve dipping below the bottom: the block's
+        # corners are convex, its interior folds.
+        model = apply_commands(MeshModel(box=(5, 5, 6, 6)), [
+            "add_vertex 0 0 id=a", "add_vertex 1 0 id=b", "add_vertex 1 1 id=c", "add_vertex 0 1 id=d",
+            "add_curve 1,1;0.7,0.2;0.5,-0.3;0.3,0.2;0,1 name=dip",
+        ]).model
+        note = apply_commands(model, ["add_fill a,b,c,d curve3=dip id=f"]).results[0].result["note"]
+        self.assertRegex(note, r"NOTE: block\(s\) fold on the count-free map \(32 even fractions a side\): f_b0 \(\d+\)")
+        plain = apply_commands(model, ["add_fill a,b,c,d id=f"]).results[0].result["note"]
+        self.assertNotIn("fold", plain)
 
     def test_a_fill_whose_block_would_not_be_convex_is_refused_by_name(self) -> None:
         model = apply_commands(MeshModel(box=(5, 5, 6, 6)), [

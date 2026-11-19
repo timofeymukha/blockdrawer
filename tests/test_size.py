@@ -371,7 +371,7 @@ class ContinuityTests(unittest.TestCase):
         result = size_model(model, SizeOptions(first_width=0.005, core_size=0.2))
         self.assertEqual(result.splits, [])
         self.assertEqual(len(model.blocks), 1)
-        self.assertTrue(any("would be" in text and "are wanted" in text for text in result.refused),
+        self.assertTrue(any("would leave the piece of" in text and "are wanted" in text for text in result.refused),
                         result.refused)
 
     def test_an_edge_reached_fine_from_both_ends_is_split(self) -> None:
@@ -662,3 +662,27 @@ class KeepCountsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SplitRefusalTests(unittest.TestCase):
+    def test_a_sliver_refusal_names_only_vertices_that_exist(self) -> None:
+        from types import SimpleNamespace
+        from unittest import mock
+
+        from blockdrawer import size as size_module
+
+        model = channel()
+        before = set(model.vertices)
+        refused: list[str] = []
+        sliver = SimpleNamespace(length=0.001, field=[0.01])
+        with mock.patch.object(size_module, "_sample_edge", return_value=sliver):
+            split = size_module._split_strips(
+                model, None, {"two_ended": {edge_key("v1", "v2"): (0.5, 3.0)}},
+                SizeOptions(first_width=0.005, core_size=0.1), [], refused,
+            )
+        self.assertFalse(split)
+        self.assertEqual(set(model.vertices), before)
+        (text,) = refused
+        self.assertIn("cutting it at 0.5 would leave the piece of", text)
+        named = {token for token in text.replace("-", " ").replace(",", " ").split() if token.startswith("v")}
+        self.assertTrue(named <= before, named - before)

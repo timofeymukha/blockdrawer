@@ -637,6 +637,26 @@ def sample_model(
     return ModelSample(blocks, max_cells)
 
 
+# A message about folded cells names at most this many blocks.
+FOLD_BLOCKS_NAMED = 5
+# The count-free (uniform) grid a fold is looked for on, cells a side: the
+# shape step's fold check (smooth's fold_cells default).
+FOLD_CELLS = 32
+
+
+def folded_blocks(sample: ModelSample, limit: int = FOLD_BLOCKS_NAMED) -> str:
+    """The blocks of ``sample`` with folded cells, most first, as
+    ``b3 (40), b7 (2)``, and how many more there are."""
+    folded = sorted(
+        ((item.folded_cells, item.block_id) for item in sample.blocks if item.folded_cells),
+        key=lambda item: (-item[0], item[1]),
+    )
+    text = ", ".join(f"{block} ({count})" for count, block in folded[:limit])
+    if len(folded) > limit:
+        text += f" and {len(folded) - limit} more block(s)"
+    return text
+
+
 def _coupled_partners(model: MeshModel) -> dict[EdgeKey, tuple[EdgeKey, bool, Any]]:
     """Each cyclic edge's partner, whether their canonical directions agree,
     and the map carrying a point from the partner's side to this one. A pair

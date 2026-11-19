@@ -61,6 +61,7 @@ from typing import Any, Sequence
 from .domain import Block, EdgeGeometry, EdgeKey, TopologyError, Vertex, edge_key
 from .model import MeshModel
 from .preview import _block_mesh_point
+from .sampling import FOLD_CELLS
 from .session import from_data, to_data
 
 Point = tuple[float, float]
@@ -83,6 +84,8 @@ TIP_MERGE = 0.001
 MITRE_LIMIT = 3.0
 # Interior points kept per spline edge.
 MAX_SPLINE_POINTS = 40
+# An add_fill refusal lists at most this many rejected readings of its sides.
+MAX_FILL_REASONS = 4
 
 
 @dataclass
@@ -539,7 +542,9 @@ def _left(t: Point) -> Point:
 
 
 def _band(build: _Build, chain: _Chain, height: float, rows: int, growth: float,
-          box: Sequence[float] | None) -> None:
+          box: Sequence[float] | None) -> list[str]:
+    """Build the band; return its front's vertices (the outermost row, or
+    the box ends of the spokes) in the chain's order."""
     model = build.model
     position = {v: (model.vertices[v].x, model.vertices[v].y) for v in chain.vertices}
     count = len(chain.vertices)
@@ -626,8 +631,7 @@ def _band(build: _Build, chain: _Chain, height: float, rows: int, growth: float,
             spokes.append([(n, 1.0)])
 
     if box is not None:
-        _band_to_box(build, chain, position, spokes, box, edge_path)
-        return
+        return _band_to_box(build, chain, position, spokes, box, edge_path)
     weights = [growth ** r for r in range(rows)]
     total = sum(weights)
     fractions = [0.0]
@@ -708,6 +712,26 @@ def _band(build: _Build, chain: _Chain, height: float, rows: int, growth: float,
                     for first, second in ((s, s + 1), (s + 1, s + 2)):
                         build.block([vid(k, first, r - 1), vid(k, second, r - 1),
                                      vid(k, second, r), vid(k, first, r)], expect=chain.side)
+    front: list[str] = []
+    for k in range(count):
+        for spoke in range(len(spokes[k])):
+            identifier = vid(k, spoke, rows)
+            if not front or front[-1] != identifier:
+                front.append(identifier)
+    return front
+
+
+def _front_note(chain: _Chain, front: Sequence[str], to_box: bool) -> str:
+    """The band's front in the wall chain's order, for the note: IDs are
+    given in creation order, which is not the chain's."""
+    what = "box ends of the spokes" if to_box else "front"
+    wall = f"wall chain {chain.vertices[0]}..{chain.vertices[-1]}"
+    if chain.closed:
+        return f"{what} round the closed {wall}: {_id_list(list(front), 12)}"
+    return (
+        f"{what} along the {wall}, in its order: {_id_list(list(front), 12)}; "
+        f"its ends {front[0]} (beside {chain.vertices[0]}) and {front[-1]} (beside {chain.vertices[-1]})"
+    )
 
 
 def _ordered_convex(corners: Sequence[Point], sign: float) -> bool:
@@ -923,6 +947,7 @@ def _band_to_box(build, chain, position, spokes, box, edge_path):
     for e in range(edge_count):
         a, b = e, (e + 1) % count
         build.block([chain.vertices[a], chain.vertices[b], outer[b], outer[a]], expect=chain.side)
+    return outer
 
 
 def _model_chain(model: MeshModel, edges: Sequence[EdgeKey]) -> _Chain:
@@ -1043,9 +1068,11 @@ def add_band(
             raise TopologyError("no exterior edge selected")
         chain = _model_chain(working, chosen)
         build = _Build(working, prefix)
-        _band(build, chain, height, rows, growth, tuple(to_box) or None)
+        front = _band(build, chain, height, rows, growth, tuple(to_box) or None)
         build.finish()
-        return build.result("add_band")
+        result = build.result("add_band")
+        result.note = _front_note(chain, front, bool(to_box))
+        return result
 
     return _atomic(model, work)
 
@@ -1852,12 +1879,38 @@ def add_fill(
                 "matched": "open, new stations facing the opposite side's",
                 "open": "open",
             }[side.kind]
+            if side.kind == "stations":
+                text += " " + _id_list([v for v in side.vertices[1:-1] if v is not None])
             curve_text = f" along {paths[k].name}" if paths[k] is not None else ""
             described.append(f"side{k + 1} {a}..{b}: {len(side.points) - 1} edge(s), {text}{curve_text}")
         result.note = f"{shape}; " + "; ".join(described)
+        folds = _uniform_folds(working, result.blocks)
+        if folds:
+            result.note += (
+                f"; NOTE: block(s) fold on the count-free map ({FOLD_CELLS} even fractions a "
+                f"side): {folds} - a side bends further than the transfinite map follows; "
+                "move a station or fill in parts"
+            )
         return result
 
     return _atomic(model, work)
+
+
+def _id_list(identifiers: Sequence[str], limit: int = 8) -> str:
+    """IDs for a note, the middle elided above ``limit``."""
+    if len(identifiers) <= limit:
+        return ", ".join(identifiers)
+    return f"{', '.join(identifiers[:3])}, ... {', '.join(identifiers[-3:])} ({len(identifiers)})"
+
+
+def _uniform_folds(model: MeshModel, blocks: Sequence[str]) -> str:
+    """The blocks among ``blocks`` folding on the count-free map, as
+    ``sampling.folded_blocks`` names them; empty when none."""
+    from .sampling import folded_blocks, sample_model
+
+    if not blocks:
+        return ""
+    return folded_blocks(sample_model(model, uniform=FOLD_CELLS, blocks=blocks))
 
 
 def _build_quad(working: MeshModel, build: _Build, corners: list[str], resolved: list[_FillSide],
@@ -2075,6 +2128,7 @@ def _choose_sides(model, occurrences, corners, candidates, paths, position):
     import itertools
 
     valid = []
+    rejected: list[str] = []
     for combination in itertools.product(*candidates):
         loop: list[Point] = []
         for k, choice in enumerate(combination):
@@ -2086,14 +2140,17 @@ def _choose_sides(model, occurrences, corners, candidates, paths, position):
             loop.extend(side[:-1])
         area = sum(loop[k][0] * loop[(k + 1) % len(loop)][1] - loop[(k + 1) % len(loop)][0] * loop[k][1]
                    for k in range(len(loop)))
+        reading = _reading(corners, combination)
         if abs(area) <= 1.0e-12 * _extent(loop) ** 2:
+            rejected.append(f"{reading}: the sides enclose no area")
             continue
         sign = 1.0 if area > 0.0 else -1.0
         ok = True
-        for choice in combination:
+        for k, choice in enumerate(combination):
             if isinstance(choice, int):
                 continue
             score = 0
+            inside_edges = []
             for p, q in zip(choice, choice[1:]):
                 key = edge_key(p, q)
                 items = occurrences.get(key)
@@ -2103,17 +2160,42 @@ def _choose_sides(model, occurrences, corners, candidates, paths, position):
                 cx, cy = _block_centre(model, block)
                 mx, my = model.edge_point(key, 0.5)
                 tx, ty = position[q][0] - position[p][0], position[q][1] - position[p][1]
-                score += 1 if (tx * (cy - my) - ty * (cx - mx)) * sign < 0.0 else -1
+                outside = (tx * (cy - my) - ty * (cx - mx)) * sign < 0.0
+                score += 1 if outside else -1
+                if not outside:
+                    inside_edges.append(f"{key[0]}-{key[1]} (block {block.id})")
             if score < 0 or (score == 0 and any(occurrences.get(edge_key(p, q)) for p, q in zip(choice, choice[1:]))):
+                rejected.append(
+                    f"{reading}: side{k + 1}'s edge(s) {', '.join(inside_edges[:3])}"
+                    + (f" and {len(inside_edges) - 3} more" if len(inside_edges) > 3 else "")
+                    + " have their block inside the region"
+                )
                 ok = False
                 break
-        if ok and not _vertex_inside(model, loop, corners, combination):
-            valid.append((sum(not isinstance(choice, int) for choice in combination), combination, sign))
+        if not ok:
+            continue
+        inside = _vertices_inside(model, loop, corners, combination)
+        if inside:
+            shown = ", ".join(
+                f"{vertex} ({_fmt(model.vertices[vertex].x)}, {_fmt(model.vertices[vertex].y)})"
+                for vertex in inside[:3]
+            )
+            rejected.append(
+                f"{reading}: existing vertex {shown}"
+                + (f" and {len(inside) - 3} more" if len(inside) > 3 else "")
+                + " inside the region"
+            )
+            continue
+        valid.append((sum(not isinstance(choice, int) for choice in combination), combination, sign))
     if not valid:
+        shown = list(dict.fromkeys(rejected))
         raise TopologyError(
             "the sides between corners " + ", ".join(corners) + " bound no region with the existing "
-            "blocks outside it: give the corners in order round the region, or the sides explicitly "
-            "(side1=...)"
+            "blocks outside it and no existing vertex inside: "
+            + "; ".join(shown[:MAX_FILL_REASONS])
+            + (f"; {len(shown) - MAX_FILL_REASONS} more reading(s) rejected" if len(shown) > MAX_FILL_REASONS else "")
+            + " - give the corners in order round the region, the sides explicitly (side1=...), "
+            "or move or remove the vertex inside"
         )
     best = max(score for score, _c, _s in valid)
     top = [(combination, sign) for score, combination, sign in valid if score == best]
@@ -2130,9 +2212,27 @@ def _choose_sides(model, occurrences, corners, candidates, paths, position):
     return top[0]
 
 
-def _vertex_inside(model: MeshModel, loop: Sequence[Point], corners, combination) -> bool:
-    """Whether an existing vertex lies inside the region bounded by
-    ``loop``, clear of its boundary: a fill region holds none."""
+def _reading(corners, combination) -> str:
+    """One reading of a fill's sides, for a refusal: each side open (and
+    which way round a closed curve) or the vertices it runs through."""
+    parts = []
+    for k, choice in enumerate(combination):
+        if isinstance(choice, int):
+            parts.append(f"side{k + 1} open" + {1: " forwards", -1: " backwards"}.get(choice, ""))
+        elif len(choice) > 4:
+            parts.append(f"side{k + 1} {choice[0]},{choice[1]},...,{choice[-1]}")
+        else:
+            parts.append(f"side{k + 1} " + ",".join(choice))
+    return "with " + ", ".join(parts)
+
+
+def _fmt(value: float) -> str:
+    return format(value, ".6g")
+
+
+def _vertices_inside(model: MeshModel, loop: Sequence[Point], corners, combination) -> list[str]:
+    """The existing vertices inside the region bounded by ``loop``, clear
+    of its boundary: a fill region holds none."""
     on_sides = set(corners)
     for choice in combination:
         if not isinstance(choice, int):
@@ -2141,13 +2241,14 @@ def _vertex_inside(model: MeshModel, loop: Sequence[Point], corners, combination
     ys = [p[1] for p in loop]
     x0, y0, x1, y1 = min(xs), min(ys), max(xs), max(ys)
     clearance = 1.0e-6 * math.hypot(x1 - x0, y1 - y0)
+    found: list[str] = []
     for vertex in model.vertices.values():
         if vertex.id in on_sides or not (x0 < vertex.x < x1 and y0 < vertex.y < y1):
             continue
         point = (vertex.x, vertex.y)
         if _inside(point, loop) and _distance_to(point, loop, True) > clearance:
-            return True
-    return False
+            found.append(vertex.id)
+    return found
 
 
 def _resolve_side(model, choice, a, b, path, position, kind, listed) -> _FillSide:
