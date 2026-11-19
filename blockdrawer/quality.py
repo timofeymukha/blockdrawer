@@ -115,6 +115,9 @@ class QualityReport:
     interior: ModelSample | None = None
     export_error: str | None = None
     warning_ranks: tuple[tuple[int, float], ...] = ()
+    # Per wall patch, the first cell heights normal to the wall at its band
+    # spokes (:func:`wall_first_widths`).
+    first_widths: tuple[dict[str, Any], ...] = ()
 
     def summary(self) -> dict[str, Any]:
         if not self.blocks:
@@ -260,6 +263,7 @@ class QualityReport:
             "verdict": self.verdict(),
             "thresholds": asdict(self.thresholds),
             "warnings": warnings,
+            "first_widths": [dict(item) for item in self.first_widths],
         }
         if max_warnings is not None:
             data["warnings_omitted"] = omitted
@@ -351,7 +355,7 @@ def assess_quality(
     )
     return QualityReport(
         blocks, interfaces, limits, total_cells, tuple(warnings),
-        interior, export_error, tuple(ranks),
+        interior, export_error, tuple(ranks), tuple(wall_first_widths(model)),
     )
 
 
@@ -439,6 +443,9 @@ def format_quality(
             f"{_num(summary['max_cell_growth_ratio'])}, max size jump across "
             f"internal edges {_num(summary['max_interface_size_ratio'])}"
         )
+    if report.first_widths:
+        lines.append("  first cell height normal to the wall at the band spokes:")
+        lines.extend("  " + line for line in format_first_widths(list(report.first_widths)))
     if blocks:
         sampled = verdict["sampled"]
         lines.append("")
@@ -504,6 +511,139 @@ def format_quality(
         f"interface jump {_num(limits.interface_size_ratio)}"
     )
     return "\n".join(lines) + "\n"
+
+
+# ---------------------------------------------------------------------------
+# First cell heights at the walls
+# ---------------------------------------------------------------------------
+
+# A band spoke leaves its wall vertex within this many degrees of the inward
+# normal of a wall edge there. Excluded by it: a wake line leaving a sharp
+# trailing edge (it runs along the edge's bisector, near 90 degrees from both
+# walls' normals), an edge running on along the wall's line past its last
+# vertex (90 degrees), and edges leaning further than this from the normal,
+# along which no first cell height is measured. The bisector spoke of a
+# right-angled convex corner is at exactly this angle and is taken; its
+# height is cos 45 of its width along the edge.
+SPOKE_CONE = 45.0
+# The tangent of an edge at its end is taken over this fraction of it.
+_TANGENT_FRACTION = 1.0e-4
+
+
+def wall_first_widths(
+    model: MeshModel, asked: dict[str, float] | None = None
+) -> list[dict[str, Any]]:
+    """Per wall patch: the first cell height normal to the wall at its spokes.
+
+    At every vertex of a wall patch each edge that is on no wall patch is a
+    candidate spoke. It is a band spoke of the wall edge at that vertex whose
+    inward normal (towards the edge's block, at the vertex, curved edges by
+    their end tangent) is closest to the spoke's leaving direction, when that
+    angle is at most :data:`SPOKE_CONE`; the spoke is reported under that
+    wall edge's patch. Its first width is the height of its first mesh node
+    above the wall edge's tangent line at the vertex: the first cell height
+    normal to the wall, not the width along the edge. An edge with both ends
+    on a wall is measured from each end.
+
+    Each entry gives ``patch``, ``spokes``, ``cells`` (fewest and most on
+    the spokes), ``first_width`` (smallest and largest height),
+    ``first_width_edges`` (the spokes with those two heights), ``other_edges``
+    (non-wall edges at the patch's vertices that are no spoke by the cone
+    rule) and, when ``asked`` names the patch, ``asked``.
+    """
+    walls = {name for name, boundary in model.boundaries.items() if boundary.kind == "wall"}
+    occurrences = model.edge_occurrences()
+    # Every wall vertex: its wall edges as (patch, tangent, inward normal).
+    normals: dict[str, list[tuple[str, tuple[float, float], tuple[float, float]]]] = {}
+    for current, name in model.edge_boundaries.items():
+        if name not in walls or current not in occurrences:
+            continue
+        _block, _index, directed = occurrences[current][0]
+        for vertex in current:
+            tx, ty = _tangent(model, current, vertex)
+            # The block lies left of its counter-clockwise traversal; the
+            # tangent leaving ``vertex`` runs with it from the traversal's
+            # start and against it from its end.
+            normal = (-ty, tx) if vertex == directed[0] else (ty, -tx)
+            normals.setdefault(vertex, []).append((name, (tx, ty), normal))
+    spokes: dict[str, list[tuple[float, str, int]]] = {}
+    others: dict[str, int] = {}
+    for current in model.edges():
+        if model.edge_boundaries.get(current) in walls:
+            continue
+        for vertex in current:
+            if vertex not in normals:
+                continue
+            dx, dy = _tangent(model, current, vertex)
+            best = None
+            for name, _tangent_vector, normal in normals[vertex]:
+                angle = math.degrees(math.acos(max(-1.0, min(1.0, dx * normal[0] + dy * normal[1]))))
+                if best is None or angle < best[0]:
+                    best = (angle, name, normal)
+            angle, name, normal = best
+            # Inclusive, so the bisector of a right-angled convex corner
+            # (45 degrees from both walls' normals) is a spoke of both.
+            if angle > SPOKE_CONE + 1.0e-6:
+                for patch in {item[0] for item in normals[vertex]}:
+                    others[patch] = others.get(patch, 0) + 1
+                continue
+            cells = model.edge_cells[current]
+            index = 1 if vertex == current[0] else cells - 1
+            px, py = model.edge_point(current, model.edge_node_fraction(current, index))
+            origin = model.vertices[vertex]
+            height = (px - origin.x) * normal[0] + (py - origin.y) * normal[1]
+            spokes.setdefault(name, []).append((height, edge_text(current), cells))
+    result = []
+    for name in sorted(set(spokes) | set(others)):
+        items = spokes.get(name, [])
+        entry: dict[str, Any] = {"patch": name, "spokes": len(items)}
+        if items:
+            low = min(items)
+            high = max(items)
+            entry.update({
+                "cells": [min(item[2] for item in items), max(item[2] for item in items)],
+                "first_width": [low[0], high[0]],
+                "first_width_edges": [low[1], high[1]],
+            })
+        entry["other_edges"] = others.get(name, 0)
+        if asked and name in asked:
+            entry["asked"] = asked[name]
+        result.append(entry)
+    return result
+
+
+def _tangent(model: MeshModel, current: EdgeKey, vertex: str) -> tuple[float, float]:
+    """The unit tangent of an edge leaving ``vertex``."""
+    fraction = _TANGENT_FRACTION if vertex == current[0] else 1.0 - _TANGENT_FRACTION
+    x, y = model.edge_point(current, fraction)
+    origin = model.vertices[vertex]
+    dx, dy = x - origin.x, y - origin.y
+    length = math.hypot(dx, dy)
+    return (dx / length, dy / length) if length > 0.0 else (0.0, 0.0)
+
+
+def format_first_widths(widths: list[dict[str, Any]]) -> list[str]:
+    """One text line per wall patch for :func:`wall_first_widths`."""
+    lines = []
+    for item in widths:
+        if not item["spokes"]:
+            lines.append(f"  {item['patch']}: no band spoke ({item['other_edges']} other edge(s))")
+            continue
+        low, high = item["first_width"]
+        text = f"  {item['patch']}: {_num(low)}..{_num(high)}"
+        asked = item.get("asked")
+        if asked:
+            text += f" for {_num(asked)} ({_percent(low, asked)}..{_percent(high, asked)})"
+        text += (
+            f" at {item['first_width_edges'][0]}..{item['first_width_edges'][1]}, "
+            f"{item['spokes']} spoke(s), {item['other_edges']} other edge(s)"
+        )
+        lines.append(text)
+    return lines
+
+
+def _percent(value: float, asked: float) -> str:
+    return f"{int(round(100.0 * (value / asked - 1.0))):+d}%"
 
 
 # ---------------------------------------------------------------------------

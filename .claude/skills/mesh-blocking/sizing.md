@@ -59,9 +59,13 @@ $$
   its component and its strip's series (one total ratio for every member,
   so a spoke's first width is in proportion to its length), and the
   surplus makes the wall end finer. `first_width` in the result gives each
-  wall patch's smallest and largest spoke width against the one asked;
-  round 1 measured 4.05e-4 .. 5.23e-4 for 5e-4 and 0.00144 .. 0.00193 for
-  0.002 (up to 28 percent finer). A spoke leaving the wall obliquely (a
+  wall patch's smallest and largest first cell height normal to the wall
+  at its band spokes against the one asked, naming the two spokes (edges
+  leaving the wall more than 45 degrees from its normal, such as a wake
+  line from a sharp trailing edge, are left out; `quality` reports the
+  same after the polish); round 1 measured, along every edge leaving the
+  wall, 4.05e-4 .. 5.23e-4 for 5e-4 and 0.00144 .. 0.00193 for 0.002 (up
+  to 28 percent finer). A spoke leaving the wall obliquely (a
   trailing-edge fan, a corner) gets the larger size the field asks along
   it. For a hard $y^+$ ceiling ask a little coarser, try `grading=field`,
   or set the spokes' `start_width` by hand (`set_edge_grading`) as the

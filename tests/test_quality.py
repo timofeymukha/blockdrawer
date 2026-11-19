@@ -235,3 +235,95 @@ class VerdictExportTests(unittest.TestCase):
         self.assertFalse(verdict["valid"])
         self.assertEqual(verdict["export_error"], "no pair")
         self.assertIn("does NOT export: no pair", format_quality(report))
+
+
+def _quads(points: dict, quads: list, cells: int = 10) -> MeshModel:
+    from blockdrawer.session import from_data, to_data
+
+    data = to_data(MeshModel())
+    data["vertices"] = [{"id": key, "x": x, "y": y} for key, (x, y) in points.items()]
+    data["blocks"] = [{"id": f"b{index}", "vertices": list(quad)} for index, quad in enumerate(quads)]
+    edges = {
+        tuple(sorted((quad[k], quad[(k + 1) % 4]))) for quad in quads for k in range(4)
+    }
+    data["edgeCells"] = [{"vertices": list(edge), "cells": cells} for edge in sorted(edges)]
+    return from_data(data)
+
+
+class WallFirstWidthTests(unittest.TestCase):
+    def test_spokes_are_measured_normal_to_the_wall_and_others_left_out(self) -> None:
+        from blockdrawer.quality import wall_first_widths
+
+        # A wall from a to b; c-d runs on along the wall's line past b, the
+        # spoke b-e leans 26.6 degrees from the wall normal, a-f is normal.
+        model = _quads(
+            {"a": (0, 0), "b": (1, 0), "c": (2, 0), "e": (1.5, 1), "f": (0, 1), "g": (2, 1)},
+            [("a", "b", "e", "f"), ("b", "c", "g", "e")],
+        )
+        model = apply_commands(model, [
+            "add_boundary wall", "set_boundary_type wall wall", "set_edge_boundary a-b wall",
+            "set_edge_grading a-f start_width 0.01", "set_edge_grading b-e start_width 0.01",
+        ]).model
+        (band,) = wall_first_widths(model, {"wall": 0.01})
+        self.assertEqual(band["spokes"], 2)
+        # b-c runs along the wall's line: not a spoke.
+        self.assertEqual(band["other_edges"], 1)
+        self.assertEqual(band["asked"], 0.01)
+        low, high = band["first_width"]
+        self.assertAlmostEqual(high, 0.01, places=12)
+        lean = math.atan2(0.5, 1.0)
+        self.assertAlmostEqual(low, 0.01 * math.cos(lean), places=9)
+        self.assertEqual(band["first_width_edges"], ["b-e", "a-f"])
+
+    def test_a_wake_line_from_a_sharp_edge_is_no_spoke(self) -> None:
+        from blockdrawer.quality import wall_first_widths
+
+        # A thin wedge's trailing edge t with upper and lower walls, a wake
+        # line t-w on its bisector and two spokes normal to the walls.
+        model = _quads(
+            {"u": (0, 0.1), "t": (1, 0), "l": (0, -0.1), "w": (2, 0),
+             "un": (0.1, 1), "tn": (1.1, 1), "ln": (0.1, -1), "tm": (1.1, -1),
+             "wu": (2, 1), "wl": (2, -1)},
+            [("u", "t", "tn", "un"), ("t", "w", "wu", "tn"),
+             ("l", "ln", "tm", "t"), ("t", "tm", "wl", "w")],
+        )
+        model = apply_commands(model, [
+            "add_boundary body", "set_boundary_type body wall",
+            "set_edge_boundary u-t body", "set_edge_boundary l-t body",
+        ]).model
+        (band,) = wall_first_widths(model)
+        self.assertNotIn("t-w", band["first_width_edges"])
+        # u-un, t-tn, l-ln, t-tm are spokes; t-w is not.
+        self.assertEqual(band["spokes"], 4)
+        self.assertEqual(band["other_edges"], 1)
+
+    def test_a_right_angled_corner_bisector_is_a_spoke(self) -> None:
+        from blockdrawer.quality import wall_first_widths
+
+        model = _quads(
+            {"v0": (-2, -2), "v1": (2, -2), "v2": (2, 2), "v3": (-2, 2),
+             "i0": (-1, -1), "i1": (1, -1), "i2": (1, 1), "i3": (-1, 1)},
+            [("v0", "v1", "i1", "i0"), ("v1", "v2", "i2", "i1"),
+             ("v2", "v3", "i3", "i2"), ("v3", "v0", "i0", "i3")],
+        )
+        model = apply_commands(model, [
+            "add_boundary wall", "set_boundary_type wall wall",
+            *(f"set_edge_boundary {edge} wall" for edge in ("i0-i1", "i1-i2", "i2-i3", "i0-i3")),
+        ]).model
+        (band,) = wall_first_widths(model)
+        self.assertEqual(band["spokes"], 4)
+        width = model.edge_width_at_vertex(edge_key("v0", "i0"), "i0")
+        self.assertAlmostEqual(band["first_width"][0], width * math.cos(math.radians(45)), places=9)
+
+    def test_the_quality_report_carries_the_first_widths(self) -> None:
+        model = apply_commands(MeshModel(box=(0, 0, 4, 1)), [
+            "add_boundary wall", "set_boundary_type wall wall",
+            "set_edge_boundary v0-v1 wall", "set_edge_grading v0-v3 start_width 0.01",
+        ]).model
+        report = assess_quality(model)
+        (band,) = report.to_data(summary_only=True)["first_widths"]
+        self.assertEqual(band["patch"], "wall")
+        self.assertAlmostEqual(band["first_width"][0], 0.01, places=9)
+        text = format_quality(report)
+        self.assertIn("first cell height normal to the wall", text)
+        self.assertIn("wall: 0.01..0.1 at v0-v3..v1-v2, 2 spoke(s), 0 other edge(s)", text)

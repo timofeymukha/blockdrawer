@@ -120,8 +120,9 @@ them in the canvas widgets.
   the text digest elides nested ones: `size`'s (`_size_note`) gives
   `total_cells`, `field_cells`, `budget`, `budget_binding`, the field and
   result verdicts in one `verification` string, `first_width` per wall
-  patch (smallest..largest spoke first width for the asked one, in
-  percent), `worst_jump` (quality's interface measure on the sized session,
+  patch (smallest..largest first cell height normal to the wall at its
+  band spokes, `quality.wall_first_widths`, against the asked one in
+  percent, and the two spokes named), `worst_jump` (quality's interface measure on the sized session,
   with the counts above 2.5/5/20), `jump_cost`, `splits`, `moves`, `guard`,
   `refused`, `note`, empty ones left out. Parameter kinds `blocks` (block IDs) and `numbers` (a list of
   floats, e.g. a bbox) serve `smooth`.
@@ -155,7 +156,16 @@ them in the canvas widgets.
   warning carries a rank (folded first, then angle defects by degrees from
   90, then size defects by ratio to their limit); `ranked_warnings(N)` and
   `max_warnings` list the worst N, and `worst_blocks` ranks by folded cells
-  then sampled non-orthogonality when sampled.
+  then sampled non-orthogonality when sampled. `wall_first_widths` (the
+  report's `first_widths`, also `size`'s `bands`) gives per wall patch the
+  first cell height normal to the wall at its band spokes: at a wall
+  vertex an edge on no wall patch is a spoke of the wall edge there whose
+  inward normal (end tangent of curved edges) it is closest to, when within
+  `SPOKE_CONE` (45 degrees, inclusive, so a right-angled corner's bisector
+  counts); the height is its first node's above that edge's tangent line;
+  the extremes' spokes are named and the edges left out counted
+  (`other_edges`): a sharp edge's wake line, an edge continuing the wall's
+  line.
 - `blockdrawer/sampling.py`: the shared interior sampler. `block_grid()`
   builds a block's nodes at its real counts and grading with the preview's
   transfinite interpolation, coarsened above `max_cells` a side by keeping

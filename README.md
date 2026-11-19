@@ -623,7 +623,16 @@ non-orthogonality, equiangle skewness, corner cell aspect ratios, cell-to-cell
 growth, and the cell size jump across every internal edge, with warnings at
 adjustable thresholds; the text lists the 20 worst warnings (folded cells,
 then angles by their distance from 90 degrees, then size defects by how far
-past their limit; `--max-warnings N`, `--all-warnings`). These remain
+past their limit; `--max-warnings N`, `--all-warnings`). It also gives, per
+wall patch, the first cell height normal to the wall at the band spokes
+(`first_widths`, the same measure `size` reports, so it can be read after
+the polish): at each wall vertex an edge on no wall patch is a spoke of the
+wall edge there whose inward normal it is closest to, when within 45
+degrees of it (a wake line leaving a sharp trailing edge and an edge
+running on along the wall's line are not spokes), and its first width is
+the height of its first node above that wall edge's tangent at the vertex;
+the spokes with the smallest and largest heights are named, and the edges
+at the wall left out by the rule are counted. These remain
 screening measures; `checkMesh` is the authority. `render` draws the topology with vertex IDs, block IDs, cell
 counts, patch colors, reference curves, and spacing links to SVG (standard
 library) or PNG (requires Pillow, `pip install blockdrawer[png]`); `--zoom`
@@ -866,8 +875,9 @@ and 13). The report gives the cells, the field's own
 cells and jump cost against the result's, whether the budget stopped the
 spending (`budget_binding`; false when no move that lowers the jumps was
 left or the guard refused them), the interface jumps above 2.5, 5 and 20
-and the worst ones, the first widths each wall patch's spokes got against
-the one asked (`bands`), the moves, the guard's refusals, the splits and
+and the worst ones, the first cell heights normal to each wall patch at
+its band spokes against the one asked, with the two spokes of the extremes
+named (`bands`; `quality`'s `first_widths` measure, see above), the moves, the guard's refusals, the splits and
 the links left out of sync; the quiet digest (`apply --quiet`, MCP default)
 carries all of it as short strings. The worst jump is `quality`'s own
 measure on the sized session: `quality` after a later `smooth` reads a
@@ -934,7 +944,9 @@ spokes keep their drift and the aspect ratio rose. On the cascade a
 trailing-edge spoke leaving the wall obliquely takes the size the
 directional field asks along it (0.000676 where the normal spokes have
 0.0002), which widens the reported range although the near-normal spokes
-are unchanged. The first widths reported are along the spoke; the polish
+are unchanged. The first widths in this table were measured along every
+edge leaving the wall (wake lines included); `size` and `quality` now
+measure the height normal to the wall at band spokes only. The polish
 moves them by up to 5 percent (band spokes within 5 percent of their
 length). The pass added 1 to 40 seconds to `size` on these sessions (40
 on the high-lift's 241).

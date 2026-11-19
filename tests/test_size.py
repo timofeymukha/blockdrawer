@@ -136,7 +136,11 @@ class SizeTests(unittest.TestCase):
         self.assertRegex(note["verification"], r"^field \d+ faces >70, max [0-9.]+, skew [0-9.]+ \| result ")
         (band,) = result["bands"]
         self.assertEqual(band["asked"], 0.005)
-        self.assertRegex(note["first_width"], r"^wall [0-9.e-]+\.\.[0-9.e-]+ for 0\.005 \([+-]\d+%\.\.[+-]\d+%\)$")
+        self.assertRegex(
+            note["first_width"],
+            r"^wall [0-9.e-]+\.\.[0-9.e-]+ for 0\.005 \([+-]\d+%\.\.[+-]\d+%\) at [\w-]+\.\.[\w-]+$",
+        )
+        self.assertEqual(len(band["first_width_edges"]), 2)
         worst = result["worst_interfaces"][0]
         self.assertTrue(note["worst_jump"].startswith(f"{worst['jump']:.3g} at {worst['edge']}"))
         text = "\n".join(format_digest(1, digest))

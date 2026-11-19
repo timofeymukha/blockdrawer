@@ -178,8 +178,8 @@ on continuity. Read:
 - `verification` - faces above 70, worst face and skewness for the field's
   state and the result. Spending never adds to them; the field's own are
   not removed.
-- `first_width` - per wall patch the first widths the spokes got against
-  the one asked, in percent (`grading=field` pins them: `sizing.md`).
+- `first_width` - per wall patch the cell height normal to the wall at the
+  spokes, in percent of the one asked, extremes named (`quality` too).
 - `worst_jump` (with the counts above 2.5, 5, 20; `quality`'s measure,
   which the polish then changes), `splits`, `refused`, `guard`, `note`.
 

@@ -2076,6 +2076,8 @@ def _size_note(data: dict[str, Any]) -> dict[str, Any]:
         asked = band.get("asked")
         if asked:
             text += f" for {asked:.3g} ({percent(low, asked)}..{percent(high, asked)})"
+        if band.get("first_width_edges"):
+            text += " at {}..{}".format(*band["first_width_edges"])
         bands.append(text)
     worst = (data.get("worst_interfaces") or [None])[0]
     jumps = data.get("interface_jumps") or {}
@@ -2088,7 +2090,8 @@ def _size_note(data: dict[str, Any]) -> dict[str, Any]:
             f"field {verdict(verification.get('field'))} | result {verdict(verification.get('result'))}"
             if verification.get("field") else None
         ),
-        # Achieved first widths of the spokes leaving each wall patch.
+        # Achieved first cell heights normal to each wall patch at its band
+        # spokes, with the spokes of the smallest and largest.
         "first_width": " | ".join(bands) or None,
         # quality's interface measure on the sized session, before any
         # polish (a later smooth moves vertices and changes it).

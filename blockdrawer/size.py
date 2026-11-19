@@ -1553,39 +1553,19 @@ def _split_strips(model, field_, state, options, splits, refused) -> bool:
 
 
 def _bands(model: MeshModel, options: SizeOptions | None = None) -> list[dict]:
-    """Per wall patch: the edges leaving it into the fluid, their cells and
-    first widths (smallest and largest), and the first width asked for it."""
-    walls = {name for name, boundary in model.boundaries.items() if boundary.kind == "wall"}
-    by_patch: dict[str, set[str]] = {}
-    on_wall: set[EdgeKey] = set()
-    for current, name in model.edge_boundaries.items():
-        if name in walls:
-            by_patch.setdefault(name, set()).update(current)
-            on_wall.add(current)
-    bands = []
-    for name in sorted(by_patch):
-        vertices = by_patch[name]
-        cells = []
-        firsts = []
-        for current in model.edges():
-            if current in on_wall:
-                continue
-            ends = [v for v in current if v in vertices]
-            if len(ends) != 1:
-                continue
-            cells.append(model.edge_cells[current])
-            firsts.append(model.edge_width_at_vertex(current, ends[0]))
-        if cells:
-            band = {
-                "patch": name,
-                "spokes": len(cells),
-                "cells": [min(cells), max(cells)],
-                "first_width": [min(firsts), max(firsts)],
-            }
-            if options is not None:
-                band["asked"] = dict(options.patch_first_widths).get(name, options.first_width)
-            bands.append(band)
-    return bands
+    """Per wall patch: the band spokes' cells and first cell heights normal
+    to the wall, with the spokes of the smallest and largest named, and the
+    first width asked for it (:func:`blockdrawer.quality.wall_first_widths`)."""
+    from .quality import wall_first_widths
+
+    asked = None
+    if options is not None:
+        overrides = dict(options.patch_first_widths)
+        asked = {
+            name: overrides.get(name, options.first_width)
+            for name, boundary in model.boundaries.items() if boundary.kind == "wall"
+        }
+    return [band for band in wall_first_widths(model, asked) if band["spokes"]]
 
 
 # ---------------------------------------------------------------------------
