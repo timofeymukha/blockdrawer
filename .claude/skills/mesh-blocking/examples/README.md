@@ -27,7 +27,13 @@ wall_aspect=20` 129,984 cells, Mesh OK, max 48.5.
 
 The NACA example is a topology exercise: its trailing edge is a fan, which
 passes checkMesh but collapses the body-normal lines into a downstream fan.
-For a production wake use the engine's C-grid (`../engine.md`).
+For a production wake round a single body in an external far field the
+engine's C-grid builds one (`../engine.md`). Inside a channel or a periodic
+passage (route rule 1: operators) two round-2 trials built a wake band by
+hand: `add_ring`, the fan's middle spoke removed (`remove_edge`), wake
+strips to the outlet from `add_vertex` and `add_block_from_vertices`, then
+fills (and, in the tunnel, conforming grids) round them (airfoil in a tunnel: 208 blocks, Mesh
+OK, max 31.0 deg; compressor cascade: 56 blocks, max 60.1).
 
 Files: `cylinder1.dat`, `cylinder2.dat` (D = 1, six 0.25-deep grooves, centres
 (0, 0) and (3, 0), from the grooved tandem trial), `naca0012_a5.dat` (NACA

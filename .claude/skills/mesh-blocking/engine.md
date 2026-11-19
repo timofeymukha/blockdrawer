@@ -17,8 +17,9 @@ python experiments/agentic_topology/research_cli.py run \
 ```
 
 - A run takes seconds on a synthetic body and minutes on an airfoil at
-  fifteen chords (A-airfoil 263 s, NACA 0012 C-grid 320 s): start it in the
-  background and poll.
+  fifteen chords (A-airfoil 263 s, NACA 0012 C-grid 320 s; NACA 4412 C-grid
+  8.5 min on two cores at low priority): start it in the background and
+  poll, or give it a timeout above that.
 - Give sizes in the geometry's units (`--first-width`, `--core-size`,
   `--layer-height`); the ratio forms multiply the whole domain's scale (the
   report's `domain.domain_scale`), which on a 15-chord far field gives a
@@ -111,6 +112,10 @@ best verdict, and judge a candidate in the orientation you export.
   `make research-tandem-15c`: 122 blocks, admissible, Mesh OK 55.4. Two or
   more exiting wakes merge into one band (`medial.hull.merged_wakes`), else
   end at the hull (`ending_wakes`), else are dropped (`dropped_wakes`).
+  A plain (annular) run on three cylinders crashed with `voronoi_graph:
+  TraceError: the bisector walk stalled`; the same geometry with `--hull`
+  built (one trial, benchmark round 2): on that crash retry with `--hull`
+  before changing the geometry.
 - **Blunt base** (two convex corners within about two percent of the
   perimeter): the base template, record `kind` `base`;
   `make research-blunt-foil`: 18 blocks, resolved, Mesh OK 77.6. A flat

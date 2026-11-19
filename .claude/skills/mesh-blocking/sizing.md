@@ -53,8 +53,15 @@ $$
   rest buys continuity: free regrades and count raises taken greedily by the
   drop in interface jumps per cell. From the field's own state up, more
   budget never raises the jump cost. `budget_binding` says whether the
-  budget stopped the spending; when it is false a larger budget changes
-  nothing (three cylinders: `budget=75000` gave the default's mesh).
+  budget stopped the spending. When it is false a larger budget changes
+  nothing (three cylinders: `budget=75000` gave the default's mesh). When it is true a larger budget
+  is worth one run: on three cylinders shaped at the default floor the
+  binding default left 12 jumps above 5 and `budget=90000` left 6, while a
+  jump the shape step made (a column widened beside a body near a ground
+  wall, 7.17) stayed at `budget=400000` and went with `hold=` in Step 4.
+- Judge the jumps after the polish (`smooth`), which moves vertices and so
+  changes them: NACA 4412 C-grid 4 above 5 after `size`, none after the
+  polish; three cylinders one went 4.73 -> 5.20 (`hold=` kept it).
 - The first width is a bound, not a value: a spoke shares its count with
   its component and its strip's series (one total ratio for every member,
   so a spoke's first width is in proportion to its length), and the
