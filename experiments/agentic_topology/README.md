@@ -39,6 +39,9 @@ default counts define are printed separately as informational, because counts
 and grading are a later stage. The PNG and the JSON are always written so the
 result can be read either way; the session is written whenever the result is
 `admissible`.
+While it runs, `run` prints one line to stderr as each stage starts, with the
+seconds since the run began (`[engine]   6.3 s  grid_quality`; an opt-in
+trial's own stages as `cgrid/sizing`), so a run of minutes is not silent.
 
 ## Pipeline
 

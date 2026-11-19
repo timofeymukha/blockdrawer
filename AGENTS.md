@@ -59,7 +59,10 @@ them in the canvas widgets.
   `experiments/`, need NumPy and Pillow, and are excluded from the normal suite; see
   `experiments/agentic_topology/README.md`. The research command line is
   `python experiments/agentic_topology/research_cli.py
-  {run,describe,cavities,candidates,apply,focus}`.
+  {run,describe,cavities,candidates,apply,focus}`. `run` prints one line per stage to stderr
+  as it starts, with the seconds since the run began (`pipeline.PROGRESS`,
+  set only by `run`; `mark` for a stage, `stage` for an opt-in trial
+  enclosing others, two levels shown).
 
 ## Architecture
 

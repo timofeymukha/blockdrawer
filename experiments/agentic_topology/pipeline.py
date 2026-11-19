@@ -17,9 +17,12 @@ emission, and quality measured on the actual sampled transfinite grid.
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import math
+import time
 from dataclasses import dataclass, field, replace
+from typing import Callable
 
 import numpy as np
 
@@ -304,6 +307,54 @@ class PipelineResult:
         return [] if self.grid is None else list(self.grid.quality_failures)
 
 
+# ---------------------------------------------------------------------------
+# Progress
+# ---------------------------------------------------------------------------
+
+# A run can take minutes and prints nothing until its report: with a
+# callable here every stage announces itself on entry, as one line with the
+# seconds since the run started (research_cli prints them to stderr).  None
+# (the default, the tests' setting) is silent.  Only stages this many
+# levels deep are announced: a trial's own sub-stages repeat per trial.
+PROGRESS: Callable[[str], None] | None = None
+PROGRESS_DEPTH = 2
+_progress_stack: list[str] = []
+_progress_origin: list[float] = []
+
+
+def progress_start() -> None:
+    """Start the clock the stage lines count from."""
+    _progress_origin[:] = [time.monotonic()]
+    _progress_stack.clear()
+
+
+def progress_line(text: str) -> None:
+    """One progress line, when progress is on."""
+    if PROGRESS is None:
+        return
+    if not _progress_origin:
+        progress_start()
+    PROGRESS(f"[engine] {time.monotonic() - _progress_origin[0]:8.1f} s  {text}")
+
+
+def mark(name: str) -> None:
+    """Announce a stage that runs from here to the next mark, inside the
+    trials that enclose it (``trial/stage``)."""
+    if len(_progress_stack) < PROGRESS_DEPTH:
+        progress_line("/".join([*_progress_stack, name]))
+
+
+@contextlib.contextmanager
+def stage(name: str):
+    """Announce a stage that encloses others (an opt-in trial)."""
+    mark(name)
+    _progress_stack.append(name)
+    try:
+        yield
+    finally:
+        _progress_stack.pop()
+
+
 def _describe(error: BaseException) -> str:
     return f"{type(error).__name__}: {error}"
 
@@ -393,6 +444,7 @@ def run_external(names, loops, options: PipelineOptions | None = None, *, outer=
     """
     settings = options or PipelineOptions()
     result = PipelineResult(settings, "external")
+    mark("domain")
     try:
         circle = None
         if outer is None:
@@ -410,9 +462,11 @@ def run_external(names, loops, options: PipelineOptions | None = None, *, outer=
         result.analysis = build_analysis(result)
         return result
     if settings.hull.enabled:
-        built = _try_hull(result, names, loops, settings)
+        with stage("hull"):
+            built = _try_hull(result, names, loops, settings)
         if built is not None:
             return built
+    mark("voronoi_graph")
     try:
         result.diagram = voronoi_graph.build_diagram(
             result.sites, scale=result.scale, grid_width=settings.grid_width
@@ -420,6 +474,7 @@ def run_external(names, loops, options: PipelineOptions | None = None, *, outer=
     except Exception as error:
         result.errors.append({"stage": "voronoi_graph", "error": _describe(error)})
     if result.diagram is not None:
+        mark("layout")
         try:
             result.metric = _metric(result.domain, settings)
             result.layout = block_layout.build_layout(result.diagram, settings.layout)
@@ -428,6 +483,7 @@ def run_external(names, loops, options: PipelineOptions | None = None, *, outer=
         except Exception as error:
             result.errors.append({"stage": "layout", "error": _describe(error)})
     if result.layout is not None:
+        mark("bands")
         try:
             result.metric = _metric(result.domain, settings)
             result.assembly = _assemble_external(result, settings)
@@ -439,15 +495,18 @@ def run_external(names, loops, options: PipelineOptions | None = None, *, outer=
             result.errors.append({"stage": "bands", "error": _describe(error)})
     _finish(result, settings)
     if settings.wake.enabled:
-        result = _try_cgrid(result, settings)
+        with stage("cgrid"):
+            result = _try_cgrid(result, settings)
     if (
         result.layout is not None
         and result.metric is not None
         and not (result.cgrid or {}).get("applied")
     ):
-        result = _try_wakes(result, settings)
+        with stage("wakes"):
+            result = _try_wakes(result, settings)
     if settings.span.enabled and result.layout is not None and result.metric is not None:
-        result = _try_spanning(result, settings)
+        with stage("span_gaps"):
+            result = _try_spanning(result, settings)
     return result
 
 
@@ -1196,6 +1255,7 @@ def run_internal(domain: pdm.PlanarDomain, options: PipelineOptions | None = Non
     settings = options or PipelineOptions()
     result = PipelineResult(settings, "internal")
     result.domain = domain
+    mark("domain")
     try:
         result.problems.extend(domain.problems())
         result.scale = domain.scale
@@ -1204,6 +1264,7 @@ def run_internal(domain: pdm.PlanarDomain, options: PipelineOptions | None = Non
         result.errors.append({"stage": "domain", "error": _describe(error)})
         result.analysis = build_analysis(result)
         return result
+    mark("sweep")
     four, reasons = sweep_module.detect(domain, settings.sweep)
     result.four_sided = four
     if four is None:
@@ -1260,6 +1321,7 @@ def _metric(domain: pdm.PlanarDomain, settings: PipelineOptions) -> sizing.SizeM
 
 def _finish(result: PipelineResult, settings: PipelineOptions) -> None:
     if result.graph is not None:
+        mark("cavities")
         # Sharp wall features are repaired the same way whichever producer
         # wrote the graph: the cavity stage only reads incidence, provenance
         # and geometry.
@@ -1289,7 +1351,9 @@ def _finish(result: PipelineResult, settings: PipelineOptions) -> None:
         and result.covered
     ):
         if settings.smooth:
+            mark("shape_smooth")
             _shape_smooth(result, settings)
+        mark("sizing")
         try:
             result.counts = sizing.assign_counts(
                 result.graph, result.metric, settings.sizing
@@ -1319,6 +1383,7 @@ def _finish(result: PipelineResult, settings: PipelineOptions) -> None:
         except Exception as error:
             result.errors.append({"stage": "session", "error": _describe(error)})
     if result.model is not None and settings.smooth:
+        mark("smooth")
         try:
             from blockdrawer.smooth import smooth_model
 
@@ -1326,6 +1391,7 @@ def _finish(result: PipelineResult, settings: PipelineOptions) -> None:
         except Exception as error:  # pragma: no cover - reported, not raised
             result.errors.append({"stage": "smooth", "error": _describe(error)})
     if result.model is not None and settings.evaluate_grid:
+        mark("grid_quality")
         try:
             # The shape grid: the block map at uniform fractions, judged
             # against the shape limits only.  Count-independent.

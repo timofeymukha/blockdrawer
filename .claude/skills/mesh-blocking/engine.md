@@ -19,7 +19,9 @@ python experiments/agentic_topology/research_cli.py run \
 - A run takes seconds on a synthetic body and minutes on an airfoil at
   fifteen chords (A-airfoil 263 s, NACA 0012 C-grid 320 s; NACA 4412 C-grid
   8.5 min on two cores at low priority): start it in the background and
-  poll, or give it a timeout above that.
+  poll, or give it a timeout above that. `run` prints a line to stderr as
+  each stage starts, with the seconds since the start (`[engine] 6.3 s
+  grid_quality`; a trial's stages as `cgrid/sizing`).
 - Give sizes in the geometry's units (`--first-width`, `--core-size`,
   `--layer-height`); the ratio forms multiply the whole domain's scale (the
   report's `domain.domain_scale`), which on a 15-chord far field gives a

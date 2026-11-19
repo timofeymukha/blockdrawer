@@ -577,9 +577,22 @@ def _encode(value):
     return str(value)
 
 
+def _progress(text: str) -> None:
+    print(text, file=sys.stderr, flush=True)
+
+
 def command_run(arguments) -> int:
-    result = run_case(arguments)
-    for path in write_artifacts(result, arguments):
+    # One line per stage on stderr: a run is silent for minutes otherwise.
+    pipeline.PROGRESS = _progress
+    pipeline.progress_start()
+    try:
+        result = run_case(arguments)
+        pipeline.progress_line("artifacts")
+        written = write_artifacts(result, arguments)
+        pipeline.progress_line("done")
+    finally:
+        pipeline.PROGRESS = None
+    for path in written:
         print(f"wrote {path}")
     summary = result.graph.summary() if result.graph else {}
     print(
