@@ -30,6 +30,7 @@ set_export_settings z_min_patch_type=empty z_max_patch_type=empty
 #> size 5e-4 1.0 growth=1.2 wall_aspect=50
 #> smooth
 # checkMesh: 14,393 cells, Mesh OK, max non-orthogonality 38.1, 0 faces above 70, max skewness 0.57,
-# max aspect ratio 308. At a first width of 1e-4 the trailing edge's chordwise cells run up the column
-# above it to the top (aspect 1356, 10 faces above 70: checkMesh fails); without spread=10 the wake
-# band carried them to the outlet (aspect 6390).
+# max aspect ratio 308. At a first width of 1e-4 (size 1e-4 1.0 growth=1.2 wall_aspect=50): 41,152
+# cells, Mesh OK, 11 faces above 70, max 76.2, skewness 0.89, aspect 978 - the straight columns above
+# the trailing edge carry the wake's first streamwise cell (4e-4) to the top; without spread=10 the
+# wake band carried it to the outlet (aspect 6390: checkMesh fails).
