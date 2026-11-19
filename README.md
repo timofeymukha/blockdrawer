@@ -538,7 +538,7 @@ refused by name; `id=PREFIX` names new vertices `PREFIX_0, ...` and blocks
   Mesh OK 49,182 cells, 60.62 degrees, skewness 2.86 against 50,974, 60.57
   and 2.53.
 - `add_ring CURVE HEIGHT count=N | fractions=... | normals=... [corner=DEG]
-  [tips=true]` - a band round a closed reference curve: vertices on the
+  [tips=true] [side=in]` - a band round a closed reference curve: vertices on the
   curve at its corners (turning more than `corner`, default 30 degrees), at
   the given arc-length fractions, where the outward normal points at each
   `normals` angle (degrees from +x; exactly one such point, else refused),
@@ -555,7 +555,23 @@ refused by name; `id=PREFIX` names new vertices `PREFIX_0, ...` and blocks
   cost 0.4 to 1.1 degrees of sampled non-orthogonality at default counts.
   For `to_box`, aim ring stations at the box corners with `normals=`; a
   band block that would fold against the box is refused with the spokes and
-  corners named.
+  corners named. `side=in` puts the band inside a closed curve.
+- `add_ring CURVE HEIGHT side=left|right count=N | fractions=... | xs=... |
+  ys=... [between=F0,F1 | between=X0,Y0,X1,Y1] [start=DX,DY] [end=DX,DY]` -
+  a band along an open reference curve (internal flow: a wall chain, no
+  host block), on its left or right as its points run: stations at the
+  section's two ends, at its corners, at the fractions, where it crosses
+  each x or y (exactly once, else refused) and by count between them; wall
+  edges are splines through the curve's points; `start`/`end` give the
+  first and last spoke's direction (its normal component is the band
+  height) so they lie on an inlet or outlet line, else they are normal to
+  the wall. `normals` and `tips` need a closed curve. `add_band` takes
+  `start`/`end` too. The round-2 nozzle (throwaway fills outside each wall,
+  a band from them, 23 `remove_edge`, two `move_vertex` for the end spokes,
+  45 commands) is two `add_ring ... side=left xs=... start=0,1 end=0,1`
+  and one `add_fill`, 13 commands: the same 33 blocks, vertices within
+  1.4e-6 of the trial's (its two hand-moved inlet spokes); default chain
+  and checkMesh identical (14,620 cells, Mesh OK, 12.01 degrees).
 - `add_stations CURVE count=N [between=F0,F1 | between=X0,Y0,X1,Y1] |
   fractions=... | xs=... | ys=... [offset=DX,DY] [id=NAME]` - standalone
   vertices on a reference curve (on the polyline through its points, where

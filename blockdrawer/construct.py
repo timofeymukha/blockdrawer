@@ -27,12 +27,14 @@ computed:
     rows with growth: a wake band from a trailing edge left open, a duct
     extended to its outlet.
 ``add_ring``
-    A band round a closed reference curve: vertices on the curve at its
-    sharp corners, at given arc-length fractions, where the outward normal
-    has given angles, optionally at rounded convex corners (``tips``), and
-    by a count spread between them; wall edges as splines through the
-    curve's own points (none whose segment would run backwards), then the
-    band as ``add_band`` builds it.
+    A band round a closed reference curve, or along an open one on a named
+    side with no host block: vertices on the curve at its sharp corners, at
+    given arc-length fractions, where the outward normal has given angles,
+    optionally at rounded convex corners (``tips``), where an open curve
+    crosses given x or y, and by a count spread between them; wall edges as
+    splines through the curve's own points (none whose segment would run
+    backwards), then the band as ``add_band`` builds it, an open curve's
+    end spokes along given directions.
 ``add_stations``
     Standalone vertices on a reference curve: a count spread over it or a
     section of it, arc-length fractions, or where it crosses given x or y;
@@ -546,6 +548,10 @@ class _Chain:
     closed: bool
     side: float
     ends: tuple[Point | None, Point | None] = (None, None)
+    # Spoke directions given for the open ends (start, end): taken as
+    # given (turned to the band's side), where ``ends`` is only followed
+    # within 60 degrees of the normal.
+    end_spokes: tuple[Point | None, Point | None] = (None, None)
 
 
 def _left(t: Point) -> Point:
@@ -651,6 +657,21 @@ def _band(build: _Build, chain: _Chain, height: float, rows: int, growth: float,
             edge = outgoing if outgoing is not None else incoming
             t = tangent_out(edge) if outgoing is not None else tangent_in(edge)
             n = normal(t)
+            given = chain.end_spokes[0] if outgoing is not None else chain.end_spokes[1]
+            if given is not None:
+                d = _unit(given[0], given[1])
+                cosine = d[0] * n[0] + d[1] * n[1]
+                if cosine < 0.0:
+                    d, cosine = (-d[0], -d[1]), -cosine
+                if cosine <= 1.0e-9:
+                    raise TopologyError(
+                        f"the {'start' if outgoing is not None else 'end'} spoke direction "
+                        f"({given[0]:g}, {given[1]:g}) runs along the wall at {chain.vertices[k]}: "
+                        "give a direction leaving the wall"
+                    )
+                # Its component normal to the wall is the band height.
+                spokes.append([(d, 1.0 / cosine)])
+                continue
             follow = chain.ends[0] if outgoing is not None else chain.ends[1]
             if follow is not None:
                 d = _unit(follow[0], follow[1])
@@ -1089,6 +1110,17 @@ def _open_indices(chain: _Chain, position, fan: bool, open_at: Sequence[Point]):
     return chosen
 
 
+def _end_directions(start: Sequence[float], end: Sequence[float]) -> tuple[Point | None, Point | None]:
+    out = []
+    for name, value in (("start", start), ("end", end)):
+        if value and len(value) != 2:
+            raise TopologyError(f"{name} takes a direction dx,dy")
+        if value and math.hypot(value[0], value[1]) <= 0.0:
+            raise TopologyError(f"{name} is a zero direction")
+        out.append((float(value[0]), float(value[1])) if value else None)
+    return out[0], out[1]
+
+
 def _opened_note(build: _Build) -> str:
     if not build.opened:
         return ""
@@ -1126,6 +1158,8 @@ def add_band(
     to_box: Sequence[float] = (),
     fan: bool = True,
     open_at: Sequence[Point] = (),
+    start: Sequence[float] = (),
+    end: Sequence[float] = (),
     between: Sequence[str] = (),
     prefix: str | None = None,
 ) -> ConstructResult:
@@ -1133,7 +1167,9 @@ def add_band(
 
     ``fan=false`` leaves every convex corner that would get a fan open, and
     ``open_at`` the corner nearest each point: the band ends on each side at
-    the spoke normal to that side."""
+    the spoke normal to that side. ``start``/``end`` give the direction of
+    an open chain's first and last spoke (its normal component is the band
+    height)."""
     if bool(to_box) == (height > 0.0):
         raise TopologyError("give a positive height or to_box, not both")
     if rows < 1 or (to_box and rows != 1):
@@ -1141,12 +1177,17 @@ def add_band(
     if growth <= 0.0:
         raise TopologyError("growth must be positive")
     _corner_choice(fan, open_at, bool(to_box))
+    end_spokes = _end_directions(start, end)
 
     def work(working: MeshModel) -> ConstructResult:
         chosen = _select_chain(working, edges, bbox, between)
         if not chosen:
             raise TopologyError("no exterior edge selected")
         chain = _model_chain(working, chosen)
+        if any(end_spokes):
+            if chain.closed:
+                raise TopologyError("start and end apply to an open chain; this one is closed")
+            chain.end_spokes = end_spokes
         build = _Build(working, prefix)
         where = {v: (working.vertices[v].x, working.vertices[v].y) for v in chain.vertices}
         opened = _open_indices(chain, where.__getitem__, fan, open_at)
@@ -1411,31 +1452,75 @@ def add_ring(
     tips: bool = False,
     rows: int = 1,
     growth: float = 1.0,
+    side: str = "",
+    between: Sequence[float] = (),
+    xs: Sequence[float] = (),
+    ys: Sequence[float] = (),
+    start: Sequence[float] = (),
+    end: Sequence[float] = (),
     fan: bool = True,
     open_at: Sequence[Point] = (),
     prefix: str | None = None,
 ) -> ConstructResult:
-    """A band round a closed reference curve, its wall edges on the curve
+    """A band along a reference curve, its wall edges on the curve
     (splines through the curve's points between stations, a point left out
     where OpenFOAM's spline would run backwards: `model.unhooked_points`).
 
-    Stations: every curve vertex turning more than ``corner`` degrees, the
-    arc-length ``fractions``, the point where the outward normal has each of
-    the ``normals`` angles (refused unless there is exactly one), with
-    ``tips`` the peak of every rounded convex corner (`_tip_stations`), and
-    ``count`` edges spread by arc length between them. ``fan=false`` leaves
-    every convex corner that would fan open, ``open_at`` the station nearest
-    each point (`_band`)."""
+    Round a closed curve (the default; ``side=in`` puts the band inside
+    it): stations at every curve vertex turning more than ``corner``
+    degrees, the arc-length ``fractions``, the point where the outward
+    normal has each of the ``normals`` angles (refused unless there is
+    exactly one), with ``tips`` the peak of every rounded convex corner
+    (`_tip_stations`), and ``count`` edges spread by arc length between
+    them.
+
+    Along an open curve (``side=left`` or ``right`` of its point order, no
+    host block needed; `_open_ring`): the section ``between`` (default the
+    whole curve) with stations at its ends, corners, ``fractions``, where it
+    crosses each of ``xs`` and ``ys``, and ``count`` edges between them;
+    ``start``/``end`` set the first and last spoke's direction (an inlet
+    line), else they are normal to the wall.
+
+    ``fan=false`` leaves every convex corner that would fan open, ``open_at``
+    the station nearest each point (`_band`)."""
     if height <= 0.0:
         raise TopologyError("height must be positive")
-    if count < 0 or (not count and not fractions and not normals):
-        raise TopologyError("give count (edges round the curve), fractions or normals")
+    if side not in ("", "out", "in", "left", "right"):
+        raise TopologyError("side is out or in (closed curve), left or right (open curve)")
+    open_curve = side in ("left", "right")
+    if count < 0 or (not count and not fractions and not normals and not (open_curve and (xs or ys))):
+        raise TopologyError("give count (edges round the curve), fractions or normals"
+                            + (", xs or ys" if open_curve else ""))
     if not 0.0 < corner < 180.0:
         raise TopologyError("corner is an angle in degrees between 0 and 180")
+    if not open_curve:
+        for name, value in (("between", between), ("xs", xs), ("ys", ys), ("start", start), ("end", end)):
+            if value:
+                raise TopologyError(
+                    f"{name} applies along an open curve: give side=left or side=right "
+                    "(the band's side of the curve's point order)"
+                )
+    elif normals or tips:
+        raise TopologyError("normals and tips need a closed curve; on an open curve give fractions, xs or ys")
     _corner_choice(fan, open_at, False)
+    end_spokes = _end_directions(start, end)
     corner_angle = math.radians(corner)
 
     def work(working: MeshModel) -> ConstructResult:
+        if open_curve:
+            build, chain, notes, stations = _open_ring(
+                working, curve, side, between, corner_angle, corner, fractions, xs, ys, count, prefix)
+            chain.end_spokes = end_spokes
+            where = {v: (working.vertices[v].x, working.vertices[v].y) for v in chain.vertices}
+            _band(build, chain, height, rows, growth, None,
+                  _open_indices(chain, where.__getitem__, fan, open_at))
+            build.finish()
+            result = build.result("add_ring")
+            result.note = "; ".join(part for part in (
+                f"{stations} stations along the open curve, band on its {side}: "
+                + ("; ".join(notes) or "by arc length"),
+                _front_note(chain, build.front, False), _opened_note(build)) if part)
+            return result
         loop = _curve_polygon(working, curve)
         if len(loop) < 3:
             raise TopologyError("add_ring needs a closed curve of at least three points")
@@ -1508,7 +1593,8 @@ def add_ring(
             if not inside:
                 inside = [at(0.5 * (first + last))]
             interiors.append(unhooked_points(a_point, inside, b_point))
-        band_side = -1.0 if area > 0.0 else 1.0   # outward: right of an anticlockwise loop
+        # outward: right of an anticlockwise loop; inward with side=in
+        band_side = (-1.0 if area > 0.0 else 1.0) * (-1.0 if side == "in" else 1.0)
         kinds = _wall_edges(build, ids, interiors, [at(value) for value in ordered], True)
         chain = _Chain(ids, interiors, kinds, True, band_side)
         where = {v: (working.vertices[v].x, working.vertices[v].y) for v in chain.vertices}
@@ -1538,6 +1624,99 @@ def _wall_edges(build: _Build, ids: Sequence[str], interiors: list, points: Sequ
             build.curve(ids[k], ids[following], "spline", interiors[k])
             kinds.append("spline")
     return kinds
+
+
+def _open_ring(working: MeshModel, curve: str, side: str, between: Sequence[float], corner_angle: float,
+               corner: float, fractions: Sequence[float], xs: Sequence[float], ys: Sequence[float],
+               count: int, prefix: str | None):
+    """The wall chain of a band along an open curve (the polyline through
+    its points, no closing segment) or the section ``between`` two arc-length
+    fractions or two points (taken to the curve): stations at the section's
+    ends, at the curve's vertices turning more than the corner angle, at
+    the ``fractions`` of the whole curve and where the section crosses each
+    of ``xs`` and ``ys`` (exactly once, else refused), then ``count`` edges
+    spread by arc length between them; wall edges are splines through the
+    curve's points (`_CurvePath.edge_interior`, no segment running
+    backwards)."""
+    path = _CurvePath(working, curve, force_open=True)
+    points = list(path.points)
+    lengths = _polyline_lengths(points)
+    total = lengths[-1]
+    if total <= 0.0:
+        raise TopologyError(f"curve {path.name} has no length")
+    if between:
+        if len(between) == 2:
+            for f in between:
+                if not -1.0e-12 <= f <= 1.0 + 1.0e-12:
+                    raise TopologyError(f"fraction {f:g} is not on the curve {path.name} (0 to 1)")
+            s0, s1 = sorted((between[0] * total, between[1] * total))
+        elif len(between) == 4:
+            s0, s1 = sorted((_polyline_locate(points, lengths, (between[0], between[1]))[0],
+                             _polyline_locate(points, lengths, (between[2], between[3]))[0]))
+        else:
+            raise TopologyError("between takes two fractions or two points (x0,y0,x1,y1)")
+        if s1 - s0 <= 1.0e-12 * total:
+            raise TopologyError("between names one point of the curve")
+    else:
+        s0, s1 = 0.0, total
+    notes = []
+    anchors = {s0, s1}
+    corners = []
+    for k in range(1, len(points) - 1):
+        if not s0 < lengths[k] < s1:
+            continue
+        t1 = _unit(points[k][0] - points[k - 1][0], points[k][1] - points[k - 1][1])
+        t2 = _unit(points[k + 1][0] - points[k][0], points[k + 1][1] - points[k][1])
+        if abs(math.atan2(t1[0] * t2[1] - t1[1] * t2[0], t1[0] * t2[0] + t1[1] * t2[1])) > corner_angle:
+            corners.append(lengths[k])
+    anchors.update(corners)
+    if corners:
+        notes.append(f"{len(corners)} corner(s) above {corner:g} degrees")
+    for f in fractions:
+        value = f * total
+        if not s0 - 1.0e-12 * total <= value <= s1 + 1.0e-12 * total:
+            raise TopologyError(f"fraction {f:g} is outside the section given by between")
+        anchors.add(min(s1, max(s0, value)))
+    samples = [0.0, *[u for u, _p in path.inside_with_parameters(s0, s1 - s0)], 1.0]
+    for axis, values in ((0, xs), (1, ys)):
+        for value in values:
+            hits = _crossings(path, s0, s1 - s0, samples, axis, value)
+            if len(hits) != 1:
+                name = "x" if axis == 0 else "y"
+                raise TopologyError(
+                    f"the section of {path.name} crosses {name} = {value:g} "
+                    + (f"{len(hits)} times" if hits else "nowhere")
+                    + ": a station needs exactly one crossing; narrow it with between="
+                )
+            anchors.add(s0 + hits[0] * (s1 - s0))
+    if xs or ys:
+        notes.append(f"{len(xs) + len(ys)} station(s) by crossing")
+    ordered = sorted(anchors)
+    if count:
+        extra = set()
+        for first, last in zip(ordered, ordered[1:]):
+            share = max(1, round(count * (last - first) / (s1 - s0)))
+            extra.update(first + (last - first) * step / share for step in range(1, share))
+        ordered = sorted(set(ordered) | extra)
+    merged: list[float] = []
+    for value in ordered:
+        if not merged or value - merged[-1] > 1.0e-9 * total:
+            merged.append(value)
+    if len(merged) < 2:
+        raise TopologyError("a band along an open curve needs at least two stations")
+    build = _Build(working, prefix)
+    build.scale(path.extent + max(abs(c) for p in points for c in p))
+    station_points = [_polyline_at(points, lengths, value) for value in merged]
+    ids = [build.vertex(point) for point in station_points]
+    if len(set(ids)) != len(ids):
+        raise TopologyError("two stations of the band fall on one existing vertex")
+    tolerance = path.tolerance * 1.0e-3
+    interiors = []
+    for first, last in zip(merged, merged[1:]):
+        interiors.append(path.edge_interior(first, last - first, tolerance))
+    kinds = _wall_edges(build, ids, interiors, station_points, False)
+    chain = _Chain(ids, interiors, kinds, False, 1.0 if side == "left" else -1.0)
+    return build, chain, notes, len(merged)
 
 
 def _turning(loop: Sequence[Point]) -> list[float]:
@@ -1834,20 +2013,20 @@ class _CurvePath:
     ``set_boundary_by``'s default, a thousandth of the curve's size: a
     vertex that close is on the curve."""
 
-    def __init__(self, model: MeshModel, curve_id: str) -> None:
+    def __init__(self, model: MeshModel, curve_id: str, force_open: bool = False) -> None:
         curve = model.geometry_curves.get(curve_id)
         if curve is None:
             raise TopologyError(f"Unknown curve {curve_id!r}")
         points = [(float(p[0]), float(p[1])) for p in curve.points]
         extent = _extent(points)
         repeated = len(points) > 2 and math.dist(points[0], points[-1]) <= 1.0e-12 * (1.0 + extent)
-        if repeated:
+        if repeated and not force_open:
             points.pop()
         segments = [math.dist(a, b) for a, b in zip(points, points[1:])]
         self.name = curve.name or curve_id
         self.points = points
-        self.closed = repeated or (
-            len(points) >= 3 and math.dist(points[-1], points[0]) <= max(segments) * (1.0 + 1.0e-6))
+        self.closed = not force_open and (repeated or (
+            len(points) >= 3 and math.dist(points[-1], points[0]) <= max(segments) * (1.0 + 1.0e-6)))
         self.lengths = [0.0]
         for length in segments:
             self.lengths.append(self.lengths[-1] + length)

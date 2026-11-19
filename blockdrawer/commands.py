@@ -1378,7 +1378,8 @@ def _run_add_band(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
     return add_band(
         model, edges=args["edges"], bbox=args["bbox"], height=args["height"],
         rows=args["rows"], growth=args["growth"], to_box=args["to_box"], fan=args["fan"],
-        open_at=args["open_at"], between=args["between"], prefix=args["id"],
+        open_at=args["open_at"], start=args["start"], end=args["end"], between=args["between"],
+        prefix=args["id"],
     ).to_data()
 
 
@@ -1399,7 +1400,8 @@ def _run_add_ring(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
     return add_ring(
         model, args["curve"], args["height"], count=args["count"],
         fractions=args["fractions"], normals=args["normals"], corner=args["corner"],
-        tips=args["tips"], rows=args["rows"], growth=args["growth"],
+        tips=args["tips"], rows=args["rows"], growth=args["growth"], side=args["side"],
+        between=args["between"], xs=args["xs"], ys=args["ys"], start=args["start"], end=args["end"],
         fan=args["fan"], open_at=args["open_at"], prefix=args["id"],
     ).to_data()
 
@@ -1443,6 +1445,9 @@ _FAN = Parameter("fan", "bool",
                  "the spokes normal to its two sides)", required=False, default=True)
 _OPEN_AT = Parameter("open_at", "points", "leave open the convex corner nearest each x,y (x,y;x,y)",
                      required=False, default=())
+_START = Parameter("start", "numbers", "dx,dy of an open chain's first spoke (else normal or following "
+                   "the boundary it meets); its normal component is the height", required=False, default=())
+_END = Parameter("end", "numbers", "dx,dy of an open chain's last spoke", required=False, default=())
 _BETWEEN = Parameter("between", "vertices", "select the unassigned exterior chain joining these two vertices",
                      required=False, default=())
 _register(CommandSpec(
@@ -1503,6 +1508,8 @@ _register(CommandSpec(
                   required=False, default=()),
         _FAN,
         _OPEN_AT,
+        _START,
+        _END,
         _BETWEEN,
         _ID,
     ),
@@ -1581,6 +1588,15 @@ _register(CommandSpec(
                   required=False, default=False),
         Parameter("rows", "int", "rows of blocks", required=False, default=1),
         Parameter("growth", "float", "row height ratio", required=False, default=1.0),
+        Parameter("side", "choice", "out/in round a closed curve; left/right of an open curve's "
+                  "point order (a band along an open wall, no host block)",
+                  required=False, default="", choices=("", "out", "in", "left", "right")),
+        Parameter("between", "numbers", "open curve: the section, two fractions or x0,y0,x1,y1",
+                  required=False, default=()),
+        Parameter("xs", "numbers", "open curve: stations where it crosses these x", required=False, default=()),
+        Parameter("ys", "numbers", "open curve: stations where it crosses these y", required=False, default=()),
+        _START,
+        _END,
         _FAN,
         _OPEN_AT,
         _ID,

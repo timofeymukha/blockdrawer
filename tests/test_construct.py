@@ -935,3 +935,78 @@ class RowTests(unittest.TestCase):
         model.validate()
 
 
+
+
+class OpenCurveBandTests(unittest.TestCase):
+    def _duct(self, *extra):
+        # A lower wall bulging up between x = 0 and 2, fluid above it.
+        points = ";".join(f"{x / 20},{0.2 * math.sin(math.pi * x / 40)}" for x in range(41))
+        return apply_commands(MeshModel(box=(5, 5, 6, 6)), [
+            f"add_curve {points} name=wall",
+            "add_ring wall 0.1 side=left " + " ".join(extra),
+        ])
+
+    def test_a_band_along_an_open_wall_needs_no_host_block(self) -> None:
+        batch = self._duct("xs=0.5,1,1.5", "id=B")
+        model = batch.model
+        band = [block for block in model.blocks if block.id.startswith("B_b")]
+        self.assertEqual(len(band), 4)
+        # Wall edges are splines on the curve; the band lies above the wall.
+        self.assertEqual(sum(1 for g in model.edge_geometry.values() if g.kind == "spline"), 8)
+        for block in band:
+            ys = [model.vertices[v].y for v in block.vertices]
+            self.assertGreaterEqual(min(ys), -1e-12)
+        note = batch.results[1].result["note"]
+        self.assertIn("5 stations along the open curve, band on its left", note)
+        self.assertIn("3 station(s) by crossing", note)
+
+    def test_end_spokes_along_a_given_direction(self) -> None:
+        model = self._duct("count=4", "start=0,1", "end=0,1").model
+        # The first and last spokes are vertical: on the inlet x = 0 and the outlet x = 2.
+        inlet = sorted(v.y for v in model.vertices.values() if abs(v.x) < 1e-12)
+        outlet = sorted(v.y for v in model.vertices.values() if abs(v.x - 2.0) < 1e-12)
+        self.assertEqual(len(inlet), 2)
+        self.assertEqual(len(outlet), 2)
+        # Its normal component is the band height: the wall's slope at the inlet makes it longer.
+        self.assertGreater(inlet[1] - inlet[0], 0.1)
+        normal = self._duct("count=4").model
+        self.assertFalse(any(abs(v.x) < 1e-12 and v.y > 0.05 for v in normal.vertices.values()))
+
+    def test_the_other_side_and_a_section(self) -> None:
+        model = self._duct("count=2", "between=0.25,0.75").model
+        self.assertEqual(len(model.blocks), 1 + 2)
+        below = apply_commands(model, ["remove_edge v0-v1"]).model
+        right = self._duct("count=2").model
+        self.assertNotEqual(sorted(round(v.y, 6) for v in below.vertices.values()),
+                            sorted(round(v.y, 6) for v in right.vertices.values()))
+        flipped = apply_commands(MeshModel(box=(5, 5, 6, 6)), [
+            "add_curve 0,0;1,0;2,0 name=flat", "add_ring flat 0.1 side=right count=2",
+        ]).model
+        self.assertTrue(any(v.y < -0.05 for v in flipped.vertices.values()))
+
+    def test_open_curve_refusals(self) -> None:
+        for extra, text in (("count=4 normals=90", "normals and tips need a closed curve"),
+                            ("count=4 tips=true", "normals and tips need a closed curve"),
+                            ("xs=3", "crosses x = 3 nowhere")):
+            with self.assertRaises(Exception) as caught:
+                self._duct(extra)
+            self.assertIn(text, str(caught.exception))
+        with self.assertRaises(Exception) as caught:
+            apply_commands(MeshModel(box=(5, 5, 6, 6)), [
+                f"add_curve {lens_points()} name=lens", "add_ring lens 0.05 count=20 xs=0.5",
+            ])
+        self.assertIn("give side=left or side=right", str(caught.exception))
+
+    def test_add_band_end_spokes_and_a_ring_inside_a_closed_curve(self) -> None:
+        model = apply_commands(MeshModel(), ["add_band edges=v0-v1 height=0.1 start=0,-1 end=1,-1"]).model
+        points = sorted((round(v.x, 9), round(v.y, 9)) for v in model.vertices.values() if v.y < 0)
+        self.assertEqual(points, [(0.0, -0.1), (1.1, -0.1)])
+        with self.assertRaises(Exception) as caught:
+            apply_commands(MeshModel(), ["add_band edges=v0-v1 height=0.1 start=1,0"])
+        self.assertIn("runs along the wall", str(caught.exception))
+        inside = apply_commands(MeshModel(box=(5, 5, 6, 6)), [
+            f"add_curve {circle_points(1.0, 32)} name=pipe", "add_ring pipe 0.1 count=8 side=in",
+        ]).model
+        ring = [v for v in inside.vertices.values() if math.hypot(v.x, v.y) < 1.5]
+        self.assertTrue(all(math.hypot(v.x, v.y) <= 1.0 + 1e-9 for v in ring))
+        self.assertEqual(sum(1 for v in ring if math.hypot(v.x, v.y) < 0.95), 8)

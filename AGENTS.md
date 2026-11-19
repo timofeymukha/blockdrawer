@@ -564,7 +564,18 @@ them in the canvas widgets.
   between all of them, reporting the stations in its `note`. Tips are off
   because on 10:1, 4:1 and 5:1 ellipses they cost 0.4 to 1.1 degrees of
   sampled non-orthogonality at default counts and the blunt plate's
-  `to_box` needed the normal stations anyway. Wall edges are splines
+  `to_box` needed the normal stations anyway. `side=in` bands the inside
+  of a closed curve. With `side=left|right` the curve is open
+  (`_open_ring`: `_CurvePath(force_open=True)`, no closing segment), the
+  section `between` two fractions or points: stations at its ends, at
+  vertices turning more than `corner`, at `fractions`, at single crossings
+  of `xs`/`ys` (`_crossings`, as `add_stations`), `count` spread between
+  them; wall edges by `_CurvePath.edge_interior`; `normals`/`tips` are
+  refused there. `start`/`end` (`add_ring` open, `add_band` on an open
+  chain; `_Chain.end_spokes`) give an end spoke's direction, turned to the
+  band's side, length `height / cos` to the normal, refused when parallel
+  to the wall; without them an open ring's ends are normal. `_wall_edges`
+  writes both kinds of ring's wall edges. Wall edges are splines
   through the curve's points (at most
   `MAX_SPLINE_POINTS`, none within a thousandth of a station). Curves
   without a repeated end point are closed implicitly; `set_boundary_by
