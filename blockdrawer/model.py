@@ -179,6 +179,17 @@ def _carried_geometry(
     return EdgeGeometry(geometry.kind, points)
 
 
+def transverse_edge(block: Block, shared: EdgeKey, vertex_id: str) -> EdgeKey:
+    """The edge of ``block`` other than ``shared`` that meets it at ``vertex_id``."""
+    for index in range(4):
+        candidate = edge_key(*block.directed_edge(index))
+        if candidate != shared and vertex_id in candidate:
+            return candidate
+    raise ValueError(  # pragma: no cover - blocks always have two edges per vertex
+        f"Block {block.id} has no transverse edge at {vertex_id}"
+    )
+
+
 class MeshModel(
     SpacingOperationsMixin,
     TopologyOperationsMixin,
@@ -304,6 +315,24 @@ class MeshModel(
                     (block, index, directed)
                 )
         return result
+
+    def interface_pairs(self) -> list[tuple[EdgeKey, str, EdgeKey, EdgeKey]]:
+        """Across every internal edge, at each of its ends, the two blocks'
+        transverse edges - two edges continuing each other through that
+        vertex: ``(shared, vertex, first, second)`` with ``first`` in the
+        shared edge's first block. These are the pairs the quality screen's
+        size jump compares, ``size`` relaxes over and ``smooth`` limits; a
+        pair whose two transverse edges coincide is left out."""
+        pairs: list[tuple[EdgeKey, str, EdgeKey, EdgeKey]] = []
+        for shared, used in sorted(self.edge_occurrences().items()):
+            if len(used) != 2:
+                continue
+            for vertex in shared:
+                first = transverse_edge(used[0][0], shared, vertex)
+                second = transverse_edge(used[1][0], shared, vertex)
+                if first != second:
+                    pairs.append((shared, vertex, first, second))
+        return pairs
 
     def is_boundary_edge(self, edge: EdgeKey) -> bool:
         occurrences = self.edge_occurrences().get(edge, [])

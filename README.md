@@ -841,6 +841,89 @@ sessions without the agents' `hold=` lists and after-size fixes:
 | three cylinders (engine) | 70.8 -> 62.8, 0.0024; 56,043 / 0 / 64.65 / 269 | 70.8 -> 63.0, 0.10; 56,069 / 0 / 64.83 / 6.15 | 70.8 -> 62.7, 0.10; 55,982 / 0 / 64.38 / 7.75 |
 | square cylinder (engine) | 87.6 -> 51.1, 0.089; 4,452 / 0 / 50.86 / 2.13 | 87.6 -> 55.6, 0.10; 5,184 / 0 / 52.16 / 2.05 | same as floor 0.1 |
 
+Two further limits measure what the step does to lengths in the terms
+`size` pays in, both off by default. `shape_pair_ratio=K` keeps the length
+ratio of every interface pair - two edges continuing each other through a
+vertex across a shared edge, the pairs whose first-cell widths the
+quality screen's size jump compares and `size` relaxes over
+(`MeshModel.interface_pairs`) - within a factor K of its input value.
+`shape_spread_ratio=K` keeps every count component's length spread
+(longest over shortest member: the cell-size ratio its one count puts
+between them before any grading) from growing past K times its input; a
+spread that falls is never limited. Both hold in the search and at every
+fallback scale, like the floor, and the result reports the largest change
+of each in the result (`max_pair_change`/`max_pair`,
+`max_spread_growth`/`spread_edge`), the reason and the digest note. Measured over twenty sessions - the
+eleven round-2 benchmark sessions at their pre-shape state (the build
+replayed up to the shape line; the two engine sessions as the engine wrote
+them) and nine of the ten above (the three-cylinder engine session is the
+same file in both rounds) - each with the default chain: the shape step,
+the session's `size` line (the brief's widths, `wall_aspect=25` unless the
+session's own line said otherwise, no `budget`, no `grading=field`), the
+polish, then `quality`'s sampled verdict at 256 cells a side. Each cell
+reads: maximum non-orthogonality / faces above 70 / interface jumps above
+2.5, above 5. Above 150k cells only no shape, the default, pair 2.5 and
+spread 2.5 ran;
+the round-2 high-lift session folds after the default `size` (its trial
+fixed that by hand) and its shape step is refused (count-free folds), so
+its row is the same throughout:
+
+| session | no shape | floor 0.1 (default) | floor 0.3 | floor 0.5 | `keep_lines` | pair 1.5 | pair 2.5 | spread 2.5 |
+|---|---|---|---|---|---|---|---|---|
+| square cylinder (engine) | 84.5 / 432 / 20, 6 | 52.2 / 0 / 0, 0 | 70.4 / 6 / 0, 0 | 78.5 / 90 / 20, 0 | 52.2 / 0 / 0, 0 | 82.8 / 241 / 20, 0 | 79.9 / 142 / 20, 0 | 52.2 / 0 / 0, 0 |
+| Y-junction (R2) | 40.0 / 0 / 0, 0 | 40.0 / 0 / 0, 0 | 40.0 / 0 / 0, 0 | 40.0 / 0 / 0, 0 | 40.0 / 0 / 0, 0 | 40.0 / 0 / 0, 0 | 40.0 / 0 / 0, 0 | 40.0 / 0 / 0, 0 |
+| backward step (example) | 0.0 / 0 / 0, 0 | 0.0 / 0 / 0, 0 | 0.0 / 0 / 0, 0 | 0.0 / 0 / 0, 0 | 0.0 / 0 / 0, 0 | 0.0 / 0 / 0, 0 | 0.0 / 0 / 0, 0 | 0.0 / 0 / 0, 0 |
+| U-bend (R2) | 43.3 / 0 / 0, 0 | 42.6 / 0 / 0, 0 | 42.6 / 0 / 0, 0 | 42.6 / 0 / 0, 0 | 43.3 / 0 / 0, 0 | 42.6 / 0 / 0, 0 | 42.6 / 0 / 0, 0 | 42.6 / 0 / 0, 0 |
+| U-bend (R1) | 21.7 / 0 / 0, 0 | 20.9 / 0 / 0, 0 | 20.9 / 0 / 0, 0 | 20.8 / 0 / 0, 0 | 21.7 / 0 / 0, 0 | 21.1 / 0 / 0, 0 | 21.0 / 0 / 0, 0 | 20.9 / 0 / 0, 0 |
+| cylinder in a channel (R2) | 38.7 / 0 / 0, 0 | 35.2 / 0 / 0, 0 | 35.2 / 0 / 0, 0 | 35.2 / 0 / 0, 0 | 38.5 / 0 / 0, 0 | 35.5 / 0 / 0, 0 | 35.2 / 0 / 0, 0 | 35.2 / 0 / 0, 0 |
+| cylinder in a channel (R1) | 38.7 / 0 / 0, 0 | 35.6 / 0 / 0, 0 | 35.6 / 0 / 0, 0 | 35.6 / 0 / 0, 0 | 38.6 / 0 / 0, 0 | 35.7 / 0 / 0, 0 | 35.6 / 0 / 0, 0 | 35.6 / 0 / 0, 0 |
+| nozzle (R2) | 12.3 / 0 / 0, 0 | 11.5 / 0 / 0, 0 | 11.5 / 0 / 0, 0 | 11.5 / 0 / 0, 0 | 11.5 / 0 / 0, 0 | 11.5 / 0 / 0, 0 | 11.5 / 0 / 0, 0 | 11.5 / 0 / 0, 0 |
+| cascade (R2) | 66.4 / 0 / 2, 0 | 68.5 / 0 / 0, 0 | 59.3 / 0 / 0, 0 | 60.8 / 0 / 0, 0 | 61.0 / 0 / 0, 0 | 64.2 / 0 / 0, 0 | 63.0 / 0 / 0, 0 | 62.3 / 0 / 0, 0 |
+| cascade (R1) | 62.4 / 0 / 4, 2 | 60.7 / 0 / 6, 1 | 60.7 / 0 / 4, 1 | 61.9 / 0 / 3, 0 | 64.2 / 0 / 4, 3 | 62.4 / 0 / 1, 0 | 61.4 / 0 / 3, 0 | 62.1 / 0 / 3, 0 |
+| NACA 0012 (example) | 53.9 / 0 / 1, 0 | 48.6 / 0 / 4, 0 | 48.9 / 0 / 5, 0 | 49.6 / 0 / 6, 0 | 49.0 / 0 / 6, 1 | 50.5 / 0 / 4, 0 | 49.5 / 0 / 5, 0 | 48.9 / 0 / 4, 0 |
+| blunt plate (R2) | 41.6 / 0 / 0, 0 | 36.5 / 0 / 0, 0 | 36.5 / 0 / 0, 0 | 36.5 / 0 / 0, 0 | 45.9 / 0 / 0, 0 | 41.1 / 0 / 0, 0 | 36.5 / 0 / 0, 0 | 36.5 / 0 / 0, 0 |
+| blunt plate (R1) | 46.7 / 0 / 0, 0 | 29.5 / 0 / 8, 4 | 29.5 / 0 / 8, 4 | 29.5 / 0 / 8, 4 | 45.7 / 0 / 12, 3 | 29.8 / 0 / 8, 6 | 29.5 / 0 / 8, 4 | 29.5 / 0 / 8, 4 |
+| three cylinders (engine) | 68.1 / 0 / 17, 2 | 64.8 / 0 / 46, 12 | 64.8 / 0 / 30, 2 | 66.4 / 0 / 8, 0 | 64.4 / 0 / 38, 6 | 67.7 / 0 / 5, 0 | 67.3 / 0 / 13, 0 | 64.7 / 0 / 24, 2 |
+| grooved tandem (example) | 21.8 / 0 / 0, 0 | 20.5 / 0 / 4, 0 | 20.5 / 0 / 4, 0 | 22.2 / 0 / 4, 0 | 35.6 / 0 / 22, 0 | 22.2 / 0 / 0, 0 | 20.9 / 0 / 4, 0 | 20.5 / 0 / 4, 0 |
+| airfoil in a tunnel (R2) | 36.0 / 0 / 0, 0 | 30.9 / 0 / 0, 0 | 29.2 / 0 / 2, 0 | 28.5 / 0 / 0, 0 | 45.3 / 0 / 0, 0 | 25.5 / 0 / 0, 0 | 34.3 / 0 / 0, 0 | 26.5 / 0 / 0, 0 |
+| NACA 4412 (engine, R2) | 68.1 / 0 / 2, 2 | 68.6 / 0 / 21, 0 | - | - | - | - | 61.5 / 0 / 4, 0 | 72.1 / 1 / 11, 0 |
+| bluff body on ground (R2) | 45.1 / 0 / 4, 0 | 44.2 / 0 / 18, 0 | - | - | - | - | 44.2 / 0 / 15, 0 | 44.2 / 0 / 16, 0 |
+| high-lift (R2 hand) | 175.9 / 2387 / 153, 45 | 175.9 / 2387 / 153, 45 | - | - | - | - | 175.9 / 2387 / 153, 45 | 175.9 / 2387 / 153, 45 |
+| high-lift (R1 hand) | 62.2 / 0 / 82, 59 | 61.4 / 0 / 25, 5 | - | - | - | - | 61.4 / 0 / 23, 3 | 61.2 / 0 / 25, 6 |
+
+Totals over the 20 sessions (the default against no shape step, pair 2.5,
+spread 2.5): cells 1.80M against 1.64M, 1.82M, 1.79M; jumps above 2.5 285
+against 285, 248, 248; above 5 67 against 116, 52, 57 (45 of them the
+folded high-lift session's in each); faces above 70 2,387 (all the
+high-lift session's) against 2,819, 2,529, 2,388. On the 16 sessions every
+rule ran: above 2.5 68 (default), 53 (floor 0.3), 49 (0.5), 82
+(`keep_lines`), 38 (pair 1.5), 53 (pair 2.5), 43 (spread 2.5).
+
+None replaces the default. A new default had to keep every session's
+faces above 70 and jumps above 5 from rising, lower the total of jumps
+above 2.5, raise no maximum by more than 2 degrees and keep the square
+cylinder's gain within 2 degrees. The floors 0.3 and 0.5 and both pair
+limits lose the square cylinder (70.4 to 82.8 degrees, 6 to 241 faces
+above 70): its gain is its corner kites' diagonals shrinking to a tenth
+against the spokes they continue, a pair ratio changed 19 times that
+`size` grades away (worst jump 2.05). Pair 1.5 also adds two jumps above
+5 on the round-1 blunt plate and raises three maxima by 2.8 to 4.7
+degrees; pair 2.5 raises the three cylinders and the airfoil in a tunnel
+by 2.4 and 3.3. `keep_lines` raises seven maxima by 3 to 16 degrees and
+adds jumps above 5 on two. The spread limit keeps the square cylinder
+exactly (its spreads fall) and passes on the 16 smaller sessions, but on
+the NACA 4412 engine session its maximum rises 68.6 -> 72.1 with a face
+above 70, and the round-1 high-lift gains one jump above 5 (5 -> 6).
+Where the shape step leaves a jump above 5, the pair through it had its
+length ratio changed 3.8 to 33 times (all twelve of the three cylinders,
+the round-1 cascade's, three of the round-1 high-lift's five), but of the 72 pairs the default
+changed more than 5 times only 9 end above 5: the pair ratio marks a risk
+that `size` usually grades away, and the round-1 blunt plate's two worst
+jumps (10.0) sit on pairs the step did not change at all. Use either
+limit where the floor is what an agent would raise (a ring pulled onto the
+next ring: the three cylinders go from 12 jumps above 5 to none at pair
+1.5 or 2.5, and to 2 at spread 2.5).
+
 `size` sets every cell count and grading from a few physical inputs
 (`first_width`, `core_size`, `growth`, optional `wall_aspect`,
 `interface_growth` (default 1.25), `count_rule`, `budget`, per-patch

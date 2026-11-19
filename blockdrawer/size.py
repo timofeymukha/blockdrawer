@@ -418,24 +418,13 @@ def _demand(edge: _Edge, profile: list[float]) -> float:
 
 def _links(model: MeshModel) -> dict[tuple[EdgeKey, str], list[tuple[EdgeKey, str]]]:
     """Across every internal edge, at each of its ends, the two blocks'
-    transverse edges: the pairs the quality screen's size jump compares."""
-    occurrences = model.edge_occurrences()
+    transverse edges: the pairs the quality screen's size jump compares
+    (:meth:`MeshModel.interface_pairs`)."""
     links: dict[tuple[EdgeKey, str], list[tuple[EdgeKey, str]]] = {}
-    for shared, used in sorted(occurrences.items()):
-        if len(used) != 2:
-            continue
-        for vertex in shared:
-            transverse = []
-            for block, _index, _directed in used:
-                for index in range(4):
-                    candidate = edge_key(*block.directed_edge(index))
-                    if candidate != shared and vertex in candidate:
-                        transverse.append(candidate)
-                        break
-            if len(transverse) == 2 and transverse[0] != transverse[1]:
-                first, second = (transverse[0], vertex), (transverse[1], vertex)
-                links.setdefault(first, []).append(second)
-                links.setdefault(second, []).append(first)
+    for _shared, vertex, first_edge, second_edge in model.interface_pairs():
+        first, second = (first_edge, vertex), (second_edge, vertex)
+        links.setdefault(first, []).append(second)
+        links.setdefault(second, []).append(first)
     return links
 
 
@@ -533,9 +522,10 @@ def _cyclic_matches(model: MeshModel) -> list[CyclicMatch]:
     return [match for pair in pairs for match in pair.matches]
 
 
-def _components(model: MeshModel) -> list[list[EdgeKey]]:
+def count_components(model: MeshModel) -> list[list[EdgeKey]]:
     """The opposite-edge count components, those holding the two edges of
-    a cyclic pair joined: a pair must keep one count."""
+    a cyclic pair joined: a pair must keep one count. Each component is
+    one count; ``smooth``'s shape mode limits their length spread."""
     seen: set[EdgeKey] = set()
     found = []
     for current in sorted(model.edge_cells):
@@ -564,6 +554,9 @@ def _components(model: MeshModel) -> list[list[EdgeKey]]:
     for index, members in enumerate(found):
         joined.setdefault(root(index), []).extend(members)
     return [sorted(members) for _root, members in sorted(joined.items())]
+
+
+_components = count_components
 
 
 # ---------------------------------------------------------------------------

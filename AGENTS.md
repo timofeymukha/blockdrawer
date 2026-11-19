@@ -71,7 +71,10 @@ them in the canvas widgets.
   here in serializers and algorithms; `model.py` re-exports them only for backward
   compatibility.
 - `blockdrawer/model.py`: authoritative model state, edge/curve evaluation, and
-  global validation. Vertices may be standalone or shared by counter-clockwise
+  global validation. `MeshModel.interface_pairs()` is the one definition of the
+  interface pairs (across every internal edge, at each end, the two blocks'
+  transverse edges, `transverse_edge`) that `quality`'s size jump, `size`
+  and `smooth` use. Vertices may be standalone or shared by counter-clockwise
   quadrilateral blocks. Edges are derived only from block vertex pairs. Optional
   geometry, grading, boundaries, and reference curves are keyed or stored here.
   Repeated spline evaluation uses bounded, value-keyed path evaluators that are
@@ -285,7 +288,19 @@ them in the canvas widgets.
   blocks, most folded first, with their counts (`sampling.folded_blocks`,
   at most `FOLD_BLOCKS_NAMED`). Both modes report `min_edge_ratio`/`min_edge` and
   `max_edge_ratio`/`max_edge` (edge length over input length, edges with a
-  moved end) in the result, the reason text and the digest note.
+  moved end) in the result, the reason text and the digest note. Two more
+  shape-mode limits, off by default (`SHAPE_PAIR_RATIO`,
+  `SHAPE_SPREAD_RATIO` = 0), held in the search and at every fallback
+  scale like the floor: `shape_pair_ratio` keeps every interface pair's
+  length ratio (`MeshModel.interface_pairs`, the pairs `quality`'s jump
+  compares and `size._links` relaxes over) within that factor of its
+  input, `shape_spread_ratio` keeps every count component's spread
+  (longest over shortest member, `size.count_components`) from growing
+  past that factor; the result, reason and note give `max_pair_change`/
+  `max_pair` and `max_spread_growth`/`spread_edge`. Neither passed the
+  default rule over the 20-session corpus (README table): pair limits and
+  higher floors lose the square cylinder's gain, the spread limit cost the
+  NACA 4412 3.5 degrees and a face above 70.
   `keep_lines=True` (off by default in both modes: measured in the README)
   finds each free vertex's straight block lines (`straight_lines`: two
   internal `line` edges at it sharing no block, collinear within
@@ -325,7 +340,8 @@ them in the canvas widgets.
   combined as an ellipse metric; the minimum over segments, capped at the
   core. No edge classification. `_bounds` is a Dijkstra over edge ends:
   seeds are the field size along each edge at its ends; relaxations are the
-  quality screen's interface pairs (`_links`, factor `interface_growth`) and
+  quality screen's interface pairs (`_links` over `interface_pairs`,
+  factor `interface_growth`) and
   along-edge gradation (`+ (growth-1) L`), both non-decreasing, so each end
   settles once. `_strips` groups opposite sides within
   `OPPOSITE_LENGTH_RATIO` through the blocks with their orientation, and

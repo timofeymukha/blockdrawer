@@ -165,10 +165,10 @@ The step is optional (the 949-block high-lift trial left it out). Then:
   became 3.28), or `keep_lines=true`, which moves a vertex on a straight
   block line only along it - off by default, since it also holds every
   straight band spoke (cost 4-16 deg on three of ten sessions, README).
-- `size` leaves a jump above 5 at an edge the step took to the floor
-  (`min_edge_ratio` 0.1): rerun the step with a higher
-  `shape_length_ratio` (cascade 0.4; three cylinders 0.3: 12 jumps above 5
-  -> 0).
+- the polish leaves a jump above 5 where the step shrank an edge (`min_edge_ratio`
+  near 0.1, `max_pair_change` large): rerun it with `shape_pair_ratio=2.5`
+  (three cylinders: 12 jumps above 5 -> 0, +2.4 deg) or a higher
+  `shape_length_ratio` (cascade 0.4); neither is a default (README).
 - "already fold ... on the count-free block map, in BLOCK (N)": those
   blocks fold at even spacing (the real counts need not: high-lift);
   render and fix them (move a station, split) or leave the step out.

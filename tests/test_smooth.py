@@ -285,6 +285,132 @@ class ShapeLengthFloorTests(unittest.TestCase):
             apply_commands(two_by_two(), ["smooth mode=shape shape_length_ratio=1.5"])
 
 
+def pair_changes(before: MeshModel, after: MeshModel) -> list[float]:
+    """Per interface pair, the factor its length ratio moved by."""
+    changes = []
+    for _shared, _at, first, second in before.interface_pairs():
+        old = before.edge_length(first) / before.edge_length(second)
+        new = after.edge_length(first) / after.edge_length(second)
+        changes.append(max(new / old, old / new))
+    return changes
+
+
+class InterfacePairTests(unittest.TestCase):
+    def test_pairs_are_the_transverse_edges_across_each_internal_edge(self) -> None:
+        model = two_by_two()
+        pairs = model.interface_pairs()
+        # Four internal edges, a pair at each end.
+        self.assertEqual(len(pairs), 8)
+        occurrences = model.edge_occurrences()
+        for shared, at, first, second in pairs:
+            self.assertEqual(len(occurrences[shared]), 2)
+            self.assertIn(at, shared)
+            self.assertIn(at, first)
+            self.assertIn(at, second)
+            self.assertNotEqual(first, second)
+            self.assertNotIn(shared, (first, second))
+        # The one definition size relaxes over.
+        from blockdrawer.size import _links
+
+        links = _links(model)
+        self.assertEqual(sum(len(items) for items in links.values()), 2 * len(pairs))
+        for _shared, at, first, second in pairs:
+            self.assertIn((second, at), links[(first, at)])
+
+
+class ShapePairRatioTests(unittest.TestCase):
+    def test_no_interface_pair_leaves_the_limit(self) -> None:
+        base = two_by_two((0.7, 0.65))
+        free = two_by_two((0.7, 0.65))
+        unbounded = smooth_model(free, options=SmoothOptions(mode="shape"))
+        self.assertTrue(unbounded.applied, unbounded.reason)
+        self.assertGreater(max(pair_changes(base, free)), 1.2)
+        self.assertAlmostEqual(unbounded.max_pair_change, max(pair_changes(base, free)))
+        self.assertIn("interface pair length ratios within", unbounded.reason)
+        limited = two_by_two((0.7, 0.65))
+        result = smooth_model(limited, options=SmoothOptions(mode="shape", shape_pair_ratio=1.2))
+        self.assertTrue(result.applied, result.reason)
+        self.assertLessEqual(max(pair_changes(base, limited)), 1.2 * (1.0 + 1e-6))
+        self.assertLessEqual(result.max_pair_change, 1.2 * (1.0 + 1e-6))
+        self.assertGreater(result.max_pair_change, 1.0)
+        self.assertIn("/", result.max_pair)
+        self.assertIn("(limit 1.2)", result.reason)
+        # It still smooths: the count-free maximum falls.
+        self.assertLess(result.after["max_non_orthogonality"], result.before["max_non_orthogonality"])
+
+    def test_the_command_takes_the_limit_and_the_digest_shows_the_change(self) -> None:
+        model = two_by_two((0.7, 0.65))
+        batch = apply_commands(model, ["smooth mode=shape shape_pair_ratio=1.2"])
+        result = batch.results[0].result
+        self.assertTrue(result["applied"])
+        self.assertLessEqual(result["max_pair_change"], 1.2 * (1.0 + 1e-6))
+        (note,) = batch_digest(model, batch)["notes"]
+        self.assertEqual(note["max_pair_change"], result["max_pair_change"])
+        self.assertEqual(smooth_module.SHAPE_PAIR_RATIO, SmoothOptions().shape_pair_ratio)
+        with self.assertRaises(Exception):
+            apply_commands(two_by_two(), ["smooth mode=shape shape_pair_ratio=0.5"])
+
+
+def stretched_two_by_two() -> MeshModel:
+    """Two by two with the centre at the middle and the top right corner
+    pulled out: the shape step moves the centre towards that corner and
+    grows the spread of the count components through it."""
+    model = two_by_two((0.5, 0.5))
+    model.move_vertex("v2", 1.6, 1.0)
+    return model
+
+
+def spread_growth(before: MeshModel, after: MeshModel) -> float:
+    from blockdrawer.size import count_components
+
+    growth = 1.0
+    for component in count_components(before):
+        old = [before.edge_length(current) for current in component]
+        new = [after.edge_length(current) for current in component]
+        growth = max(growth, (max(new) / min(new)) / (max(old) / min(old)))
+    return growth
+
+
+class ShapeSpreadRatioTests(unittest.TestCase):
+    def test_no_count_component_spread_grows_past_the_limit(self) -> None:
+        base = stretched_two_by_two()
+        free = stretched_two_by_two()
+        unbounded = smooth_model(free, options=SmoothOptions(mode="shape"))
+        self.assertTrue(unbounded.applied, unbounded.reason)
+        self.assertGreater(spread_growth(base, free), 1.5)
+        self.assertAlmostEqual(unbounded.max_spread_growth, spread_growth(base, free))
+        self.assertIn("count component spreads grown at most", unbounded.reason)
+        limited = stretched_two_by_two()
+        result = smooth_model(limited, options=SmoothOptions(mode="shape", shape_spread_ratio=1.3))
+        self.assertTrue(result.applied, result.reason)
+        self.assertLessEqual(spread_growth(base, limited), 1.3 * (1.0 + 1e-6))
+        self.assertLessEqual(result.max_spread_growth, 1.3 * (1.0 + 1e-6))
+        self.assertIn("(limit 1.3)", result.reason)
+        self.assertLess(result.after["max_non_orthogonality"], result.before["max_non_orthogonality"])
+
+    def test_a_falling_spread_is_not_limited(self) -> None:
+        # The off-centre two by two evens its components out: every spread
+        # falls, so even a tight limit leaves the result as it was.
+        free = two_by_two((0.7, 0.65))
+        unbounded = smooth_model(free, options=SmoothOptions(mode="shape"))
+        limited = two_by_two((0.7, 0.65))
+        result = smooth_model(limited, options=SmoothOptions(mode="shape", shape_spread_ratio=1.01))
+        self.assertEqual(positions(free), positions(limited))
+        self.assertEqual(result.max_spread_growth, 1.0)
+        self.assertTrue(unbounded.applied)
+
+    def test_the_command_takes_the_limit(self) -> None:
+        model = stretched_two_by_two()
+        batch = apply_commands(model, ["smooth mode=shape shape_spread_ratio=1.3"])
+        result = batch.results[0].result
+        self.assertLessEqual(result["max_spread_growth"], 1.3 * (1.0 + 1e-6))
+        (note,) = batch_digest(model, batch)["notes"]
+        self.assertEqual(note["max_spread_growth"], result["max_spread_growth"])
+        self.assertEqual(smooth_module.SHAPE_SPREAD_RATIO, SmoothOptions().shape_spread_ratio)
+        with self.assertRaises(Exception):
+            apply_commands(stretched_two_by_two(), ["smooth mode=shape shape_spread_ratio=0.9"])
+
+
 def kinked_cross() -> MeshModel:
     """Four blocks whose centre lies on a straight horizontal block line
     (left side - centre - right side) while the vertical one is kinked by

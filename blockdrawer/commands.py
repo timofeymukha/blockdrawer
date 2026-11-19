@@ -29,7 +29,7 @@ from .projection import (
     PROJECTION_DIRECTIONS,
 )
 from .session import from_data, to_data
-from .smooth import SHAPE_LENGTH_RATIO
+from .smooth import SHAPE_LENGTH_RATIO, SHAPE_PAIR_RATIO, SHAPE_SPREAD_RATIO
 
 
 EDGE_SEPARATOR = "-"
@@ -689,6 +689,8 @@ def _run_smooth(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
         allow_stale_fold=args["allow_stale_fold"],
         slide=args["slide"],
         shape_length_ratio=args["shape_length_ratio"],
+        shape_pair_ratio=args["shape_pair_ratio"],
+        shape_spread_ratio=args["shape_spread_ratio"],
         keep_lines=args["keep_lines"],
     )
     result = smooth_model(
@@ -1157,10 +1159,15 @@ _register(CommandSpec(
         "result is applied only when the full sampled check stays untangled "
         "with no more severe faces and no higher maximum. mode=shape optimises "
         "the count-free block shape instead, before size sets counts and grading, "
-        "every edge keeping shape_length_ratio of its length. keep_lines=true "
+        "every edge keeping shape_length_ratio of its length (and, with "
+        "shape_pair_ratio, every interface pair its length ratio within that "
+        "factor; with shape_spread_ratio, no count component's length spread "
+        "growing past that factor). keep_lines=true "
         "moves a vertex on a straight block line only along it. "
         "slide=true also slides boundary vertices along their boundary. The "
-        "reason gives the shortest and longest edge over its input length."
+        "reason gives the shortest and longest edge over its input length "
+        "and, in shape mode, the largest change of an interface pair's length "
+        "ratio and the largest growth of a count component's spread."
     ),
     (
         Parameter(
@@ -1202,6 +1209,21 @@ _register(CommandSpec(
             "in shape mode, every edge keeps at least this fraction of its input "
             "length (0: unbounded)",
             required=False, default=SHAPE_LENGTH_RATIO,
+        ),
+        Parameter(
+            "shape_pair_ratio", "float",
+            "in shape mode, the length ratio of every interface pair (two edges "
+            "continuing each other through a vertex across a shared edge, the "
+            "pairs whose size jump quality reports) stays within this factor of "
+            "its input value (0: unbounded)",
+            required=False, default=SHAPE_PAIR_RATIO,
+        ),
+        Parameter(
+            "shape_spread_ratio", "float",
+            "in shape mode, no count component's length spread (longest over "
+            "shortest member, the cell-size ratio its one count puts between "
+            "them) grows past this factor of its input value (0: unbounded)",
+            required=False, default=SHAPE_SPREAD_RATIO,
         ),
         Parameter(
             "keep_lines", "bool",
@@ -2154,6 +2176,9 @@ def _note(result: CommandResult) -> dict[str, Any] | None:
             "max_band_change": data.get("max_band_change"),
             "min_edge_ratio": data.get("min_edge_ratio"),
             "min_edge": data.get("min_edge"),
+            "max_pair_change": data.get("max_pair_change") if data.get("mode") == "shape" else None,
+            "max_pair": data.get("max_pair") if data.get("mode") == "shape" else None,
+            "max_spread_growth": data.get("max_spread_growth") if data.get("mode") == "shape" else None,
             "reason": data.get("reason"),
         }
     if result.name == "slide_vertex":

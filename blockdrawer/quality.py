@@ -23,7 +23,7 @@ from typing import Any
 
 from .commands import edge_text
 from .domain import Block, EdgeKey, TopologyError, edge_key
-from .model import MeshModel
+from .model import MeshModel, transverse_edge
 from .sampling import ASPECT_LIMIT, SEVERE_NON_ORTHOGONALITY, BlockSample, ModelSample, sample_model
 
 
@@ -870,15 +870,9 @@ def _interface_quality(
     )
 
 
-def _transverse_edge(block: Block, shared: EdgeKey, vertex_id: str) -> EdgeKey:
-    """Return the block edge that meets ``shared`` at ``vertex_id``."""
-    for index in range(4):
-        candidate = edge_key(*block.directed_edge(index))
-        if candidate != shared and vertex_id in candidate:
-            return candidate
-    raise ValueError(  # pragma: no cover - blocks always have two edges per vertex
-        f"Block {block.id} has no transverse edge at {vertex_id}"
-    )
+# The edge of a block that meets a shared edge at a vertex: one side of an
+# interface pair (:meth:`MeshModel.interface_pairs`).
+_transverse_edge = transverse_edge
 
 
 def _num(value: float) -> str:

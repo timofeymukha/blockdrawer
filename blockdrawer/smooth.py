@@ -35,8 +35,13 @@ With ``keep_lines`` an interior vertex on a straight block line (two
 opposite ``line`` edges, collinear) is searched along that line only, and
 one on two such lines does not move, so prescribed wake lines and grid rows
 stay straight. In shape mode every edge keeps ``shape_length_ratio`` of its
-input length. The result reports the shortest and longest edge over its
-input length in both modes.
+input length; ``shape_pair_ratio`` keeps the length ratio of every interface
+pair (two edges continuing each other across a shared edge) within that
+factor of its input, and ``shape_spread_ratio`` keeps every count
+component's length spread (longest over shortest member) from growing past
+that factor. The result reports the shortest and longest edge over its
+input length in both modes, and in shape mode the largest pair-ratio change
+and spread growth.
 
 The result is verified at full resolution (:func:`sample_model`) and
 applied only when the model stays untangled, its severe-face count does not
@@ -69,6 +74,12 @@ MIN_CORNER_SINE = math.sin(math.radians(20.0))
 FALLBACK_SCALES = (0.5, 0.25, 0.125)
 # Shape mode's default floor on an edge's length over its input length.
 SHAPE_LENGTH_RATIO = 0.1
+# Shape mode's default limit on how far an interface pair's length ratio
+# may leave its input value (0: unbounded).
+SHAPE_PAIR_RATIO = 0.0
+# Shape mode's default limit on how far a count component's length spread
+# (longest over shortest member) may grow over its input value (0: unbounded).
+SHAPE_SPREAD_RATIO = 0.0
 # Two straight edges at a vertex are one block line when their directions
 # differ by at most this (degrees).
 LINE_ANGLE = 1.0
@@ -117,6 +128,19 @@ class SmoothOptions:
     # optimum can still collapse an edge, and sizing then has to resolve
     # the sliver with a forced-fine count.
     shape_length_ratio: float = SHAPE_LENGTH_RATIO
+    # In shape mode the length ratio of every interface pair - two edges
+    # continuing each other through a vertex across a shared edge, the
+    # pairs whose first-cell widths the quality screen's size jump compares
+    # (``MeshModel.interface_pairs``) - stays within this factor of its
+    # input value (0: unbounded): an edge shortened against the edge it
+    # continues is a size jump ``size`` has to grade away.
+    shape_pair_ratio: float = SHAPE_PAIR_RATIO
+    # In shape mode the length spread of every count component - its
+    # longest member over its shortest, the cell-size ratio its one shared
+    # count puts between them before any grading - may grow to at most this
+    # factor of its input value (0: unbounded). A spread that falls (the
+    # square cylinder's kites shrinking together) is never limited.
+    shape_spread_ratio: float = SHAPE_SPREAD_RATIO
     # An interior vertex on a straight block line - two internal edges at it
     # that share no block, both ``line`` and collinear within ``LINE_ANGLE``
     # degrees - moves only along that line; on two such lines it stays.
@@ -167,6 +191,14 @@ class SmoothResult:
     # line, and those that stayed because they sit on two.
     line_vertices: int = 0
     line_fixed: int = 0
+    # The largest factor by which an interface pair's length ratio left its
+    # input value (1 when none moved), and that pair (``a-b/c-d``).
+    max_pair_change: float = 1.0
+    max_pair: str | None = None
+    # In shape mode: the largest factor by which a count component's length
+    # spread grew (1 when none did), and its shortest member (``a-b``).
+    max_spread_growth: float = 1.0
+    spread_edge: str | None = None
 
     def to_data(self) -> dict[str, Any]:
         extra: dict[str, Any] = {}
@@ -199,6 +231,10 @@ class SmoothResult:
             "max_edge": self.max_edge,
             "line_vertices": self.line_vertices,
             "line_fixed": self.line_fixed,
+            "max_pair_change": self.max_pair_change,
+            "max_pair": self.max_pair,
+            "max_spread_growth": self.max_spread_growth,
+            "spread_edge": self.spread_edge,
             "scale": self.scale,
             "sweeps": self.sweeps,
             "minmax_rounds": self.minmax_rounds,
@@ -1087,18 +1123,9 @@ def _optimise(
     # The pairs the quality screen compares: across every internal edge the
     # transverse edges of its two blocks at each end (the size jump), and
     # the two edges of each block corner (the corner cell's aspect ratio).
-    for current, owners in state.edge_blocks.items():
-        if len(owners) != 2:
-            continue
-        for at in current:
-            transverse = []
-            for position in owners:
-                for other in state.block_edges[position]:
-                    if other != current and at in other:
-                        transverse.append(other)
-                        break
-            if len(transverse) == 2 and transverse[0] != transverse[1]:
-                add_pair(at, transverse[0], transverse[1], options.size_cap)
+    interface_pairs = model.interface_pairs()
+    for _shared, at, first, second in interface_pairs:
+        add_pair(at, first, second, options.size_cap)
     if options.aspect_cap > 0.0:
         for position, block in enumerate(state.blocks):
             for index in range(4):
@@ -1111,6 +1138,34 @@ def _optimise(
                 )
 
     floor = options.shape_length_ratio
+    pair_limit = options.shape_pair_ratio if options.mode == "shape" else 0.0
+    # Per edge, the edges it forms an interface pair with and the pair's
+    # input length ratio (this edge over the other).
+    pairs_of: dict[EdgeKey, dict[EdgeKey, float]] = {}
+    if pair_limit > 0.0:
+        for _shared, _at, first, second in interface_pairs:
+            if chords[first] > 0.0 and chords[second] > 0.0:
+                pairs_of.setdefault(first, {})[second] = chords[first] / chords[second]
+                pairs_of.setdefault(second, {})[first] = chords[second] / chords[first]
+
+    spread_limit = options.shape_spread_ratio if options.mode == "shape" else 0.0
+    # Per count component (those of size, cyclic pairs joined): its members
+    # and their input spread, longest over shortest chord.
+    component_of: dict[EdgeKey, int] = {}
+    members: list[list[EdgeKey]] = []
+    spread0: list[float] = []
+    if spread_limit > 0.0:
+        from .size import count_components  # size imports this module
+
+        for component in count_components(model):
+            kept = [current for current in component if current in chords]
+            lengths = [chords[current] for current in kept]
+            if not lengths or min(lengths) <= 0.0:
+                continue
+            for current in kept:
+                component_of[current] = len(members)
+            members.append(kept)
+            spread0.append(max(lengths) / min(lengths))
 
     def lengths_hold(vertex_ids) -> bool:
         """The length and size limits for the edges of the given vertices,
@@ -1118,10 +1173,30 @@ def _optimise(
         incident = {current for v in vertex_ids for current in state.vertex_edges.get(v, ())}
         if options.mode == "shape":
             # No cells yet, so no size limits: only the floor on each
-            # edge's length (a similarity scales a curve with its chord).
+            # edge's length (a similarity scales a curve with its chord)
+            # and, when asked, the interface pairs' length ratios.
+            length = {
+                current: abs(state.coords[current[0]] - state.coords[current[1]])
+                for current in incident
+            }
             if floor > 0.0:
                 for current in incident:
-                    if abs(state.coords[current[0]] - state.coords[current[1]]) < floor * chords[current]:
+                    if length[current] < floor * chords[current]:
+                        return False
+            if pair_limit > 0.0:
+                for current in incident:
+                    for other, ratio in pairs_of.get(current, {}).items():
+                        if other not in length:
+                            length[other] = abs(state.coords[other[0]] - state.coords[other[1]])
+                        if length[other] <= 0.0:
+                            return False
+                        change = length[current] / length[other] / ratio
+                        if change > pair_limit or change * pair_limit < 1.0:
+                            return False
+            if spread_limit > 0.0:
+                for index in {component_of[c] for c in incident if c in component_of}:
+                    lengths = [abs(state.coords[c[0]] - state.coords[c[1]]) for c in members[index]]
+                    if min(lengths) <= 0.0 or max(lengths) > spread_limit * spread0[index] * min(lengths):
                         return False
             return True
         if options.length_tolerance > 0.0:
@@ -1142,7 +1217,7 @@ def _optimise(
         return True
 
     def keeps_lengths(vertex_id: str, target: complex) -> bool:
-        if options.mode == "shape" and floor <= 0.0:
+        if options.mode == "shape" and floor <= 0.0 and pair_limit <= 0.0 and spread_limit <= 0.0:
             return True
         old = state.coords[vertex_id]
         state.coords[vertex_id] = target
@@ -1405,6 +1480,49 @@ def _edge_ratios(
     return low, low_edge, high, high_edge
 
 
+def _pair_change(
+    working: MeshModel, lengths_before: dict[EdgeKey, float],
+    pairs: Iterable[tuple[EdgeKey, str, EdgeKey, EdgeKey]], moved: Iterable[str],
+) -> tuple[float, str | None]:
+    """The largest factor by which an interface pair with a moved end left
+    its input length ratio, and that pair (``a-b/c-d``)."""
+    moved = set(moved)
+    worst, worst_pair = 1.0, None
+    for _shared, _at, first, second in pairs:
+        if not (moved & {*first, *second}):
+            continue
+        if lengths_before[first] <= 0.0 or lengths_before[second] <= 0.0:
+            continue
+        now = working.edge_length(first) / max(working.edge_length(second), 1.0e-300)
+        change = now / (lengths_before[first] / lengths_before[second])
+        change = max(change, 1.0 / change) if change > 0.0 else math.inf
+        if change > worst:
+            worst, worst_pair = change, f"{first[0]}-{first[1]}/{second[0]}-{second[1]}"
+    return worst, worst_pair
+
+
+def _spread_growth(
+    working: MeshModel, lengths_before: dict[EdgeKey, float], components: Iterable[list[EdgeKey]],
+) -> tuple[float, str | None]:
+    """The largest factor by which a count component's length spread
+    (longest over shortest member) grew over its input value, and that
+    component's shortest member now (``a-b``)."""
+    worst, worst_edge = 1.0, None
+    for component in components:
+        kept = [current for current in component if lengths_before.get(current, 0.0) > 0.0]
+        if len(kept) < 2 or len(kept) < len(component):
+            continue
+        old = [lengths_before[current] for current in kept]
+        new = [working.edge_length(current) for current in kept]
+        if min(new) <= 0.0:
+            return math.inf, None
+        growth = (max(new) / min(new)) / (max(old) / min(old))
+        if growth > worst:
+            shortest = kept[new.index(min(new))]
+            worst, worst_edge = growth, f"{shortest[0]}-{shortest[1]}"
+    return worst, worst_edge
+
+
 def _boundary_deviation(model: MeshModel, chains: dict, recut: dict) -> tuple[float, float]:
     """The largest distance of a re-cut edge from the input boundary, and
     the largest such distance over its chain's length."""
@@ -1441,6 +1559,10 @@ def smooth_model(
         raise TopologyError(f"smooth mode must be real or shape, got {options.mode!r}")
     if options.shape_length_ratio < 0.0 or options.shape_length_ratio >= 1.0:
         raise TopologyError("smooth needs 0 <= shape_length_ratio < 1")
+    if options.shape_pair_ratio != 0.0 and options.shape_pair_ratio <= 1.0:
+        raise TopologyError("smooth needs shape_pair_ratio > 1 (or 0: unbounded)")
+    if options.shape_spread_ratio != 0.0 and options.shape_spread_ratio <= 1.0:
+        raise TopologyError("smooth needs shape_spread_ratio > 1 (or 0: unbounded)")
     model.validate()
     free = select_free(model, blocks=blocks, bbox=bbox, hold=hold)
     lines: dict[str, complex] = {}
@@ -1478,8 +1600,12 @@ def smooth_model(
         band = 0.0
         edges_change = 0.0
         ratios = (1.0, None, 1.0, None)
+        pair = (1.0, None)
+        spread = (1.0, None)
         if working is not None:
             ratios = _edge_ratios(working, lengths_before, positions)
+            pair = _pair_change(working, lengths_before, pairs, positions)
+            spread = _spread_growth(working, lengths_before, components)
             for vertex_id, items in spokes.items():
                 for spoke in items:
                     a = working.vertices[spoke.wall]
@@ -1498,7 +1624,7 @@ def smooth_model(
             options.mode, real_before, real_after if applied else real_before,
             len(chains), slid_count if applied else 0, max_slide if applied else 0.0,
             boundary[0] if applied else 0.0, boundary[1] if applied else 0.0,
-            *ratios, len(lines), line_fixed,
+            *ratios, len(lines), line_fixed, *pair, *spread,
         )
 
     real_after: dict[str, Any] | None = None
@@ -1508,6 +1634,13 @@ def smooth_model(
 
     model_before = {vertex_id: (vertex.x, vertex.y) for vertex_id, vertex in model.vertices.items()}
     lengths_before = {current: model.edge_length(current) for current in model.edges()}
+    pairs = model.interface_pairs()
+    if shape:
+        from .size import count_components  # size imports this module
+
+        components = count_components(model)
+    else:
+        components = []
     if not free and not chains:
         return result(False, "nothing to gain: no free vertex (every vertex in scope is on a boundary, "
                       "held" + (f" or on two straight block lines ({line_fixed})" if line_fixed else "") + ")")
@@ -1557,6 +1690,14 @@ def smooth_model(
         ratios = _edge_ratios(working, lengths_before, scaled)
         if shape and ratios[0] < options.shape_length_ratio * (1.0 - 1.0e-6):
             continue  # a scaled path can pass closer than either end
+        if shape and options.shape_pair_ratio > 0.0 and _pair_change(
+            working, lengths_before, pairs, scaled
+        )[0] > options.shape_pair_ratio * (1.0 + 1.0e-6):
+            continue
+        if shape and options.shape_spread_ratio > 0.0 and _spread_growth(
+            working, lengths_before, components
+        )[0] > options.shape_spread_ratio * (1.0 + 1.0e-6):
+            continue
         boundary = _boundary_deviation(working, chains, recut)
         if boundary[1] > SLIDE_TOLERANCE:
             deviation_refusals.append(scale)
@@ -1607,6 +1748,17 @@ def smooth_model(
             "of their input"
             + (f" (floor {options.shape_length_ratio:g})" if shape and options.shape_length_ratio > 0.0 else "")
         )
+        if shape:
+            change, which = _pair_change(working, lengths_before, pairs, scaled)
+            growth, shortest = _spread_growth(working, lengths_before, components)
+            reason += (
+                f"; interface pair length ratios within {change:.3g} of their input"
+                + (f" ({which})" if which else "")
+                + (f" (limit {options.shape_pair_ratio:g})" if options.shape_pair_ratio > 0.0 else "")
+                + f"; count component spreads grown at most {growth:.3g} times"
+                + (f" (shortest member {shortest})" if shortest else "")
+                + (f" (limit {options.shape_spread_ratio:g})" if options.shape_spread_ratio > 0.0 else "")
+            )
         if options.keep_lines:
             reason += (
                 f"; {len(lines)} vertices on a straight block line moved only along it, "
