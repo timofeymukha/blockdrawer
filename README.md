@@ -1259,7 +1259,7 @@ size, polish, judge, deliver - is the repository skill
 [`.claude/skills/mesh-blocking/SKILL.md`](.claude/skills/mesh-blocking/SKILL.md),
 which Claude Code loads as a project skill and any other agent can read as a
 document; its reference files (`engine.md`, `sizing.md`, `failures.md`) and
-three worked example batches (`examples/`) sit beside it. It is kept in step
+four worked example batches (`examples/`) sit beside it. It is kept in step
 with the topology engine under `experiments/`.
 
 ## Tests

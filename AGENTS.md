@@ -37,7 +37,7 @@ them in the canvas widgets.
   opened from those steps: `engine.md` (the engine per configuration, its
   options and report), `sizing.md` (inputs, `verification`, measured
   limits, sizing by hand), `failures.md` (signature -> tool) and
-  `examples/` (three operator batches with their follow-on lines and
+  `examples/` (four operator batches - the C-grid one with a wake band by `fan=false` and `add_rows` - with their follow-on lines and
   checkMesh results; `tests/test_skill.py` builds them and checks that every
   command, flag, option and Makefile target named in code spans exists). The
   MCP instructions point at the steps by name and carry mechanics only.

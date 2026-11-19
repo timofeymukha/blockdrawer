@@ -175,6 +175,14 @@ class WorkedExampleTests(unittest.TestCase):
         model, _follow = self._build("naca0012.txt")
         self.assertEqual(len(model.blocks), 190)
 
+    def test_the_naca_cgrid_builds_with_an_open_trailing_edge(self) -> None:
+        model, follow = self._build("naca0012_cgrid.txt")
+        self.assertEqual(len(model.blocks), 443)
+        # No fan: the trailing edge r_0 is a corner of the two band blocks
+        # and the two wake blocks beside it, nothing else.
+        self.assertEqual(sum(1 for block in model.blocks if "r_0" in block.vertices), 4)
+        self.assertIn("size 5e-4 1.0 growth=1.2 wall_aspect=50", follow)
+
 
 if __name__ == "__main__":
     unittest.main()

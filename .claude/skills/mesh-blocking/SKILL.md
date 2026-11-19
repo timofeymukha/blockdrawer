@@ -20,7 +20,7 @@ there:
 | `engine.md` | you run the topology engine (`research_cli.py`): what it builds per configuration, its options, its report |
 | `sizing.md` | you choose `size`'s inputs, read its `verification`, or size by hand |
 | `failures.md` | `quality` or `check` names a defect: signature -> the tool that acts on it |
-| `examples/README.md` | before your own case: three batches to run end to end |
+| `examples/README.md` | before your own case: four batches to run end to end |
 
 Tool mechanics (arguments, defaults): `blockdrawer-cli commands`, MCP
 `list_commands`. **Kept in step with the engine (`experiments/agentic_topology/`):
@@ -33,15 +33,13 @@ and, if the route changes, the table below.**
   be left implied), far-field chains if given. Keep the supplied points;
   never resample from a picture.
 - **Physics**: Reynolds number and target first-point $y^+$ (first width in
-  `sizing.md`); incidence goes in the solver's velocity, the chord stays
-  aligned unless the brief gives rotated geometry. Far field: what the brief
-  says; at least 30 chords for external aerodynamics, a few body sizes for a
-  topology test.
-- **Patches**: every chain's name and role (`wall`, `patch` for
-  inlet/outlet/far field, `symmetry`, `cyclic` pairs with identical point
-  distributions related by one translation).
-- **Solver**: OpenFOAM finite volume, or spectral elements of order $p$ (then
-  counts are small and block curvature must be exact; `sizing.md`).
+  `sizing.md`); incidence goes in the solver's velocity unless the brief
+  gives rotated geometry. Far field: the brief's; at least 30 chords for
+  external aerodynamics, a few body sizes for a topology test.
+- **Patches**: every chain's name and role (`wall`, `patch`, `symmetry`,
+  `cyclic` pairs: identical point distributions, one translation apart).
+- **Solver**: OpenFOAM finite volume, or spectral elements of order $p$
+  (small counts, exact block curvature; `sizing.md`).
 - **Span**: pseudo-2D - `set_export_settings z_min_patch_type=empty
   z_max_patch_type=empty` (with `patch` z faces checkMesh's aspect ratio
   includes the span) - or a periodic slab with reciprocal `cyclic` z patches.
@@ -92,61 +90,63 @@ to be copied. Rules that follow from the table; the first that matches decides:
 
 ## Step 3 - Build
 
-**By hand** (`examples/README.md` has three complete batches):
+**By hand** (`examples/README.md` has four complete batches):
 
 1. `blockdrawer-cli new SESSION --box XMIN YMIN XMAX YMAX` (MCP `new_session`
    with `box`): one block; put it where a grid cell reuses it, or `remove_edge` it.
 2. `import_curve FILE name=NAME` for every body and chain.
 3. The layout, from the wall outwards:
    - `add_grid xs=... ys=... skip=...` - Cartesian stations, cells in skip
-     boxes, inside `outside=` curves or inside existing blocks left out.
-   - `add_grid center=X,Y rs=... thetas=... period=DEG outside=BODY` - a
-     polar patch (arcs), for O-rings and grooves.
+     boxes, inside `outside=` curves or inside existing blocks left out;
+     `add_grid center=X,Y rs=... thetas=... period=DEG` - a polar patch (arcs).
    - `add_ring CURVE HEIGHT count=N` - a wall band round a closed curve, a
      fan above 60 degrees of turning (one block to 90); `tips=true` adds a
      station at each rounded nose, `normals=140,180,220` where the outward
-     normal has those angles, `corner=DEG` sets which vertices are corners.
+     normal has those angles, `corner=DEG` sets which vertices are corners;
+     `fan=false` leaves a sharp trailing edge open for a wake band.
+   - Internal flow, a wall chain and no block yet: `add_ring WALL H side=left
+     xs=... start=0,1 end=0,1` - the band on the fluid's side of the point
+     order, its end spokes along the inlet and outlet lines.
+   - `add_rows edges=A-B,B-C direction=1,0 to_x=X stations=...` (`rows=N
+     growth=G`, `to_y=`, `distance=`) - a chain carried along a direction as
+     rows: an open trailing edge's spokes to the outlet (`spread=10` widens
+     them, else `size` carries the wall spacing out; `examples/naca0012_cgrid.txt`).
    - `add_band bbox=... height=H rows=N` - more rows along the unassigned
-     exterior edges in a box; `add_band bbox=... to_box=...` - carry them to
-     a rectangle (spokes at its corners: ring stations by `normals=` aimed
-     at them).
+     exterior edges in a box; `to_box=...` carries them to a rectangle
+     (spokes at its corners: ring stations by `normals=` aimed at them).
    - `add_stations CURVE xs=... id=x` (`count=`, `between=`, `fractions=`):
      standalone stations; `offset=DX,DY` copies them onto a periodic partner.
-   - `add_fill A,B,C,D` - blocks between what is built (a slot, a pocket;
-     three or five corners: round a centre), corners in order round it: a
-     side is the exterior chain joining its corners, else open (straight or
-     along `curve3=CURVE`) through the standalone vertices on it or new
-     stations facing the opposite side's; `side2=...` names one.
-   - `add_block_from_vertices A,B points=X,Y;X,Y` - one block, corners by ID or coordinates.
+   - `add_fill A,B,C,D` - blocks between what is built (three or five
+     corners: round a centre), corners in order round it: a side is the
+     exterior chain joining its corners, else open (straight or along
+     `curve3=CURVE`) through the standalone vertices on it or new stations
+     facing the opposite side's; `side2=...` names one.
+   - `add_block_from_vertices A,B points=X,Y;X,Y` - one block. `add_vertex
+     x_of=V y_of=W`, `at=V dx=...`, `r=... theta=... about=V`: level with,
+     offset from, polar about existing vertices - never type their coordinates.
    - `add_grid xs=... ys=... outside=BODIES` again for the H-grid round what
-     is built: existing vertices on its cell sides become stations. A station
-     list runs across the whole grid, so a box whose sides carry different
-     stations is refused in one grid ("would fall inside the existing edge"):
-     one `add_grid` per side of the box built it (two trials).
+     is built (existing vertices on its cell sides become stations); a box
+     whose sides carry different stations ("would fall inside the existing
+     edge"): one `add_grid` per side.
 4. `set_boundary_by NAME type=wall curves=BODY`, `set_boundary_by NAME
    type=patch bbox=...` per far-field side; `between=A,B` for a chain.
 5. `set_export_settings z_min_patch_type=empty z_max_patch_type=empty`.
 
-Run the batch with `blockdrawer-cli apply SESSION --in-place --quiet -f build.txt`
-(MCP: `edit_session commands_file=... in_place=true`). It is atomic. Go on
-when the digest lists the blocks and patches you meant and `describe SESSION
---unassigned --section summary` (MCP `describe_session` with
-`unassigned=true`) shows no unassigned exterior edge. A refusal names the
-block or edge: change a station, not the tool. Look at every corner and gap:
-`render SESSION -o x.png --bounds ...` (MCP `render_session`).
+Run it: `blockdrawer-cli apply SESSION --in-place --quiet -f build.txt` (MCP
+`edit_session commands_file=... in_place=true`), atomic. Go on when the
+digest lists the blocks and patches you meant and `describe SESSION
+--unassigned --section summary` (MCP `describe_session`) shows no unassigned
+exterior edge. A refusal names the block or edge: change a station, not the
+tool. Look at every corner and gap: `render` (MCP `render_session`).
 
 **By the engine**: `engine.md` - the command, the options the brief maps
 to, and the report terms. Go on when `admissible` is true; `resolved` is
 better. The engine writes `empty` z patches and its own patch names (merge
 with `set_edge_boundary`, rename with `rename_boundary`).
 
-Reading cost: `describe` and `quality_report` answer compactly by default; on
-hundreds of blocks ask for a region (`--bbox`, MCP `bbox`), one block
-(`--only`) or one edge's count component (`--component EDGE`). Run time, two
-cores at low priority: `size` 2.3 min at 240k cells and 3.5 min at 949
-blocks, `smooth` 6.3 min and one `repair_block` 3.2 min at 949 blocks, the
-engine's C-grid 8.5 min; set a timeout above that and wait - a second
-launch of the same command cost one trial 14 minutes.
+On hundreds of blocks read a region (`--bbox`), a block (`--only`) or a count
+component (`--component EDGE`). Two cores: `size` 2-12 min and `smooth` 6 min
+near 1000 blocks, the engine's C-grid 8.5 min; set a timeout above that.
 
 ## Step 4 - Shape
 

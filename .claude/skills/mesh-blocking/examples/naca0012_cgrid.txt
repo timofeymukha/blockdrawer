@@ -1,0 +1,35 @@
+#! new --box 20 20 21 21
+# (a placeholder block, removed at the end: every block here grows from the airfoil).
+import_curve naca0012_a5.dat name=naca
+# O-band 0.05 chords high, 40 edges by arc length, stations where the outward normal points at 135 and 225
+# degrees (the nose's ends); the trailing edge r_0 is left open: no fan, a spoke normal to each side (r_42, r_82).
+add_ring naca 0.05 count=40 normals=135,225 fan=false id=r
+set_boundary_by airfoil type=wall curves=naca
+# Wake band: the two trailing-edge spokes carried downstream to the outlet x = 15, rows at the given x,
+# ten times as wide there as at the trailing edge.
+add_rows edges=r_0-r_42,r_0-r_82 direction=1,0 to_x=15 stations=1.5,2.5,4,7,11 spread=10 id=w
+# Far field as rows carried from the band front: the nose (r_61..r_62) to the inlet, the upper and lower
+# fronts with the wake band's sides to the top and bottom (front ends from each note: l_10, u_135, d_135).
+add_rows edges=r_61-r_62 direction=-1,0 to_x=-10 rows=6 growth=1.8 id=l
+add_rows between=r_61,w_15 direction=0,1 to_y=10 rows=6 growth=1.8 id=u
+add_rows between=r_62,w_17 direction=0,-1 to_y=-10 rows=6 growth=1.8 id=d
+# The two corners: far-field corners level with the row ends (no typed coordinate), then a fill each.
+add_vertex x_of=l_10 y_of=u_135 id=TL
+add_vertex x_of=l_11 y_of=d_135 id=BL
+add_fill r_61,u_135,TL,l_10 id=ft
+add_fill r_62,l_11,BL,d_135 id=fb
+remove_edge v0-v1
+set_boundary_by inlet type=patch bbox=-10,-10,-10,10
+set_boundary_by outlet type=patch bbox=15,-10,15,10
+set_boundary_by top type=patch bbox=-10,10,15,10
+set_boundary_by bottom type=patch bbox=-10,-10,15,-10
+set_export_settings z_min_patch_type=empty z_max_patch_type=empty
+
+# Follow-on, after the build (shape, size, polish):
+#> smooth mode=shape allow_stale_fold=true
+#> size 5e-4 1.0 growth=1.2 wall_aspect=50
+#> smooth
+# checkMesh: 14,393 cells, Mesh OK, max non-orthogonality 38.1, 0 faces above 70, max skewness 0.57,
+# max aspect ratio 308. At a first width of 1e-4 the trailing edge's chordwise cells run up the column
+# above it to the top (aspect 1356, 10 faces above 70: checkMesh fails); without spread=10 the wake
+# band carried them to the outlet (aspect 6390).
