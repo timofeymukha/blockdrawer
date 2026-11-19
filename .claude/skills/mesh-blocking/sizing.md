@@ -101,8 +101,10 @@ $$
 `verification.result` what `size` returns; both at 256 cells a side, and at
 real counts for every block with a face above 65 degrees. Each move is
 checked as it is made, and spending is undone where the result would hold
-more faces above 70, a worst face more than 0.5 degrees higher, a fold, or
-skewness past 4. So:
+more faces above 70, a worst face more than 0.5 degrees higher, a fold,
+skewness past 4 or cells past aspect ratio 1000. A field state that folds
+where the input at its own counts did not is first regraded towards
+uniform; a fold left is refused (`failures.md`). So:
 
 - `result` above 70 degrees where `field` was not: cannot happen; report it.
 - `field` with faces above 70: the counts the field gives a block leave

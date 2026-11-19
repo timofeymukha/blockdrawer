@@ -138,6 +138,40 @@ def _catmull_rom_coefficients(
     )
 
 
+def spline_hooks(path) -> list[int]:
+    """The segments of a through-point Catmull-Rom path (OpenFOAM's spline,
+    as ``edge_points`` evaluates it) that run backwards along their own
+    chord somewhere: a segment much shorter than its neighbour takes a
+    tangent several times its own length and loops (an end segment 0.0014
+    long beside one 0.0165 long ran back along 2 percent of its edge), so
+    nodes graded into it come out of order and the cells beside them fold.
+    """
+    path = tuple((float(x), float(y)) for x, y in path)
+    if len(path) < 3:
+        return []
+    evaluator = _SplinePathEvaluator.from_path(path)
+    hooks = []
+    for segment in range(len(path) - 1):
+        (x0, y0), (x1, y1) = path[segment], path[segment + 1]
+        length = math.hypot(x1 - x0, y1 - y0)
+        if length <= 0.0:
+            continue
+        ux, uy = (x1 - x0) / length, (y1 - y0) / length
+        cx = evaluator.x_coefficients[segment]
+        cy = evaluator.y_coefficients[segment]
+        # d/dt of the position along the chord: a + b t + c t^2 on [0, 1].
+        a = cx[1] * ux + cy[1] * uy
+        b = 2.0 * (cx[2] * ux + cy[2] * uy)
+        c = 3.0 * (cx[3] * ux + cy[3] * uy)
+        values = [a, a + b + c]
+        if c != 0.0 and 0.0 < -b / (2.0 * c) < 1.0:
+            t = -b / (2.0 * c)
+            values.append(a + b * t + c * t * t)
+        if min(values) < -1.0e-9 * length:
+            hooks.append(segment)
+    return hooks
+
+
 _MAX_CACHED_SPLINE_PATH_POINTS = 4096
 
 

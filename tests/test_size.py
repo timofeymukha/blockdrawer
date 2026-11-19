@@ -751,3 +751,71 @@ class AspectRatioTests(unittest.TestCase):
         self.assertFalse(_aspect_worse(1800.0, 40, 2400.0, 40))
         self.assertTrue(_aspect_worse(1800.0, 40, 1700.0, 41))
         self.assertFalse(_aspect_worse(1800.0, 40, 900.0, 0))
+
+
+HOOKED_WALL = [(0.0, 0.0), (0.011883, -0.001113), (0.028296, -0.002506), (0.029717, -0.002608)]
+
+
+def hooked_block() -> MeshModel:
+    """The round-2 high-lift's main-element ring edge m_33-m_34 and its
+    band front 0.003 above: two splines whose last segment (0.0014) is
+    twelve times shorter than the one before it, walls below and at the
+    right end."""
+    from blockdrawer.domain import EdgeGeometry, Vertex
+
+    front = [(x, y + 0.003) for x, y in HOOKED_WALL]
+    model = MeshModel(box=(0.0, -0.0026, 0.0297, 0.0004))
+    for name, (x, y) in (("v0", HOOKED_WALL[0]), ("v1", HOOKED_WALL[-1]), ("v2", front[-1]), ("v3", front[0])):
+        model.vertices[name] = Vertex(name, x, y)
+    model.edge_geometry[("v0", "v1")] = EdgeGeometry("spline", tuple(HOOKED_WALL[1:-1]))
+    model.edge_geometry[("v2", "v3")] = EdgeGeometry("spline", tuple(reversed(front[1:-1])))
+    model.validate()
+    return apply_commands(model, WALL + ["set_edge_boundary v0-v1 wall", "set_edge_boundary v1-v2 wall"]).model
+
+
+HOOKED_OPTIONS = SizeOptions(2.0e-4, 0.002, growth=1.15, wall_aspect=25.0, keep_counts=True)
+
+
+class FoldTests(unittest.TestCase):
+    def test_a_short_end_segment_hooks_and_cells_graded_into_it_fold(self) -> None:
+        from blockdrawer.model import spline_hooks
+        from blockdrawer.sampling import sample_model
+
+        self.assertEqual(spline_hooks(HOOKED_WALL), [2])
+        self.assertEqual(spline_hooks([(0.0, 0.0), (0.01, -0.001), (0.02, -0.0015), (0.03, -0.0016)]), [])
+        model = apply_commands(hooked_block(), ["set_edge_cells v0-v1 19", "set_edge_cells v1-v2 18"]).model
+        self.assertEqual(sample_model(model, None).summary()["folded_cells"], 0)
+        # Graded fine at v1, nodes land in the loop: a column folds.
+        model = apply_commands(model, ["set_edge_grading v0-v1 total_ratio 0.4764 propagate=true"]).model
+        self.assertEqual(sample_model(model, None).summary()["folded_cells"], 18)
+
+    def test_size_unfolds_what_its_grading_folds(self) -> None:
+        from blockdrawer.sampling import sample_model
+
+        # The counts stay (19 by 18, untangled when uniform); the field
+        # grades the wall fine towards the corner wall at v1, into the loop.
+        model = apply_commands(hooked_block(), ["set_edge_cells v0-v1 19", "set_edge_cells v1-v2 18"]).model
+        self.assertEqual(sample_model(model, None).summary()["folded_cells"], 0)
+        result = size_model(model, HOOKED_OPTIONS)
+        self.assertEqual(result.verification["result"]["folded_cells"], 0)
+        self.assertEqual(sample_model(model, None).summary()["folded_cells"], 0)
+        (repair,) = [move for move in result.moves if move["kind"] == "shape"]
+        # The smallest change that unfolds: a quarter of the way to uniform.
+        self.assertAlmostEqual(repair["to"], 0.25 * repair["from"])
+
+    def test_a_fold_no_move_removes_is_refused_naming_the_hooked_edge(self) -> None:
+        from unittest import mock
+
+        from blockdrawer import size as size_module
+
+        model = apply_commands(hooked_block(), ["set_edge_cells v0-v1 19", "set_edge_cells v1-v2 18"]).model
+        before = to_data(model)
+        with mock.patch.object(size_module, "SHAPE_REPAIRS", 0):
+            with self.assertRaises(TopologyError) as caught:
+                size_model(model, HOOKED_OPTIONS)
+        text = str(caught.exception)
+        self.assertIn("folds", text)
+        self.assertIn("b0", text)
+        self.assertIn("v0-v1 (segment 3 of 3", text)
+        self.assertIn("control point 1", text)
+        self.assertEqual(to_data(model), before)

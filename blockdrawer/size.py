@@ -627,25 +627,28 @@ def size_model(
     budget = None
     field_cells = _state_cells(working, state)
     field_cost = _jump_cost(state, options)
-    skew_floor = _max_skewness(model)
+    skew_floor, fold_floor = _floors(model)
     if options.keep_counts:
         # The counts stay: spending may regrade strips for continuity but
         # pays for no raise (its budget is the cells there are), so the
         # regrades an earlier size made are made again, not discarded.
-        state, moves, guard = _spend(working, state, options, field_cells, skew_floor)
+        state, moves, guard = _spend(working, state, options, field_cells, skew_floor, fold_floor)
         state["budget_binding"] = None
     else:
         budget = options.budget if options.budget else int(round(DEFAULT_BUDGET * field_cells))
-        state, moves, guard = _spend(working, state, options, budget, skew_floor)
+        state, moves, guard = _spend(working, state, options, budget, skew_floor, fold_floor)
         if options.split:
             state, moves, guard = _continuity_splits(
                 working, field_, state, moves, guard, options, budget, blocks, bbox, splits, refused,
-                skew_floor,
+                skew_floor, fold_floor,
             )
     field_grading = None
     if options.grading == "field":
         state, field_grading = _field_pass(working, state, options)
     _write(working, state, options)
+    folded = state.get("verification", {}).get("result", {}).get("folded_blocks") or []
+    if folded and fold_floor == 0:
+        raise TopologyError(_fold_refusal(working, folded))
     skewness = _max_skewness(working)
     if skewness > SKEWNESS_LIMIT >= skew_floor:
         raise TopologyError(
@@ -738,7 +741,59 @@ def _brief(summary: dict) -> dict:
         "worst_aspect_block": summary.get("worst_aspect_block"),
         "high_aspect_cells": summary.get("high_aspect_cells", 0),
         "high_aspect_blocks": summary.get("high_aspect_blocks", []),
+        "folded_blocks": summary.get("folded_blocks", []),
     }
+
+
+def _fold_refusal(model: MeshModel, folded: list) -> str:
+    """Why ``size`` refuses a result that folds where its input did not:
+    the blocks, and the spline edges among theirs that hook back along
+    their chord (``spline_hooks``), the usual cause."""
+    from .model import spline_hooks
+
+    by_id = {block.id: block for block in model.blocks}
+    hooked = []
+    for block, _count in folded:
+        for k in range(4):
+            current = edge_key(*by_id[block].directed_edge(k))
+            geometry = model.edge_geometry.get(current)
+            if geometry is None or geometry.kind != "spline" or current in (item[0] for item in hooked):
+                continue
+            path = [(model.vertices[current[0]].x, model.vertices[current[0]].y), *geometry.points,
+                    (model.vertices[current[1]].x, model.vertices[current[1]].y)]
+            segments = spline_hooks(path)
+            if segments:
+                lengths = [math.dist(a, b) for a, b in zip(path, path[1:])]
+                hooked.append((current, segments, lengths))
+    cells = sum(count for _block, count in folded)
+    named = ", ".join(f"{block} ({count})" for block, count in folded[:8])
+    more = f" and {len(folded) - 8} more" if len(folded) > 8 else ""
+    text = (
+        f"size refused: the sized mesh folds {cells} sampled cell(s) in {named}{more} where the "
+        "input at its own counts folds none, and no regrade or count raise of those blocks "
+        "unfolded them"
+    )
+    if hooked:
+        parts = []
+        for current, segments, lengths in hooked[:6]:
+            k = segments[0]
+            beside = max((lengths[j] for j in (k - 1, k + 1) if 0 <= j < len(lengths)), default=0.0)
+            # The interior point at the short segment's end (control
+            # point index, from 0), the one beside the longer neighbour.
+            point = 0 if k == 0 else k - 1 if k == len(lengths) - 1 or lengths[k - 1] >= lengths[k + 1] else k
+            parts.append(
+                f"{'-'.join(current)} (segment {k + 1} of {len(lengths)}, {lengths[k]:.3g} long beside "
+                f"{beside:.3g}; control point {point})"
+            )
+        text += (
+            ": the spline edge(s) " + "; ".join(parts) + " run backwards along their chord - a "
+            "segment much shorter than its neighbour loops, and cells graded into the loop fold. "
+            "Remove the control point named (remove_control_point EDGE INDEX) or make the edge "
+            "a line (set_edge_type), then size again"
+        )
+    else:
+        text += "; render the blocks and see failures.md"
+    return text
 
 
 def _neighbours(model: MeshModel) -> dict[str, set[str]]:
@@ -1666,7 +1721,7 @@ def _stranded(state: dict, options: SizeOptions) -> dict[EdgeKey, tuple[float, f
 
 
 def _continuity_splits(working, field_, state, moves, guard, options, budget, blocks, bbox, splits, refused,
-                       skew_floor=None):
+                       skew_floor=None, fold_floor=None):
     """Split strips the spent state leaves stranded, then solve and spend
     again; a round is kept only when it lowers the jump cost without
     raising the worst jump."""
@@ -1679,12 +1734,13 @@ def _continuity_splits(working, field_, state, moves, guard, options, budget, bl
         if not _split_strips(working, field_, {"two_ended": stranded}, options, splits, refused):
             break
         trial = _solve(working, field_, options, blocks, bbox)
-        trial, trial_moves, trial_guard = _spend(working, trial, options, budget, skew_floor)
+        trial, trial_moves, trial_guard = _spend(working, trial, options, budget, skew_floor, fold_floor)
         promised = state["verification"]["field"]
         verified = trial["verification"]["result"]
         if (_jump_cost(trial, options) >= _jump_cost(state, options)
                 or _max_jump(trial) > _max_jump(state) * (1.0 + 1.0e-9)
                 or verified["severe_faces"] > promised["severe_faces"]
+                or verified["folded_cells"] > promised["folded_cells"]
                 or verified["max_non_orthogonality"] > promised["max_non_orthogonality"] + VERIFY_TOLERANCE
                 or _aspect_worse(promised["max_aspect_ratio"], promised["high_aspect_cells"],
                                  verified["max_aspect_ratio"], verified["high_aspect_cells"])):
@@ -1756,9 +1812,23 @@ def _verify(model: MeshModel, neighbours: dict[str, set[str]]) -> tuple[dict[str
             for block in sorted(blocks, key=lambda block: (-blocks[block]["max_aspect_ratio"], block))
             if blocks[block]["max_aspect_ratio"] > ASPECT_LIMIT
         ],
+        # The blocks with folded cells, most first: [block, cells].
+        "folded_blocks": [
+            [block, blocks[block]["folded_cells"]]
+            for block in sorted(blocks, key=lambda block: (-blocks[block]["folded_cells"], block))
+            if blocks[block]["folded_cells"]
+        ],
         "real_count_blocks": len(hot),
     }
     return blocks, summary
+
+
+def _floors(model: MeshModel) -> tuple[float, int]:
+    """The input's sampled skewness and folded cells at its own counts."""
+    from .sampling import sample_model
+
+    summary = sample_model(model, VERIFY_CELLS).summary()
+    return summary.get("max_skewness", 0.0), summary.get("folded_cells", 0)
 
 
 def _max_skewness(model: MeshModel) -> float:
@@ -1799,7 +1869,8 @@ def _jump_cost(state: dict, options: SizeOptions) -> float:
     return sum(_pair_cost(widths[a], widths[b], cap) for a, b in _pair_list(state["links"]))
 
 
-def _spend(model: MeshModel, state: dict, options: SizeOptions, budget: int, skew_floor: float | None = None):
+def _spend(model: MeshModel, state: dict, options: SizeOptions, budget: int, skew_floor: float | None = None,
+           fold_floor: int | None = None):
     """Spend cells on continuity, greedily, never taking a move that does
     not pay.
 
@@ -1815,7 +1886,8 @@ def _spend(model: MeshModel, state: dict, options: SizeOptions, budget: int, ske
     grid of the blocks it touches and their neighbours: a move that folds
     a cell, adds a face above 70 degrees or takes the skewness above 4 when
     it was below is undone and not tried again. ``repair_shape`` runs
-    first (see there); ``skew_floor`` is the input's sampled skewness.
+    first (see there); ``skew_floor`` is the input's sampled skewness,
+    ``fold_floor`` its folded cells.
     """
     from .sampling import sample_model
 
@@ -2256,7 +2328,73 @@ def _spend(model: MeshModel, state: dict, options: SizeOptions, budget: int, ske
                 release_mode[index] = added
             make_move(kind, index, value, 0 if kind == "release" else added)
 
+    def repair_folds() -> None:
+        """Unfold each block the field's counts and gradings fold when the
+        input, at its own counts, folded none - most folded cells first.
+
+        A spline edge whose short end segment loops back along its chord
+        (``model.spline_hooks``) is untangled at coarse even spacing and
+        folds once nodes are graded into the loop (the round-2 high-lift's
+        main-element ring: 46 cells in four blocks). Moves: a strip through
+        the block a quarter, half, three quarters or all the way towards
+        uniform, past the field's bound at an end if need be (a fold fails
+        checkMesh, a coarser end cell does not), which moves its nodes out
+        of the loop, before ``shape_trials``' raises; the move with the
+        fewest folds left, then the smallest change, is taken when the
+        neighbourhood's folded cells fall and it does not take the skewness
+        past 4 nor cross the aspect ratio limit (faces above 70 degrees are
+        allowed). A block no move unfolds is left; ``size_model`` then
+        refuses."""
+        exhausted: set[str] = set()
+        for _repair in range(SHAPE_REPAIRS):
+            sampled = sample_model(trial, VERIFY_CELLS, planar=True)
+            targets = sorted(
+                (item for item in sampled.blocks
+                 if item.folded_cells and item.block_id not in exhausted and item.block_id in by_id),
+                key=lambda item: (-item.folded_cells, item.block_id),
+            )
+            if not targets:
+                break
+            worst = by_id[targets[0].block_id]
+            local = sorted(neighbours.get(worst.id, {worst.id}))
+            base = verdict(local, VERIFY_CELLS)
+            # Towards uniform in quarters, past the field's bound if need
+            # be: a fold fails checkMesh, a coarser end does not.
+            keys = [edge_key(*worst.directed_edge(k)) for k in range(4)]
+            trials = []
+            for index in sorted({strip_of[k] for k in keys}):
+                if index in released:
+                    continue
+                for share in (0.75, 0.5, 0.25, 0.0):
+                    trials.append(("regrade", index, share * logs[index], 0))
+            trials += [trial_ for trial_ in shape_trials(worst) if trial_[0] == "raise"]
+            best_trial = None
+            for paid in (False, True):
+                for kind, index, value, added in trials:
+                    if (kind == "raise") != paid:
+                        continue
+                    if kind == "regrade" and abs(value - logs[index]) <= 1.0e-9:
+                        continue
+                    result = try_move(kind, index, value, local)
+                    if (result[2] > SKEWNESS_LIMIT >= base[2]
+                            or _aspect_worse(base[4], base[5], result[4], result[5])):
+                        continue
+                    # Fewest folds, then the smallest change of grading.
+                    change = abs(value - logs[index]) if kind == "regrade" else math.inf
+                    score = (result[0], change, result[1], result[3])
+                    if result[0] < base[0] and (best_trial is None or score < best_trial[0]):
+                        best_trial = (score, kind, index, value, added)
+                if best_trial is not None:
+                    break
+            if best_trial is None:
+                exhausted.add(worst.id)
+                continue
+            _score, kind, index, value, added = best_trial
+            make_move(kind, index, value, added)
+
     scoped_strips_set = set(scoped_strips)
+    if fold_floor == 0:
+        repair_folds()
     repair_shape()
     repair_aspect()
     # The field's state as repaired: what the returned state is verified

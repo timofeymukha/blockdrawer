@@ -978,6 +978,20 @@ undone if it folds a cell, adds a face above 70 degrees, raises the worst
 face past the field's, takes checkMesh's skewness past 4 or takes the
 aspect ratio past 1000 (or, above it, adds cells there); blocks left above
 1000 are named in the note and in `verification`'s `high_aspect_blocks`.
+When the input at its own counts folds nothing, a block the field state
+folds is regraded first, a strip through it a quarter of the way to uniform
+or further (past the field's bound at an end if need be), and a result that
+still folds is refused: the refusal names the blocks and the spline edges
+among theirs that run backwards along their chord, with the control point
+to remove. Such an edge is the usual cause - OpenFOAM's Catmull-Rom spline
+loops in a segment much shorter than its neighbour, and nodes graded into
+the loop come out of order. The round-2 high-lift build has 49 such
+edges among the 202 splines of its rings and band fronts (on the main
+element a last segment 0.0014 long beside 0.0165); its block map folded at
+even spacing only from 32 cells a side, at its input counts not at all, and
+the default sizing graded four blocks into the loops (46 folded cells,
+negative volumes in blockMesh). Four regrades towards uniform now remove
+them all.
 On the round-2 blunt plate (whose default sizing failed checkMesh at
 1846, 1018 after the polish) two releases of its wake strips took the
 field state to 559 and the polished result to 585, with 79,194 cells

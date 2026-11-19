@@ -71,7 +71,10 @@ them in the canvas widgets.
   here in serializers and algorithms; `model.py` re-exports them only for backward
   compatibility.
 - `blockdrawer/model.py`: authoritative model state, edge/curve evaluation, and
-  global validation. `MeshModel.interface_pairs()` is the one definition of the
+  global validation. `spline_hooks(path)` lists the segments of a
+  Catmull-Rom path that run backwards along their own chord (a segment much
+  shorter than its neighbour takes a tangent several times its length and
+  loops; `size` names them when it refuses a fold). `MeshModel.interface_pairs()` is the one definition of the
   interface pairs (across every internal edge, at each end, the two blocks'
   transverse edges, `transverse_edge`) that `quality`'s size jump, `size`
   and `smooth` use. Vertices may be standalone or shared by counter-clockwise
@@ -382,7 +385,19 @@ them in the canvas widgets.
   cells and the fine 30P30N gained 7 and 53 faces above 70): a fold, more
   faces above 70 degrees, a worst face above the field's plus
   `VERIFY_TOLERANCE` or skewness crossing 4 undoes it and makes it tabu.
-  Before spending, `repair_shape`, judging at 256 a side, raises a
+  Before spending, when the input at its own counts folds no cell,
+  `repair_folds` takes each block the field state folds (most folded
+  first) and regrades a strip through it a quarter, half, three quarters
+  or all the way to uniform - past the field's bound at an end if need be
+  - taking the move with the fewest folds left, then the smallest change,
+  before trying a raise; the fold it removes is a spline edge looping back
+  in a short end segment (`model.spline_hooks`) with nodes graded into the
+  loop (round-2 high-lift: 46 cells in four main-element ring blocks, all
+  removed by four regrades). A result that still folds where the input did
+  not is refused by `size_model` naming the blocks and, per hooked spline
+  edge among theirs, the segment, its length beside its neighbour's and
+  the control point to remove (`_fold_refusal`); the continuity rounds keep
+  folds too. Then `repair_shape`, judging at 256 a side, raises a
   component, flattens a strip or gives a side its opposite side's grading
   in the block the field leaves above skewness 4 when the input was below
   (folds refused, faces above 70 allowed: checkMesh fails only the
