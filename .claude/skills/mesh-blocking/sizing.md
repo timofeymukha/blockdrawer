@@ -65,9 +65,10 @@ $$
   polish. The polish keeps a jump below 5 below 5 (`size_ceiling`; three
   cylinders once went 4.73 -> 5.20); one already above 5 may grow a tenth.
 - The first width is a bound, not a value: a spoke shares its count with
-  its component and its strip's series (one total ratio for every member,
-  so a spoke's first width is in proportion to its length), and the
-  surplus makes the wall end finer. `first_width` in the result gives each
+  its component, and where `grading=field` cannot give it its own series
+  (`grading=strip`, or a strip its guard refused) its strip's one total
+  ratio makes its first width proportional to its length and the surplus
+  makes the wall end finer. `first_width` in the result gives each
   wall patch's smallest and largest first cell height normal to the wall
   at its band spokes against the one asked, naming the two spokes (edges
   leaving the wall more than 45 degrees from its normal, such as a wake
@@ -76,21 +77,21 @@ $$
   wall, 4.05e-4 .. 5.23e-4 for 5e-4 and 0.00144 .. 0.00193 for 0.002 (up
   to 28 percent finer). A spoke leaving the wall obliquely (a
   trailing-edge fan, a corner) gets the larger size the field asks along
-  it. For a hard $y^+$ ceiling ask a little coarser, try `grading=field`,
-  or set the spokes' `start_width` by hand (`set_edge_grading`) as the
-  last sizing step: a later `size`, `keep_counts=true` included, regrades
-  them.
-- `grading=field` (off by default): after spending, each strip member is
+  it. For a hard $y^+$ ceiling ask a little coarser, or set the spokes'
+  `start_width` by hand (`set_edge_grading`) as the last sizing step: a
+  later `size`, `keep_counts=true` included, regrades them.
+- `grading=field` (the default; `grading=strip` leaves it out): after
+  spending, each strip member is
   graded at its count by the field where it lies - a wall spoke starts at
   the first width asked, an edge far from walls relaxes instead of
   carrying a wall's clustering out (cells 4e-4 wide and 0.25 tall at a
   far-field corner) - where the shear, the interface jumps (worst not
   above the spent one or 2.5) and the sampled grid allow; counts do not
-  change. `field_grading` says how many strips took it. Measured on the 11
-  example and benchmark sessions (README): NACA 4412 C-grid max 69.85 ->
-  30.98 degrees and its spokes exact; three cylinders, cylinder channel,
-  U-bend spokes exact; no session gained a face above 70; blunt plate and
-  cascade unchanged at the wall. Compare by `check`.
+  change. `field_grading` says how many strips took it. Default since the
+  20-session corpus (README): jumps above 2.5 257 -> 177, worst spoke
+  first height 20 -> 13 percent off on average, NACA 4412 68.6 -> 45.1
+  degrees, no session worse by the rule. The high-lift flap stays 84
+  percent fine: its spokes' count is tied to the far-field fills.
 - `keep_counts=true` keeps every count, recomputes the gradings and
   regrades strips for continuity without raising a count (after moving
   vertices or setting a count by hand).

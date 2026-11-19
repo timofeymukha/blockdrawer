@@ -65,11 +65,12 @@ same physical way on both, so a sized pair meshes face by face. The model's
 own count components do not join a pair, so a strip that holds a cyclic
 edge is not split (its partner would not be).
 
-With ``grading=field`` a last pass gives each strip member its own series
-at the final count (``_FieldGrading``): a wall spoke starts at the first
-width asked, an edge far from walls relaxes to what the field wants there,
-within the shear, interface-jump and sampled-grid limits of
-``_FieldGrading.settle``; counts are not changed.
+With ``grading=field`` (the default; ``grading=strip`` leaves it out) a
+last pass gives each strip member its own series at the final count
+(``_FieldGrading``): a wall spoke starts at the first width asked, an edge
+far from walls relaxes to what the field wants there, within the shear,
+interface-jump and sampled-grid limits of ``_FieldGrading.settle``; counts
+are not changed.
 
 Counts and gradings are written directly: spacing links are kept and the
 ones left out of sync are reported. Everything is deterministic and applied
@@ -184,10 +185,11 @@ class SizeOptions:
     # "directional" (this module) or "distance" (item 3's wall-distance
     # sizing, size_distance.py).
     method: str = "directional"
-    # "strip": every member of a strip shares one total ratio; "field":
-    # each member is graded by the field where it lies, within the strip's
-    # count and SHEAR_ANGLE of its neighbours (_FieldGrading).
-    grading: str = "strip"
+    # "field" (the default since its corpus measurement, README): each
+    # member is graded by the field where it lies, within the strip's
+    # count and SHEAR_ANGLE of its neighbours (_FieldGrading); "strip":
+    # every member of a strip keeps the one total ratio spending left.
+    grading: str = "field"
 
     def check(self, model: MeshModel) -> None:
         if not (self.first_width > 0.0 and self.core_size >= self.first_width):

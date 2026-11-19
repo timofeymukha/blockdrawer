@@ -443,8 +443,9 @@ them in the canvas widgets.
   bounds and spends with a budget of the cells there are (regrades only, no
   raise), so an earlier sizing's regrades are made again: three cylinders
   after its polish, worst jump 23.5 and 30 above 5 before, 6.53 and 13 now
-  (6.15 and 12 before re-sizing). `grading=field` (off by default, the
-  measured table is in the README) adds `_field_pass` after spending:
+  (6.15 and 12 before re-sizing). `grading=field` (the default since the
+  20-session corpus measurement in the README; `grading=strip` leaves it
+  out) adds `_field_pass` after spending:
   one shared ratio per strip makes its members' end widths proportional to
   their lengths (every wall spoke's first width over its length was equal
   within each strip on the benchmark) and carries a wall member's
@@ -460,11 +461,12 @@ them in the canvas widgets.
   70, skewness past 4, nor a worst face above min(`SHEAR_ANGLE`, the spent
   state's worst) that was not there; refused strips are retried with their
   refused interface partners; the pass is verified like spending and
-  dropped whole if worse. Counts never change. Measured: NACA 4412 max
-  non-orthogonality 69.85 -> 30.98, wall spokes exact; it failed the
-  default rule on the blunt plate (its band strip refused by the guard) and
-  the cascade (an oblique trailing-edge spoke takes the field's directional
-  size, widening the reported first-width range).
+  dropped whole if worse. Counts never change. Made the default by a rule
+  fixed beforehand (no session gains a face above 70, a jump above 5 or a
+  checkMesh failure; corpus jumps above 2.5 do not rise; no maximum +2
+  degrees; cells +5 percent; no wall patch's worst first-height deviation
+  +5 points and the mean falls): every term held, jumps above 2.5 257 ->
+  177, mean worst deviation 20.4 -> 12.7 percent.
 - `blockdrawer/construct.py`: construction operators behind the registry
   commands `add_grid`, `add_band`, `add_ring`, `add_stations`, `add_fill`
   and `set_boundary_by`, derived

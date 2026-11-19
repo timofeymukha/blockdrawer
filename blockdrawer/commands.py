@@ -1350,11 +1350,11 @@ _register(CommandSpec(
                   "continuity, no count is raised (after a smoothing or a hand count)",
                   required=False, default=False),
         Parameter("grading", "choice",
-                  "strip: opposite sides through a strip share one total ratio; field: "
-                  "a last pass grades each edge by the field where it lies at its count (a "
-                  "wall spoke starts at the first width, far edges relax) where the shear, "
-                  "the interface jumps and the sampled grid allow; counts unchanged",
-                  required=False, default="strip", choices=("strip", "field")),
+                  "field (default): a last pass grades each edge by the field where it lies "
+                  "at its count (a wall spoke starts at the first width, far edges relax) "
+                  "where the shear, the interface jumps and the sampled grid allow; counts "
+                  "unchanged; strip: opposite sides through a strip keep one total ratio",
+                  required=False, default="field", choices=("field", "strip")),
         Parameter("blocks", "blocks", "only these blocks' edges are graded (default: all)",
                   required=False, default=()),
         Parameter("bbox", "numbers", "only blocks with a corner inside xmin,ymin,xmax,ymax",

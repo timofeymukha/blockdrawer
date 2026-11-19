@@ -570,7 +570,7 @@ class FieldGradingTests(unittest.TestCase):
     def test_short_and_long_spokes_get_the_asked_first_width(self) -> None:
         spokes = [edge_key("w0", "t0"), edge_key("w1", "t1"), edge_key("w2", "t2")]
         shared = band()
-        size_model(shared, SizeOptions(0.001, 0.1, growth=1.2))
+        size_model(shared, SizeOptions(0.001, 0.1, growth=1.2, grading="strip"))
         widths = [shared.edge_width_at_vertex(spoke, spoke[1]) for spoke in spokes]
         # One shared ratio: the first width in proportion to the length.
         self.assertGreater(max(widths) / min(widths), 1.3)
@@ -585,7 +585,7 @@ class FieldGradingTests(unittest.TestCase):
 
         options = dict(first_width=0.001, core_size=1.0, growth=1.2, split=False)
         shared = column()
-        size_model(shared, SizeOptions(**options))
+        size_model(shared, SizeOptions(**options, grading="strip"))
         graded = column()
         size_model(graded, SizeOptions(**options, grading="field"))
         bottom, top = edge_key("a0", "b0"), edge_key("a4", "b4")
@@ -611,7 +611,7 @@ class FieldGradingTests(unittest.TestCase):
         # size's aspect repair shears it by 10 degrees to release them.)
         options = dict(first_width=0.001, core_size=0.5, growth=1.2, split=False)
         shared = _blocks(*_rectangle_column())
-        size_model(shared, SizeOptions(**options))
+        size_model(shared, SizeOptions(**options, grading="strip"))
         graded = _blocks(*_rectangle_column())
         size_model(graded, SizeOptions(**options, grading="field"))
         self.assertEqual(graded.edge_grading, shared.edge_grading)
@@ -642,6 +642,14 @@ class FieldGradingTests(unittest.TestCase):
         self.assertRegex(note["field_grading"], r"^\d+ own, \d+ part, \d+ shared of \d+ strips")
         with self.assertRaises(TopologyError):
             size_model(column(), SizeOptions(0.001, 1.0, grading="nope"))
+
+    def test_field_is_the_default_and_strip_leaves_it_out(self) -> None:
+        default = apply_commands(column(), ["size 0.001 1.0 growth=1.2"])
+        field = apply_commands(column(), ["size 0.001 1.0 growth=1.2 grading=field"])
+        self.assertEqual(to_data(default.model), to_data(field.model))
+        strip = apply_commands(column(), ["size 0.001 1.0 growth=1.2 grading=strip"])
+        self.assertIsNone(strip.results[0].result["field_grading"])
+        self.assertIsNotNone(default.results[0].result["field_grading"])
 
 
 class KeepCountsTests(unittest.TestCase):

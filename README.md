@@ -867,7 +867,7 @@ replayed up to the shape line; the two engine sessions as the engine wrote
 them) and nine of the ten above (the three-cylinder engine session is the
 same file in both rounds) - each with the default chain: the shape step,
 the session's `size` line (the brief's widths, `wall_aspect=25` unless the
-session's own line said otherwise, no `budget`, no `grading=field`), the
+session's own line said otherwise, no `budget`, `grading=strip` then the default), the
 polish, then `quality`'s sampled verdict at 256 cells a side. Each cell
 reads: maximum non-orthogonality / faces above 70 / interface jumps above
 2.5, above 5. Above 150k cells only no shape, the default, pair 2.5 and
@@ -1040,7 +1040,7 @@ repair's moves do not lower; after the polish checkMesh counts 6 at 85.8
 degrees (12 at the default budget), where the previous fixed sizing gave 0
 at 68.8. Check fine sessions and correct those blocks by hand.
 
-`grading=field` (off by default) addresses two benchmark findings: the
+`grading=field` (the default; `grading=strip` leaves the pass out) addresses two benchmark findings: the
 first width of a wall spoke drifted from the one asked (within a strip
 every spoke's first width over its length was the same, so short spokes
 came out finer: -16 percent on the NACA 4412, -28 on the U-bend), and
@@ -1073,6 +1073,45 @@ round 1; cells are equal; no face above 70 in either):
 | three cylinders | 64.83 -> 64.76 | 18.25 -> 18.07 | 3.97 -> 3.96 | 26 -> 23 | 6.15 (46/12/0) -> 5.75 (16/4/0) | -19..-0% -> -0..+0% |
 | NACA 4412 | 69.85 -> 30.98 | 6.48 -> 7.29 | 0.87 -> 0.86 | 80 -> 67 | 3.83 (21/0/0) -> 3.04 (4/0/0) | -16..+254% -> -0..+256% |
 | high-lift | 61.41 -> 61.80 | 12.17 -> 11.57 | 3.84 -> 3.65 | 112 -> 95 | 6.54 (25/5/0) -> 5.78 (28/1/0) | -54..+285% -> -43..+385% |
+
+It became the default after a re-measurement with the aspect-ratio and
+fold repairs in place, by a rule fixed beforehand: on the 20-session
+corpus (the eleven round-2 trials, five round-1 builds, the three skill
+examples, the engine's square cylinder; each through the default shape
+step, `size` with its own line, the polish) no session may gain a face
+above 70, a jump above 5 or a checkMesh failure, the corpus total of jumps
+above 2.5 may not rise, no maximum may rise more than 2 degrees, no
+session's cells more than 5 percent, no wall patch's worst first-height
+deviation (normal to the wall at its band spokes, against the width asked)
+more than 5 points, and the corpus mean of that deviation must fall. Every
+term held: jumps above 2.5 257 -> 177, mean worst deviation 20.4 -> 12.7
+percent over 44 patches, largest maximum rise 1.15 degrees (bluff ground),
+cells equal (counts do not change), the one checkMesh failure (round-2
+high-lift, skewness 4.07 -> 4.05 in a far-field block) on both sides.
+Sampled verdict after the polish, default `strip` -> `field`:
+
+| session | cells | >70 | max (sampled) | jumps >2.5 | >5 | worst first-height deviation, % | checkMesh |
+|---|---|---|---|---|---|---|---|
+| eng_square_cylinder | 5,184 | 0 -> 0 | 52.16 -> 52.16 | 0 -> 0 | 0 -> 0 | 57 -> 57 (sq) | OK |
+| r2_y_junction | 40,828 | 0 -> 0 | 39.97 -> 39.99 | 0 -> 0 | 0 -> 0 | 11 -> 5 (bottom); 18 -> 5 (branch_left); 18 -> 5 (branch_right); 6 -> 5 (top_downstream); 6 -> 5 (top_upstream) | OK |
+| ex_backward_step | 21,750 | 0 -> 0 | 0.00 -> 0.00 | 0 -> 0 | 0 -> 0 | 2 -> 0 (lower_wall_downstream); 2 -> 2 (lower_wall_upstream); 2 -> 2 (step); 2 -> 0 (upper_wall) | OK |
+| r2_u_bend | 22,700 | 0 -> 0 | 42.61 -> 42.29 | 0 -> 0 | 0 -> 0 | 14 -> 5 (divider); 13 -> 5 (outer_wall) | OK |
+| r1_u_bend | 24,010 | 0 -> 0 | 20.88 -> 20.57 | 0 -> 0 | 0 -> 0 | 13 -> 5 (divider); 32 -> 5 (outer_wall) | OK |
+| r2_cylinder_channel | 17,248 | 0 -> 0 | 35.22 -> 34.96 | 0 -> 0 | 0 -> 0 | 12 -> 5 (bottom); 14 -> 5 (cylinder); 25 -> 5 (top) | OK |
+| r1_cylinder_channel | 21,824 | 0 -> 0 | 35.62 -> 35.21 | 0 -> 0 | 0 -> 0 | 15 -> 5 (bottom); 14 -> 5 (cylinder); 19 -> 5 (top) | OK |
+| r2_nozzle | 14,620 | 0 -> 0 | 11.48 -> 12.01 | 0 -> 0 | 0 -> 0 | 14 -> 5 (lower_wall); 14 -> 5 (upper_wall) | OK |
+| r2_cascade | 50,778 | 0 -> 0 | 68.50 -> 60.57 | 0 -> 0 | 0 -> 0 | 15 -> 16 (blade) | OK |
+| r1_cascade | 55,417 | 0 -> 0 | 60.70 -> 60.68 | 6 -> 7 | 1 -> 1 | 38 -> 38 (blade) | OK |
+| ex_naca0012 | 59,908 | 0 -> 0 | 48.60 -> 48.27 | 4 -> 2 | 0 -> 0 | 21 -> 15 (airfoil) | OK |
+| r2_blunt_plate | 79,194 | 0 -> 0 | 36.00 -> 30.93 | 0 -> 0 | 0 -> 0 | 17 -> 13 (plate) | OK |
+| r1_blunt_plate | 88,942 | 0 -> 0 | 29.53 -> 25.58 | 8 -> 4 | 4 -> 0 | 16 -> 13 (plate) | OK |
+| r2_three_cylinders | 56,069 | 0 -> 0 | 64.83 -> 64.77 | 46 -> 16 | 10 -> 4 | 23 -> 5 (cylinder_a); 15 -> 5 (cylinder_b); 14 -> 5 (cylinder_c) | OK |
+| ex_grooved_tandem | 47,616 | 0 -> 0 | 20.51 -> 20.67 | 4 -> 4 | 0 -> 0 | 50 -> 24 (cyl1); 49 -> 24 (cyl2) | OK |
+| r2_airfoil_tunnel | 113,164 | 0 -> 0 | 30.95 -> 27.40 | 0 -> 0 | 0 -> 0 | 18 -> 5 (airfoil); 14 -> 5 (ceiling); 14 -> 5 (floor) | OK |
+| r2_naca4412 | 205,506 | 0 -> 0 | 68.60 -> 45.12 | 21 -> 8 | 0 -> 0 | 17 -> 5 (airfoil) | OK |
+| r2_bluff_ground | 235,582 | 0 -> 0 | 44.24 -> 45.39 | 18 -> 12 | 0 -> 0 | 29 -> 29 (body); 14 -> 14 (ground) | OK |
+| r2_high_lift | 292,143 | 1807 -> 1391 | 79.91 -> 77.26 | 125 -> 96 | 37 -> 29 | 84 -> 84 (flap); 12 -> 12 (main); 12 -> 11 (slat) | fails (skewness) |
+| r1_high_lift | 331,921 | 0 -> 0 | 61.41 -> 61.80 | 25 -> 28 | 5 -> 1 | 15 -> 8 (flap); 56 -> 46 (main); 29 -> 29 (slat) | OK |
 
 It is not the default because it failed the rule set for that (on every
 session: no new face above 70, skewness below 4, max non-orthogonality
