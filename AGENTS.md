@@ -119,7 +119,8 @@ them in the canvas widgets.
   `_note`. A note's values are scalars, short strings or flat lists, since
   the text digest elides nested ones: `size`'s (`_size_note`) gives
   `total_cells`, `field_cells`, `budget`, `budget_binding`, the field and
-  result verdicts in one `verification` string, `first_width` per wall
+  result verdicts in one `verification` string (faces above 70, worst
+  face, skewness, aspect ratio and, above 1000, the cells and block), `first_width` per wall
   patch (smallest..largest first cell height normal to the wall at its
   band spokes, `quality.wall_first_widths`, against the asked one in
   percent, and the two spokes named), `worst_jump` (quality's interface measure on the sized session,
@@ -151,8 +152,10 @@ them in the canvas widgets.
   `blockdrawer.sampling`, the summary an `interior` block, and `verdict()`
   the numbers a hand-built session is judged by: valid (validates and
   exports), untangled, real counts (no block coarsened), worst sampled
-  non-orthogonality with block and location, severe faces. Folded cells and
-  interior non-orthogonality above the threshold become warnings. Every
+  non-orthogonality with block and location, severe faces, skewness and
+  the cell aspect ratio with its block and the cells above 1000. Folded
+  cells, interior non-orthogonality above the threshold and cells above
+  checkMesh's aspect limit become warnings naming the block. Every
   warning carries a rank (folded first, then angle defects by degrees from
   90, then size defects by ratio to their limit); `ranked_warnings(N)` and
   `max_warnings` list the worst N, and `worst_blocks` ranks by folded cells
@@ -191,7 +194,18 @@ them in the canvas widgets.
   the boundary measure. The boundary formula on the benchmark cascade's
   periodic side read 5.25 where checkMesh read 3.26; coupled it gives
   3.259 = checkMesh, and the sheared periodic strip in the tests matches
-  checkMesh's 53 faces above 70 and skewness 0.45. `blocks=` samples a
+  checkMesh's 53 faces above 70 and skewness 0.45. It also measures
+  checkMesh's cell aspect ratio (`_AspectTally`,
+  `primitiveMeshTools::cellClosedness`: the largest over the smallest sum
+  of the face area vectors' Cartesian component magnitudes over the solved
+  directions, x and y when both z patches are `empty` (`aspect_depth`),
+  else x, y, z and the hydraulic ratio; a coarsened sampled cell's sides
+  divided by the real cells they span) into `max_aspect_ratio`,
+  `worst_aspect_cell` and `high_aspect_cells` (above `ASPECT_LIMIT` =
+  1000, checkMesh's) per block, and the summary's `worst_aspect_block`;
+  it equalled checkMesh to two decimals on the eleven round-2 benchmark
+  sessions and on a default-sized blunt plate (1846.52, 217 cells).
+  `blocks=` samples a
   subset, leaving out faces shared with blocks outside it (and a coupled
   side whose partner's block is left out). `smooth` and `size` refuse a
   result above 4 (checkMesh's limit) from an input below it.

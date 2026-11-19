@@ -617,7 +617,17 @@ mesh above 4); sampled and checkMesh values agreed to two decimals on the
 engine, 30P30N and sized sessions. Faces on a `cyclic` pair are measured as
 the coupled faces checkMesh sees, against the partner cell across the pair
 (measured as plain boundary faces they read skewness 5.25 on a periodic
-cascade where checkMesh read 3.26). Beside it, the corner
+cascade where checkMesh read 3.26). It gives checkMesh's cell aspect ratio
+too (`primitiveMeshTools::cellClosedness`: per cell the sums of the
+magnitudes of each Cartesian component of its face area vectors, the
+largest over the smallest across the solved directions - x and y when both
+z patches are `empty`, else also z with the hydraulic ratio), with the
+block of the worst cell and the cells above checkMesh's limit of 1000,
+each such block warned by name; on the eleven sessions of benchmark round
+2 the sampled maximum equalled checkMesh's to two decimals, and on a
+default-sized blunt plate it read 1846.52 and 217 cells above 1000 as
+checkMesh did. The measure is Cartesian: a thin cell at 45 degrees reads 1.
+`size` reports it in its verification but does not act on it. Beside it, the corner
 screen reports per-block corner angles measured from the first mesh cell,
 non-orthogonality, equiangle skewness, corner cell aspect ratios, cell-to-cell
 growth, and the cell size jump across every internal edge, with warnings at

@@ -300,8 +300,11 @@ def quality_report(
     ``interior_cells`` a side; 0 skips it) with blockMesh's interpolation,
     and each face's non-orthogonality is measured as checkMesh does: the
     ``verdict`` says whether the session is valid and exports, whether any
-    sampled cell folds, the worst non-orthogonality and where, and how many
-    faces exceed 70 degrees. The corner screen adds first-cell corner
+    sampled cell folds, the worst non-orthogonality and where, how many
+    faces exceed 70 degrees, the worst face skewness and checkMesh's cell
+    aspect ratio with the block of the worst cell (checkMesh fails above
+    1000). Per wall patch it gives the first cell height normal to the wall
+    at the band spokes (``first_widths``). The corner screen adds first-cell corner
     angles, aspect ratios, growth and size jumps across internal edges;
     check_mesh remains the authority. Thresholds default to angle 30-150
     degrees, non-orthogonality 65 degrees, cell aspect 100, cell growth 1.3,

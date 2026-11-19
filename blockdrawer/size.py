@@ -700,7 +700,10 @@ def _field_pass(working: MeshModel, state: dict, options: SizeOptions) -> tuple[
             or summary["max_skewness"] > SKEWNESS_LIMIT >= spent["max_skewness"]):
         record["dropped"] = "the verification at 256 cells a side found the pass worse than the spent state"
         return state, record
-    brief = {key: summary[key] for key in ("severe_faces", "max_non_orthogonality", "max_skewness", "folded_cells")}
+    brief = {key: summary[key] for key in (
+        "severe_faces", "max_non_orthogonality", "max_skewness", "folded_cells",
+        "max_aspect_ratio", "worst_aspect_block", "high_aspect_cells",
+    )}
     trial_state["verification"] = {**state["verification"], "result": brief}
     return trial_state, record
 
@@ -745,7 +748,10 @@ def _size_by_distance(model, options, blocks, bbox) -> SizeResult:
             f"checkMesh's limit of {SKEWNESS_LIMIT:g} where the input's was {skew_floor:.3g}"
         )
     verdict = _verify(working, _neighbours(working))[1]
-    brief = {key: verdict[key] for key in ("severe_faces", "max_non_orthogonality", "max_skewness", "folded_cells")}
+    brief = {key: verdict[key] for key in (
+        "severe_faces", "max_non_orthogonality", "max_skewness", "folded_cells",
+        "max_aspect_ratio", "worst_aspect_block", "high_aspect_cells",
+    )}
     result = _report(working, cells_before, old.components, old.splits, old.refused, old.budget_factor, old.note,
                      options)
     result.budget = options.budget
@@ -1666,6 +1672,8 @@ def _verify(model: MeshModel, neighbours: dict[str, set[str]]) -> tuple[dict[str
             "folded_cells": item.folded_cells,
             "max_non_orthogonality": item.max_non_orthogonality,
             "max_skewness": item.max_skewness,
+            "max_aspect_ratio": item.max_aspect_ratio,
+            "high_aspect_cells": item.high_aspect_cells,
         }
         for item in coarse.blocks
     }
@@ -1684,12 +1692,18 @@ def _verify(model: MeshModel, neighbours: dict[str, set[str]]) -> tuple[dict[str
                     "folded_cells": item.folded_cells,
                     "max_non_orthogonality": item.max_non_orthogonality,
                     "max_skewness": max(item.max_skewness, blocks[item.block_id]["max_skewness"]),
+                    "max_aspect_ratio": item.max_aspect_ratio,
+                    "high_aspect_cells": item.high_aspect_cells,
                 }
     summary = {
         "severe_faces": sum(item["severe_faces"] for item in blocks.values()),
         "folded_cells": sum(item["folded_cells"] for item in blocks.values()),
         "max_non_orthogonality": max((item["max_non_orthogonality"] for item in blocks.values()), default=0.0),
         "max_skewness": max((item["max_skewness"] for item in blocks.values()), default=0.0),
+        # checkMesh's cell aspect ratio, reported only: nothing in size acts on it.
+        "max_aspect_ratio": max((item["max_aspect_ratio"] for item in blocks.values()), default=0.0),
+        "worst_aspect_block": max(blocks, key=lambda block: blocks[block]["max_aspect_ratio"], default=None),
+        "high_aspect_cells": sum(item["high_aspect_cells"] for item in blocks.values()),
         "real_count_blocks": len(hot),
     }
     return blocks, summary
@@ -2202,6 +2216,9 @@ def _spend(model: MeshModel, state: dict, options: SizeOptions, budget: int, ske
             "max_non_orthogonality": summary.get("max_non_orthogonality", 0.0),
             "max_skewness": summary.get("max_skewness", 0.0),
             "folded_cells": summary.get("folded_cells", 0),
+            "max_aspect_ratio": summary.get("max_aspect_ratio", 0.0),
+            "worst_aspect_block": summary.get("worst_aspect_block"),
+            "high_aspect_cells": summary.get("high_aspect_cells", 0),
         }
 
     verification = {

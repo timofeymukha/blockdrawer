@@ -327,3 +327,25 @@ class WallFirstWidthTests(unittest.TestCase):
         text = format_quality(report)
         self.assertIn("first cell height normal to the wall", text)
         self.assertIn("wall: 0.01..0.1 at v0-v3..v1-v2, 2 spoke(s), 0 other edge(s)", text)
+
+
+class AspectVerdictTests(unittest.TestCase):
+    def test_a_cell_above_checkmesh_aspect_limit_is_named(self) -> None:
+        model = MeshModel(box=(0.0, 0.0, 1.0, 0.0005))
+        model.z_min_patch_type = model.z_max_patch_type = "empty"
+        report = assess_quality(model, interior_cells=16)
+        verdict = report.verdict()
+        self.assertAlmostEqual(verdict["max_aspect_ratio"], 2000.0, places=6)
+        self.assertEqual(verdict["worst_aspect_block"], "b0")
+        # The box has 10 by 10 cells, each 0.1 by 0.00005.
+        self.assertEqual(verdict["high_aspect_cells"], 100)
+        self.assertEqual(report.summary()["interior"]["high_aspect_cells"], 100)
+        self.assertTrue(any(
+            warning.startswith("Block b0: sampled cell aspect ratio 2000 exceeds checkMesh's 1000")
+            for warning in report.warnings
+        ))
+        self.assertIn("max aspect ratio 2000 in b0 (100 cell(s) above 1000: checkMesh fails)", format_quality(report))
+        fine = assess_quality(MeshModel(), interior_cells=16)
+        self.assertEqual(fine.verdict()["high_aspect_cells"], 0)
+        self.assertNotIn("checkMesh fails", format_quality(fine))
+        self.assertIsNone(assess_quality(MeshModel()).verdict()["max_aspect_ratio"])

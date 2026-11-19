@@ -24,7 +24,7 @@ from typing import Any
 from .commands import edge_text
 from .domain import Block, EdgeKey, TopologyError, edge_key
 from .model import MeshModel
-from .sampling import SEVERE_NON_ORTHOGONALITY, BlockSample, ModelSample, sample_model
+from .sampling import ASPECT_LIMIT, SEVERE_NON_ORTHOGONALITY, BlockSample, ModelSample, sample_model
 
 
 # The interior sampling cap the CLI and the MCP server use by default: at
@@ -187,6 +187,11 @@ class QualityReport:
             "folded_cells": None,
             # checkMesh's face skewness; it fails a mesh above 4.
             "max_skewness": None,
+            # checkMesh's cell aspect ratio; it fails a mesh above 1000.
+            "max_aspect_ratio": None,
+            "worst_aspect_block": None,
+            "high_aspect_cells": None,
+            "aspect_limit": ASPECT_LIMIT,
         }
         if self.interior is not None and self.blocks:
             summary = self.interior.summary()
@@ -199,6 +204,9 @@ class QualityReport:
                 "severe_faces": summary["severe_faces"],
                 "folded_cells": summary["folded_cells"],
                 "max_skewness": summary["max_skewness"],
+                "max_aspect_ratio": summary["max_aspect_ratio"],
+                "worst_aspect_block": summary["worst_aspect_block"],
+                "high_aspect_cells": summary["high_aspect_cells"],
             })
         return data
 
@@ -418,6 +426,11 @@ def format_quality(
             + f"; {verdict['severe_faces']} face(s) above "
             f"{_num(verdict['severe_threshold'])}°; max skewness {_num(verdict['max_skewness'])}"
             + (" (checkMesh fails above 4)" if verdict["max_skewness"] > 4.0 else "")
+            + f"; max aspect ratio {_num(verdict['max_aspect_ratio'])} in {verdict['worst_aspect_block']}"
+            + (
+                f" ({verdict['high_aspect_cells']} cell(s) above {_num(ASPECT_LIMIT)}: checkMesh fails)"
+                if verdict["high_aspect_cells"] else ""
+            )
         )
         lines.append(
             f"  interior (sampled, checkMesh's face measure): cell angles "
@@ -757,6 +770,15 @@ def _block_quality(
                 + (f" at ({_num(at[0])}, {_num(at[1])})" if at else "")
             )
             ranks.append((_ANGLE, interior.max_non_orthogonality))
+        if interior.high_aspect_cells:
+            at = interior.worst_aspect_cell
+            warnings.append(
+                f"Block {block.id}: sampled cell aspect ratio "
+                f"{_num(interior.max_aspect_ratio)} exceeds checkMesh's {_num(ASPECT_LIMIT)} "
+                f"({interior.high_aspect_cells} cell(s))"
+                + (f" at ({_num(at[0])}, {_num(at[1])})" if at else "")
+            )
+            ranks.append((_SIZE, interior.max_aspect_ratio / limits.cell_aspect_ratio))
 
     return BlockQuality(
         block.id,

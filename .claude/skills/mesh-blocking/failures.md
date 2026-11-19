@@ -54,6 +54,7 @@ shows why.
 | Component length ratio far above 20 in the engine report | band-to-core coupling (a topology defect); far-field fan-out alone is informational | change the topology |
 | A band that thins to nothing on a thin body | the annular producer's inscribed-disk cap | the engine's C-grid producer |
 | A gate slid off a sharp vertex | the sharp vertex must be a block corner | pin it and re-spread the gates (engine `candidates`/`apply --move`), or `split_edge` |
+| `quality`/`size` aspect ratio above 1000 ("High aspect ratio cells found" in checkMesh) in a strip running from a wall to an outlet | wall spacing carried along a strip far from the wall | `size ... grading=field`, then a `start_width` by hand on the strip's edges at the outlet (`set_edge_grading`); re-read `quality` (a blunt plate's wake strips: 1846, 1008 with `grading=field`, 479 with two hand widths) |
 | checkMesh aspect ratio in the tens of thousands on a pseudo-2D case | `patch` z faces: the span counts | `set_export_settings z_min_patch_type=empty z_max_patch_type=empty` |
 | Negative volumes beside a mitred station in a script-built layout | spline interior points from the plain normal while the end stations carry the mitre | build interior points from the local normal and correct them linearly onto both end stations (the operators already do) |
 

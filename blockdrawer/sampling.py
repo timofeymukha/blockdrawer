@@ -50,6 +50,9 @@ SEVERE_NON_ORTHOGONALITY = 70.0
 # A sampled cell is severe when a corner is within this many degrees of 0 or
 # 180: for a sheared cell that is checkMesh's 70 degrees of non-orthogonality.
 SEVERE_ANGLE = 90.0 - SEVERE_NON_ORTHOGONALITY
+# checkMesh's cell aspect ratio limit (primitiveMesh::aspectThreshold_): a
+# cell above it is a "High aspect ratio cells found" failure.
+ASPECT_LIMIT = 1000.0
 
 
 @dataclass(frozen=True)
@@ -60,6 +63,10 @@ class BlockGrid:
     nodes: tuple[tuple[Point, ...], ...]
     x_cells: int
     y_cells: int
+    # The real node indices kept along x and y (empty: every node, or the
+    # count-free shape grid).
+    x_indices: tuple[int, ...] = ()
+    y_indices: tuple[int, ...] = ()
 
     @property
     def sampled_cells(self) -> tuple[int, int]:
@@ -132,7 +139,7 @@ def block_grid(
         )
         for b in range(len(y_indices))
     )
-    return BlockGrid(block.id, nodes, x_cells, y_cells)
+    return BlockGrid(block.id, nodes, x_cells, y_cells, tuple(x_indices), tuple(y_indices))
 
 
 @dataclass(frozen=True)
@@ -165,9 +172,82 @@ def cell_angles(
     return measured[0]
 
 
+@dataclass
+class _AspectTally:
+    """checkMesh's cell aspect ratio over a grid's cells
+    (``primitiveMeshTools::cellClosedness``).
+
+    checkMesh sums the magnitudes of each Cartesian component of a cell's
+    face area vectors and, over the mesh's solved directions, takes the
+    largest sum over the smallest. A side face over the segment (ex, ey)
+    extruded by the depth has the area vector (ey, -ex) times the depth and
+    the two z faces (0, 0, area). With both z patches ``empty`` only x and y
+    are solved and the depth cancels: max(sum |ex|, sum |ey|) over the
+    smaller. Otherwise all three are, and checkMesh also takes the
+    hydraulic ratio sum / 6 / volume^(2/3). The measure is Cartesian, so a
+    long thin cell at 45 degrees reads 1.
+
+    A sampled cell of a coarsened grid spans several real cells; its sides
+    are divided by the real cells they span before measuring, which assumes
+    the real cells inside it are alike.
+    """
+
+    depth: float | None
+    worst: float = 0.0
+    worst_at: Point | None = None
+    high: int = 0
+
+    def add(self, quad: Sequence[Point], area: float, along: int, across: int) -> None:
+        sum_x = sum_y = 0.0
+        for index in range(4):
+            (x0, y0), (x1, y1) = quad[index], quad[(index + 1) % 4]
+            # Sides 0 and 2 run along x (spanning ``along`` real cells),
+            # sides 1 and 3 along y (``across``).
+            span = along if index % 2 == 0 else across
+            sum_x += abs(y1 - y0) / span
+            sum_y += abs(x1 - x0) / span
+        low, high = min(sum_x, sum_y), max(sum_x, sum_y)
+        if self.depth is None:
+            ratio = high / low if low > 0.0 else math.inf
+        else:
+            area = area / (along * across)
+            sums = (sum_x * self.depth, sum_y * self.depth, 2.0 * area)
+            ratio = max(sums) / min(sums) if min(sums) > 0.0 else math.inf
+            volume = area * self.depth
+            if volume > 0.0:
+                ratio = max(ratio, sum(sums) / 6.0 / volume ** (2.0 / 3.0))
+        if ratio > ASPECT_LIMIT:
+            self.high += along * across
+        if ratio > self.worst or self.worst_at is None:
+            self.worst = max(self.worst, ratio)
+            self.worst_at = (
+                0.25 * (quad[0][0] + quad[1][0] + quad[2][0] + quad[3][0]),
+                0.25 * (quad[0][1] + quad[1][1] + quad[2][1] + quad[3][1]),
+            )
+
+
+def aspect_depth(model: MeshModel) -> float | None:
+    """The cell depth checkMesh's aspect ratio sees, ``None`` when both z
+    patches are ``empty`` (a 2D mesh, where the depth does not count)."""
+    if model.z_min_patch_type == "empty" and model.z_max_patch_type == "empty":
+        return None
+    return (model.z_max - model.z_min) / model.z_cells
+
+
+def _spans(indices: Sequence[int], count: int) -> list[int]:
+    """Real cells per sampled cell along one direction."""
+    if not indices:
+        return [1] * count
+    return [second - first for first, second in zip(indices, indices[1:])]
+
+
 def _measure_cells(
-    nodes: Grid, severe_angle: float, stop_at_fold: bool, *, centroids: bool
+    nodes: Grid, severe_angle: float, stop_at_fold: bool, *, centroids: bool,
+    aspect: _AspectTally | None = None, spans: tuple[Sequence[int], Sequence[int]] = ((), ()),
 ) -> tuple[CellAngles, list[list[Point]]]:
+    if aspect is not None:
+        x_spans = _spans(spans[0], len(nodes[0]) - 1)
+        y_spans = _spans(spans[1], len(nodes) - 1)
     acos = math.acos
     degrees = math.degrees
     hypot = math.hypot
@@ -178,7 +258,7 @@ def _measure_cells(
     cells = 0
     folded_at: Point | None = None
     centres: list[list[Point]] = []
-    for row, upper in zip(nodes, nodes[1:]):
+    for j, (row, upper) in enumerate(zip(nodes, nodes[1:])):
         centre_row: list[Point] = []
         for a in range(len(row) - 1):
             quad = (row[a], row[a + 1], upper[a + 1], upper[a])
@@ -229,6 +309,8 @@ def _measure_cells(
                 if stop_at_fold:
                     return CellAngles(cells, folded, severe, low, high, folded_at), centres
                 continue
+            if aspect is not None:
+                aspect.add(quad, 0.5 * area, x_spans[a], y_spans[j])
             if cell_low < low:
                 low = cell_low
             if cell_high > high:
@@ -385,6 +467,11 @@ class BlockSample:
     sum_cosines: float = 0.0
     max_skewness: float = 0.0
     worst_skew_face: Point | None = None
+    # checkMesh's cell aspect ratio (see _AspectTally): the largest, where,
+    # and the cells above ASPECT_LIMIT.
+    max_aspect_ratio: float = 0.0
+    worst_aspect_cell: Point | None = None
+    high_aspect_cells: int = 0
 
     def to_data(self) -> dict[str, Any]:
         return {
@@ -401,6 +488,9 @@ class BlockSample:
             "faces": self.faces,
             "max_skewness": self.max_skewness,
             "worst_skew_face": list(self.worst_skew_face) if self.worst_skew_face else None,
+            "max_aspect_ratio": self.max_aspect_ratio,
+            "worst_aspect_cell": list(self.worst_aspect_cell) if self.worst_aspect_cell else None,
+            "high_aspect_cells": self.high_aspect_cells,
             "mean_non_orthogonality": (
                 math.degrees(math.acos(max(-1.0, min(1.0, self.sum_cosines / self.faces))))
                 if self.faces else 0.0
@@ -436,6 +526,11 @@ class ModelSample:
             "faces": sum(item.faces for item in self.blocks),
             "max_skewness": max(item.max_skewness for item in self.blocks),
             "worst_skew_block": max(self.blocks, key=lambda item: item.max_skewness).block_id,
+            "max_aspect_ratio": max(item.max_aspect_ratio for item in self.blocks),
+            "worst_aspect_block": max(self.blocks, key=lambda item: item.max_aspect_ratio).block_id,
+            "high_aspect_cells": sum(item.high_aspect_cells for item in self.blocks),
+            "high_aspect_blocks": sum(1 for item in self.blocks if item.high_aspect_cells),
+            "aspect_limit": ASPECT_LIMIT,
             "average_non_orthogonality": math.degrees(math.acos(max(-1.0, min(1.0, (
                 sum(item.sum_cosines for item in self.blocks)
                 / max(1, sum(item.faces for item in self.blocks))
@@ -458,6 +553,8 @@ def sample_model(
     left out are not measured.
     """
     tallies: list[_FaceTally] = []
+    aspects: list[_AspectTally] = []
+    depth = aspect_depth(model)
     angles: list[CellAngles] = []
     grids: list[BlockGrid] = []
     shared: dict[EdgeKey, list[tuple[int, bool, list[Point], list[Point]]]] = {}
@@ -472,7 +569,12 @@ def sample_model(
         if blocks is not None and block.id not in wanted:
             continue
         grid = block_grid(model, block, max_cells, uniform=uniform)
-        measured, centres = _measure_cells(grid.nodes, SEVERE_ANGLE, False, centroids=True)
+        aspect = _AspectTally(depth)
+        measured, centres = _measure_cells(
+            grid.nodes, SEVERE_ANGLE, False, centroids=True, aspect=aspect,
+            spans=(grid.x_indices, grid.y_indices),
+        )
+        aspects.append(aspect)
         tally = _FaceTally()
         _interior_faces(grid.nodes, centres, tally)
         for current, canonical, side_nodes, side_cells in _sides(block, grid.nodes, centres):
@@ -526,8 +628,11 @@ def sample_model(
             tally.total,
             tally.skewness,
             tally.skew_at,
+            aspect.worst,
+            aspect.worst_at,
+            aspect.high,
         )
-        for grid, measured, tally in zip(grids, angles, tallies)
+        for grid, measured, tally, aspect in zip(grids, angles, tallies, aspects)
     )
     return ModelSample(blocks, max_cells)
 

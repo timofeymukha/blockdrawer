@@ -133,7 +133,10 @@ class SizeTests(unittest.TestCase):
         (note,) = digest["notes"]
         self.assertIn(note["budget_binding"], (True, False))
         self.assertEqual(note["budget_binding"], result["budget_binding"])
-        self.assertRegex(note["verification"], r"^field \d+ faces >70, max [0-9.]+, skew [0-9.]+ \| result ")
+        self.assertRegex(
+            note["verification"], r"^field \d+ faces >70, max [0-9.]+, skew [0-9.]+, aspect \d+ \| result .*, aspect \d+"
+        )
+        self.assertIn("max_aspect_ratio", result["verification"]["result"])
         (band,) = result["bands"]
         self.assertEqual(band["asked"], 0.005)
         self.assertRegex(

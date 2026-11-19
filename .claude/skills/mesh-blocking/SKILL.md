@@ -175,9 +175,9 @@ on continuity. Read:
 
 - `total_cells`, `budget`, `field_cells`, `budget_binding` - what you pay
   for, and whether a larger budget would buy more continuity.
-- `verification` - faces above 70, worst face and skewness for the field's
-  state and the result. Spending never adds to them; the field's own are
-  not removed.
+- `verification` - faces above 70, worst face, skewness, aspect ratio
+  (checkMesh fails above 1000, block named) for the field's state and the
+  result. Spending adds no face above 70 and does not watch the aspect.
 - `first_width` - per wall patch the cell height normal to the wall at the
   spokes, in percent of the one asked, extremes named (`quality` too).
 - `worst_jump` (with the counts above 2.5, 5, 20; `quality`'s measure,
@@ -215,12 +215,12 @@ meshes worse.
 0. `validate SESSION` (MCP `validate_session`): loads, valid, exports.
 1. `quality SESSION` (MCP `quality_report`): the **verdict** first - valid
    and exports, untangled, worst non-orthogonality and where, faces above 70,
-   max skewness. These come from every block interior sampled at its real
-   counts (coarsened above 256 a side) and measured as checkMesh measures
-   them; then the worst blocks and edges and the 20 worst warnings. The
-   corner screen beside it (corner angles, aspect, growth, interface jumps)
-   is measured at block corners and hides interior distortion; size jumps
-   and aspect ratios are only there.
+   max skewness, max aspect ratio (above 1000 checkMesh fails). These come
+   from every block interior sampled at its real counts (coarsened above
+   256 a side) and measured as checkMesh measures them; then the worst
+   blocks and edges and the 20 worst warnings. The corner screen beside it
+   (corner angles, aspect, growth, interface jumps) is measured at block
+   corners and hides interior distortion; size jumps are only there.
 2. `check SESSION` (MCP `check_mesh`): `blockMesh` then `checkMesh` must
    print `Mesh OK`. It passes with any number of faces above 70 - read the
    severe count and the warnings too. `sets` maps checkMesh's bad faces to

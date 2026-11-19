@@ -2063,6 +2063,13 @@ def _size_note(data: dict[str, Any]) -> dict[str, Any]:
             f"{item.get('severe_faces', 0)} faces >70, max {item.get('max_non_orthogonality', 0.0):.2f}, "
             f"skew {item.get('max_skewness', 0.0):.2f}"
         )
+        if "max_aspect_ratio" in item:
+            text += f", aspect {item['max_aspect_ratio']:.0f}"
+            if item.get("high_aspect_cells"):
+                text += (
+                    f" ({item['high_aspect_cells']} cells >1000 in {item.get('worst_aspect_block')}: "
+                    "checkMesh fails)"
+                )
         return text + (f", {item['folded_cells']} folded" if item.get("folded_cells") else "")
 
     def percent(value: float, asked: float) -> str:

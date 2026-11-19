@@ -5,6 +5,7 @@ from blockdrawer.domain import EdgeGeometry, edge_key
 from blockdrawer.model import MeshModel
 from tests.helpers import build_sheared_periodic_strip
 from blockdrawer.sampling import (
+    ASPECT_LIMIT,
     SEVERE_NON_ORTHOGONALITY,
     block_grid,
     cell_angles,
@@ -121,3 +122,45 @@ class ModelSampleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AspectRatioTests(unittest.TestCase):
+    """checkMesh's cell aspect ratio (primitiveMeshTools::cellClosedness)."""
+
+    def _strip(self, x_cells: int, y_cells: int, height: float = 1.0) -> MeshModel:
+        model = MeshModel(box=(0.0, 0.0, 1.0, height))
+        model.set_edge_cells(edge_key("v0", "v1"), x_cells)
+        model.set_edge_cells(edge_key("v1", "v2"), y_cells)
+        model.z_min_patch_type = model.z_max_patch_type = "empty"
+        return model
+
+    def test_a_2d_cell_reads_its_side_ratio(self) -> None:
+        model = self._strip(1, 1, height=0.0005)
+        summary = sample_model(model, None).summary()
+        self.assertAlmostEqual(summary["max_aspect_ratio"], 2000.0, places=6)
+        self.assertEqual(summary["high_aspect_cells"], 1)
+        self.assertEqual(summary["worst_aspect_block"], "b0")
+        self.assertEqual(summary["aspect_limit"], ASPECT_LIMIT)
+
+    def test_the_measure_is_cartesian(self) -> None:
+        # A long thin cell at 45 degrees has equal x and y area sums: 1.
+        model = MeshModel()
+        for vertex, (x, y) in {"v0": (0, 0), "v1": (1, 1), "v2": (0.99, 1.01), "v3": (-0.01, 0.01)}.items():
+            model.vertices[vertex] = type(model.vertices[vertex])(vertex, x, y)
+        model.z_min_patch_type = model.z_max_patch_type = "empty"
+        self.assertAlmostEqual(sample_model(model, None).summary()["max_aspect_ratio"], 1.0, places=9)
+
+    def test_without_empty_z_patches_the_depth_counts(self) -> None:
+        model = self._strip(1, 1)
+        model.z_min_patch_type = model.z_max_patch_type = "patch"
+        model.z_max = 0.01
+        # Sums over the faces: x and y 2 * 1 * 0.01, z 2 * 1; ratio 100.
+        self.assertAlmostEqual(sample_model(model, None).summary()["max_aspect_ratio"], 100.0, places=6)
+
+    def test_a_coarsened_cell_is_measured_per_real_cell(self) -> None:
+        model = self._strip(512, 1)
+        real = sample_model(model, None).summary()
+        coarse = sample_model(model, 256).summary()
+        self.assertEqual(coarse["coarsened_blocks"], 1)
+        self.assertAlmostEqual(real["max_aspect_ratio"], 512.0, places=6)
+        self.assertAlmostEqual(coarse["max_aspect_ratio"], 512.0, places=6)
