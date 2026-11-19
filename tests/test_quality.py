@@ -144,6 +144,20 @@ class QualityReportTests(unittest.TestCase):
         text = format_quality(assess_quality(MeshModel()))
         self.assertIn("No warnings at the current thresholds.", text)
 
+    def test_a_hooked_spline_is_warned_of_with_the_point_to_remove(self) -> None:
+        model = MeshModel()
+        # Last segment 0.02 beside 0.98: the spline runs back along its chord.
+        model.edge_geometry[edge_key("v0", "v1")] = EdgeGeometry("spline", ((0.98, -0.01),))
+        model.validate()
+        report = assess_quality(model)
+        self.assertEqual(report.summary()["hooked_spline_edges"], 1)
+        (warning,) = [text for text in report.warnings if text.startswith("spline edge")]
+        self.assertIn("v0-v1 (segment 2 of 2", warning)
+        self.assertIn("remove_control_point v0-v1 0", warning)
+        # Ranked with the worst angle defects.
+        self.assertEqual(report.ranked_warnings(1)[0][0], warning)
+        self.assertEqual(assess_quality(MeshModel()).summary()["hooked_spline_edges"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

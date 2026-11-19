@@ -16,6 +16,13 @@ def square_curve(model_commands, half=0.5, centre=(0.0, 0.0), name="body"):
     return model_commands + [f"add_curve {points} name={name}"]
 
 
+def _segment_gap(p, a, b):
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    length = dx * dx + dy * dy
+    t = 0.0 if length <= 0.0 else max(0.0, min(1.0, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / length))
+    return math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy)
+
+
 def circle_points(radius, count, centre=(0.0, 0.0)):
     return ";".join(
         f"{centre[0] + radius * math.cos(2 * math.pi * k / count)},"
@@ -201,6 +208,65 @@ class BandTests(unittest.TestCase):
             (1.0, 0.0),
         )
         self.assertEqual(kept, ((0.2, 0.1), (0.4, 0.1), (0.6, 0.1)))
+
+    def test_no_operator_spline_runs_backwards_and_walls_follow_the_curve(self) -> None:
+        # The NACA example's ring: stations by arc length fall just past a
+        # curve point, whose segment (down to a thousandth of the chord)
+        # used to loop in 12 wall and front splines.
+        import os
+
+        from blockdrawer.model import spline_hooks
+
+        folder = os.path.join(os.path.dirname(__file__), "..", ".claude", "skills", "mesh-blocking", "examples")
+        here = os.getcwd()
+        os.chdir(folder)
+        try:
+            model = apply_commands(MeshModel(box=(20, 20, 21, 21)), [
+                "import_curve naca0012_a5.dat name=naca",
+                "add_ring naca 0.05 count=40",
+                "set_boundary_by airfoil type=wall curves=naca",
+                "add_band bbox=-0.5,-0.5,1.5,0.5 height=0.5",
+            ]).model
+        finally:
+            os.chdir(here)
+        curve = next(iter(model.geometry_curves.values())).points
+        splines = 0
+        for key, geometry in model.edge_geometry.items():
+            if geometry.kind != "spline":
+                continue
+            splines += 1
+            first, second = model.vertices[key[0]], model.vertices[key[1]]
+            self.assertEqual(spline_hooks([(first.x, first.y), *geometry.points, (second.x, second.y)]), [], key)
+        self.assertEqual(splines, 120)
+        # The wall splines still lie on the airfoil: within 1e-4 chords of
+        # its polyline (6.02e-5 after the rule, 6.03e-5 before).
+        worst = 0.0
+        for key in model.edges():
+            geometry = model.edge_geometry.get(key)
+            if geometry is None or not all(abs(model.vertices[v].x) < 1.5 and abs(model.vertices[v].y) < 0.2
+                                           for v in key):
+                continue
+            first = model.vertices[key[0]]
+            if min(math.hypot(first.x - x, first.y - y) for x, y in curve) > 1.0e-9:
+                continue
+            for x, y in model.edge_points(key, [k / 50 for k in range(51)]):
+                worst = max(worst, min(
+                    _segment_gap((x, y), curve[j], curve[(j + 1) % len(curve)]) for j in range(len(curve))))
+        self.assertLess(worst, 1.0e-4)
+
+    def test_unhooked_points_drop_the_point_beside_the_long_neighbour_either_way_round(self) -> None:
+        from blockdrawer.model import spline_hooks, unhooked_points
+
+        wall = [(0.0, 0.0), (0.011883, -0.001113), (0.028296, -0.002506), (0.029717, -0.002608)]
+        self.assertEqual(spline_hooks(wall), [2])
+        kept = unhooked_points(wall[0], wall[1:-1], wall[-1])
+        self.assertEqual(kept, (wall[1],))
+        self.assertEqual(spline_hooks([wall[0], *kept, wall[-1]]), [])
+        backwards = unhooked_points(wall[-1], list(reversed(wall[1:-1])), wall[0])
+        self.assertEqual(backwards, tuple(reversed(kept)))
+        # Nothing hooks: nothing goes.
+        smooth = [(0.1, 0.01), (0.2, 0.015), (0.3, 0.01)]
+        self.assertEqual(unhooked_points((0.0, 0.0), smooth, (0.4, 0.0)), tuple(smooth))
 
     def test_a_ring_round_a_square_curve(self) -> None:
         model = apply_commands(MeshModel(box=(5, 5, 6, 6)), square_curve([]) + [

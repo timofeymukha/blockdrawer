@@ -178,6 +178,20 @@ class SmoothTests(unittest.TestCase):
         self.assertRegex(shaped.reason, r"on the count-free block map .* in b0 \(\d+\)")
         self.assertIn("the shape step can be left out", shaped.reason)
 
+    def test_a_count_free_fold_from_a_hooked_spline_names_the_edge(self) -> None:
+        model = two_by_two((0.5, 0.5))
+        # The wall's last segment (0.02) beside one of 0.48: OpenFOAM's
+        # spline runs back past the end there, and the uniform map folds.
+        model.edge_geometry[edge_key("v0", "v4")] = EdgeGeometry("spline", ((0.48, -0.005),))
+        model.validate()
+        shaped = smooth_model(model, options=SmoothOptions(mode="shape"))
+        self.assertFalse(shaped.applied)
+        self.assertRegex(shaped.reason, r"on the count-free block map .* in b0 \(\d+\)")
+        self.assertIn("v0-v4 (segment 2 of 2", shaped.reason)
+        self.assertIn("control point 0", shaped.reason)
+        self.assertIn("remove_control_point", shaped.reason)
+        self.assertNotIn("whatever its counts", shaped.reason)
+
     def test_the_command_is_one_undoable_action(self) -> None:
         model = two_by_two()
         history = ModelHistory(model)

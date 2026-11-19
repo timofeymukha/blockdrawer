@@ -23,7 +23,7 @@ from typing import Any
 
 from .commands import edge_text
 from .domain import Block, EdgeKey, TopologyError, edge_key
-from .model import MeshModel, transverse_edge
+from .model import MeshModel, describe_hook, hook_culprit, hooked_spline_edges, transverse_edge
 from .sampling import ASPECT_LIMIT, SEVERE_NON_ORTHOGONALITY, BlockSample, ModelSample, sample_model
 
 
@@ -118,6 +118,9 @@ class QualityReport:
     # Per wall patch, the first cell heights normal to the wall at its band
     # spokes (:func:`wall_first_widths`).
     first_widths: tuple[dict[str, Any], ...] = ()
+    # Spline edges with a segment running backwards along its chord
+    # (``model.spline_hooks``), as ``A-B``.
+    hooked_splines: tuple[str, ...] = ()
 
     def summary(self) -> dict[str, Any]:
         if not self.blocks:
@@ -154,6 +157,7 @@ class QualityReport:
                 "above_20": sum(1 for item in self.interfaces if item.max_size_ratio > 20.0),
             },
             "warning_count": len(self.warnings),
+            "hooked_spline_edges": len(self.hooked_splines),
         }
         if self.interior is not None:
             data["interior"] = self.interior.summary()
@@ -357,6 +361,17 @@ def assess_quality(
     for item in (*blocks, *interfaces):
         warnings.extend(item.warnings)
         ranks.extend(item.warning_ranks)
+    hooked = hooked_spline_edges(model)
+    for current, segments, lengths in hooked:
+        # A spline that reverses along its chord turns through 180 degrees:
+        # ranked with the worst angle defects (90 from 90).
+        warnings.append(
+            f"spline edge {describe_hook(current, segments, lengths)} runs backwards along its "
+            "chord: cells graded into the loop fold; remove that control point "
+            f"(remove_control_point {'-'.join(current)} {hook_culprit(lengths, segments[0])}) or "
+            "make the edge a line"
+        )
+        ranks.append((_ANGLE, 90.0))
     total_cells = sum(
         nx * ny * nz
         for nx, ny, nz in (model.block_cell_counts(block) for block in model.blocks)
@@ -364,6 +379,7 @@ def assess_quality(
     return QualityReport(
         blocks, interfaces, limits, total_cells, tuple(warnings),
         interior, export_error, tuple(ranks), tuple(wall_first_widths(model)),
+        tuple("-".join(current) for current, _segments, _lengths in hooked),
     )
 
 

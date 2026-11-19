@@ -59,7 +59,7 @@ import math
 from typing import Any, Sequence
 
 from .domain import Block, EdgeGeometry, EdgeKey, TopologyError, Vertex, edge_key
-from .model import MeshModel
+from .model import MeshModel, unhooked_points
 from .preview import _block_mesh_point
 from .sampling import FOLD_CELLS
 from .session import from_data, to_data
@@ -836,7 +836,9 @@ def _offset_interior(path: list[Point], chain: _Chain, distance: float,
     edge, and a wall curving tighter than the offset folds the offset back
     on itself, so points near an end can land behind it and the offset edge
     would hook back.  Only the points running monotonically along the
-    offset chord, clear of both ends, are kept (`_monotone_points`)."""
+    offset chord, clear of both ends, are kept (`_monotone_points`), and
+    of those none whose spline segment runs backwards
+    (`model.unhooked_points`)."""
     out = []
     n = len(path)
     for index in range(1, n - 1):
@@ -848,7 +850,7 @@ def _offset_interior(path: list[Point], chain: _Chain, distance: float,
     (da, fa), (db, fb) = spoke_a, spoke_b
     start = (path[0][0] + da[0] * fa * distance, path[0][1] + da[1] * fa * distance)
     end = (path[-1][0] + db[0] * fb * distance, path[-1][1] + db[1] * fb * distance)
-    return _monotone_points(start, out, end)
+    return unhooked_points(start, _monotone_points(start, out, end), end)
 
 
 def _monotone_points(start: Point, points: Sequence[Point], end: Point) -> tuple[Point, ...]:
@@ -1096,7 +1098,9 @@ def add_ring(
     growth: float = 1.0,
     prefix: str | None = None,
 ) -> ConstructResult:
-    """A band round a closed reference curve, its wall edges on the curve.
+    """A band round a closed reference curve, its wall edges on the curve
+    (splines through the curve's points between stations, a point left out
+    where OpenFOAM's spline would run backwards: `model.unhooked_points`).
 
     Stations: every curve vertex turning more than ``corner`` degrees, the
     arc-length ``fractions``, the point where the outward normal has each of
@@ -1183,7 +1187,7 @@ def add_ring(
                 inside = [inside[int(i * step)] for i in range(MAX_SPLINE_POINTS)]
             if not inside:
                 inside = [at(0.5 * (start + end))]
-            interiors.append(tuple(inside))
+            interiors.append(unhooked_points(a_point, inside, b_point))
         area = sum(loop[k][0] * loop[(k + 1) % n][1] - loop[(k + 1) % n][0] * loop[k][1] for k in range(n))
         side = -1.0 if area > 0.0 else 1.0   # outward: right of an anticlockwise loop
         for k in range(len(ids)):
@@ -1585,7 +1589,8 @@ class _CurvePath:
     def edge_interior(self, start: float, length: float, tol: float) -> tuple[Point, ...]:
         """Interior points of a spline edge along the section, as add_ring's
         wall edges take them (none within a thousandth of the chord of an
-        end, at most ``MAX_SPLINE_POINTS``); empty when the section is
+        end, at most ``MAX_SPLINE_POINTS``, none leaving a segment that runs
+        backwards: `model.unhooked_points`); empty when the section is
         straight."""
         a, b = self.at(start), self.at(start + length)
         gap = 1.0e-3 * max(math.dist(a, b), tol)
@@ -1594,7 +1599,7 @@ class _CurvePath:
             inside = [inside[k] for k in _symmetric_picks(len(inside), MAX_SPLINE_POINTS)]
         if all(_segment_distance(p, a, b) <= tol * 10 for p in inside):
             return ()
-        return tuple(inside)
+        return unhooked_points(a, inside, b)
 
 
 def _symmetric_picks(available: int, wanted: int) -> list[int]:

@@ -59,7 +59,7 @@ Choose by what has been measured, not by what a route intends:
 | | engine | 3 runs | refused: `sweep_correspondence: ribs cross or invert` (the sweep takes the step into the lower guide) | trial `backward_step/REPORT.md` |
 | Two grooved cylinders in tandem | operators by hand | 14 commands, ~6 min (a hand script: 299 lines, 25 min, max 42.7 deg) | 251 blocks; after shape/size/polish 47,616 cells, Mesh OK, max 20.5 deg | `examples/grooved_tandem.txt` |
 | | engine | 5 runs, 11-23 min each | refused: no groove (pocket) template | trial of Oct 26 (`grooved_tandem/`) |
-| NACA 0012 at 5 deg, box far field | operators by hand | 12 commands, ~10 min | 59,908 cells at first width 1e-4, Mesh OK, max 48.6 deg | `examples/naca0012.txt` |
+| NACA 0012 at 5 deg, box far field | operators by hand | 12 commands, ~10 min | 60,976 cells at first width 1e-4, Mesh OK, max 49.6 deg | `examples/naca0012.txt` |
 | | engine C-grid, r = 15, band 0.1 | 320 s | 185 blocks, resolved, Mesh OK 44.1 deg | `engine.md`, engine README table |
 | Single sharp airfoil, C-shaped far field (A-airfoil) | engine C-grid | 263 s | 200 blocks, resolved, Mesh OK 45.1 deg | engine README table |
 | Smooth bodies, clusters, simple channels | engine | seconds | e.g. `two_circles` 32 blocks resolved, Mesh OK 63.3 deg; `periodic_hill` resolved 36.2 deg | engine README table |
@@ -169,9 +169,9 @@ The step is optional (the 949-block high-lift trial left it out). Then:
   near 0.1, `max_pair_change` large): rerun it with `shape_pair_ratio=2.5`
   (three cylinders: 12 jumps above 5 -> 0, +2.4 deg) or a higher
   `shape_length_ratio` (cascade 0.4); neither is a default (README).
-- "already fold ... on the count-free block map, in BLOCK (N)": those
-  blocks fold at even spacing (the real counts need not: high-lift);
-  render and fix them (move a station, split) or leave the step out.
+- "already fold ... on the count-free block map, in BLOCK (N)": remove the
+  control point it names on a spline that runs backwards; else render and
+  fix those blocks (move a station, split) or leave the step out.
 
 ## Step 5 - Size
 

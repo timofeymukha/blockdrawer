@@ -74,7 +74,14 @@ them in the canvas widgets.
   global validation. `spline_hooks(path)` lists the segments of a
   Catmull-Rom path that run backwards along their own chord (a segment much
   shorter than its neighbour takes a tangent several times its length and
-  loops; `size` names them when it refuses a fold). `MeshModel.interface_pairs()` is the one definition of the
+  loops); `hook_culprit` names the control point to remove (the end of the
+  hooked segment beside its longer neighbour), `unhooked_points` removes
+  those points pass by pass - all of a pass at once, both ends where the
+  neighbours are equal, so a path and its reverse keep the same points -
+  until nothing hooks (the construction operators' rule: no length ratio
+  is chosen), and `hooked_spline_edges`/`describe_hook`/`hooked_edges_text`
+  give the edge, segment and point for `size`'s and `smooth`'s fold
+  refusals and `quality`'s warning. `MeshModel.interface_pairs()` is the one definition of the
   interface pairs (across every internal edge, at each end, the two blocks'
   transverse edges, `transverse_edge`) that `quality`'s size jump, `size`
   and `smooth` use. Vertices may be standalone or shared by counter-clockwise
@@ -167,7 +174,11 @@ them in the canvas widgets.
   non-orthogonality with block and location, severe faces, skewness and
   the cell aspect ratio with its block and the cells above 1000. Folded
   cells, interior non-orthogonality above the threshold and cells above
-  checkMesh's aspect limit become warnings naming the block. Every
+  checkMesh's aspect limit become warnings naming the block; a spline
+  edge with a segment running backwards (`model.spline_hooks`, any
+  session: engine, hand edits) is warned of with the segment and the
+  control point to remove, ranked as an angle defect 90 degrees from 90,
+  and counted in the summary's `hooked_spline_edges`. Every
   warning carries a rank (folded first, then angle defects by degrees from
   90, then size defects by ratio to their limit); `ranked_warnings(N)` and
   `max_warnings` list the worst N, and `worst_blocks` ranks by folded cells
@@ -291,7 +302,10 @@ them in the canvas widgets.
   `allow_stale_fold`. A refusal over folded cells - already folding on the
   count-free map or the real counts, or a stale fold - names the folding
   blocks, most folded first, with their counts (`sampling.folded_blocks`,
-  at most `FOLD_BLOCKS_NAMED`). Both modes report `min_edge_ratio`/`min_edge` and
+  at most `FOLD_BLOCKS_NAMED`); where those blocks have hooked spline
+  edges the count-free refusal names them, the segment and the control
+  point to remove (`model.hooked_edges_text`, as `size`'s refusal does)
+  instead of saying the blocks fold whatever their counts. Both modes report `min_edge_ratio`/`min_edge` and
   `max_edge_ratio`/`max_edge` (edge length over input length, edges with a
   moved end) in the result, the reason text and the digest note. Two more
   shape-mode limits, off by default (`SHAPE_PAIR_RATIO`,
@@ -501,7 +515,11 @@ them in the canvas widgets.
   along the chord between its offset ends, clear of both by a thousandth
   (`_monotone_points`, a longest increasing run): a mitre or a wall curving
   tighter than the offset put points behind an end, and the hooked spline
-  made the next band fail as misoriented. `_band_to_box` refuses a block
+  made the next band fail as misoriented. Every spline an operator writes
+  - `add_ring` wall edges, band fronts, `_CurvePath.edge_interior` (fill
+  sides along a curve) - goes through `model.unhooked_points`, so none has
+  a segment in `spline_hooks` (round 2: 49 of the high-lift build's 202
+  splines hooked, a station falling just past a curve point). `_band_to_box` refuses a block
   that would fold before building, naming the spokes and the box corners
   they were snapped to. `add_ring`
   places stations at curve corners (vertices turning more than `corner`,

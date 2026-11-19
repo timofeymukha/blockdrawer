@@ -750,23 +750,9 @@ def _brief(summary: dict) -> dict:
 def _fold_refusal(model: MeshModel, folded: list) -> str:
     """Why ``size`` refuses a result that folds where its input did not:
     the blocks, and the spline edges among theirs that hook back along
-    their chord (``spline_hooks``), the usual cause."""
-    from .model import spline_hooks
+    their chord (``model.hooked_edges_text``), the usual cause."""
+    from .model import hooked_edges_text
 
-    by_id = {block.id: block for block in model.blocks}
-    hooked = []
-    for block, _count in folded:
-        for k in range(4):
-            current = edge_key(*by_id[block].directed_edge(k))
-            geometry = model.edge_geometry.get(current)
-            if geometry is None or geometry.kind != "spline" or current in (item[0] for item in hooked):
-                continue
-            path = [(model.vertices[current[0]].x, model.vertices[current[0]].y), *geometry.points,
-                    (model.vertices[current[1]].x, model.vertices[current[1]].y)]
-            segments = spline_hooks(path)
-            if segments:
-                lengths = [math.dist(a, b) for a, b in zip(path, path[1:])]
-                hooked.append((current, segments, lengths))
     cells = sum(count for _block, count in folded)
     named = ", ".join(f"{block} ({count})" for block, count in folded[:8])
     more = f" and {len(folded) - 8} more" if len(folded) > 8 else ""
@@ -775,24 +761,9 @@ def _fold_refusal(model: MeshModel, folded: list) -> str:
         "input at its own counts folds none, and no regrade or count raise of those blocks "
         "unfolded them"
     )
+    hooked = hooked_edges_text(model, [block for block, _count in folded])
     if hooked:
-        parts = []
-        for current, segments, lengths in hooked[:6]:
-            k = segments[0]
-            beside = max((lengths[j] for j in (k - 1, k + 1) if 0 <= j < len(lengths)), default=0.0)
-            # The interior point at the short segment's end (control
-            # point index, from 0), the one beside the longer neighbour.
-            point = 0 if k == 0 else k - 1 if k == len(lengths) - 1 or lengths[k - 1] >= lengths[k + 1] else k
-            parts.append(
-                f"{'-'.join(current)} (segment {k + 1} of {len(lengths)}, {lengths[k]:.3g} long beside "
-                f"{beside:.3g}; control point {point})"
-            )
-        text += (
-            ": the spline edge(s) " + "; ".join(parts) + " run backwards along their chord - a "
-            "segment much shorter than its neighbour loops, and cells graded into the loop fold. "
-            "Remove the control point named (remove_control_point EDGE INDEX) or make the edge "
-            "a line (set_edge_type), then size again"
-        )
+        text += ": " + hooked + ", then size again"
     else:
         text += "; render the blocks and see failures.md"
     return text

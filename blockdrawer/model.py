@@ -172,6 +172,98 @@ def spline_hooks(path) -> list[int]:
     return hooks
 
 
+def hook_culprit(lengths, segment: int) -> int:
+    """The control point (index among the interior points, from 0) at the
+    end of the hooked ``segment`` beside its longer neighbouring segment:
+    the point whose tangent, half the chord across it, is long against the
+    short segment, and the one to remove. An end segment has one interior
+    end."""
+    last = len(lengths) - 1
+    if segment == 0:
+        return 0
+    if segment == last or lengths[segment - 1] >= lengths[segment + 1]:
+        return segment - 1
+    return segment
+
+
+def unhooked_points(start, points, end) -> tuple[tuple[float, float], ...]:
+    """``points`` (a spline's interior points from ``start`` to ``end``)
+    with the fewest removals the rule below makes so no segment runs
+    backwards along its chord (`spline_hooks`).
+
+    Each pass removes, for every hooked segment, the control point beside
+    its longer neighbour (`hook_culprit`; both ends when the neighbours
+    are equal) - every one at once, so the result does not depend on the
+    direction the edge is read in (the two chains of a periodic pair, cut
+    in opposite directions, keep the same points) - and repeats until
+    nothing hooks. No length ratio is chosen: the test is whether the
+    evaluated spline reverses."""
+    kept = [(float(x), float(y)) for x, y in points]
+    while kept:
+        path = [tuple(start), *kept, tuple(end)]
+        hooked = spline_hooks(path)
+        if not hooked:
+            break
+        lengths = [math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(path, path[1:])]
+        drop = set()
+        for segment in hooked:
+            drop.add(hook_culprit(lengths, segment))
+            if 0 < segment < len(lengths) - 1 and math.isclose(
+                    lengths[segment - 1], lengths[segment + 1], rel_tol=1.0e-9):
+                # Neighbours of equal length: both ends go, whichever way
+                # the edge is read.
+                drop.update((segment - 1, segment))
+        kept = [point for index, point in enumerate(kept) if index not in drop]
+    return tuple(kept)
+
+
+def hooked_spline_edges(model, edges=None) -> list[tuple[EdgeKey, list[int], list[float]]]:
+    """The spline edges (all, or those among ``edges``) with a hooked
+    segment: per edge its hooked segments and its segment lengths."""
+    found = []
+    candidates = sorted(model.edge_geometry) if edges is None else list(dict.fromkeys(edges))
+    for current in candidates:
+        geometry = model.edge_geometry.get(current)
+        if geometry is None or geometry.kind != "spline":
+            continue
+        first, second = model.vertices[current[0]], model.vertices[current[1]]
+        path = [(first.x, first.y), *geometry.points, (second.x, second.y)]
+        segments = spline_hooks(path)
+        if segments:
+            lengths = [math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(path, path[1:])]
+            found.append((current, segments, lengths))
+    return found
+
+
+def describe_hook(current: EdgeKey, segments, lengths) -> str:
+    """``A-B (segment k of n, L long beside M; control point i)`` for one
+    hooked spline edge: its first hooked segment and the point to remove."""
+    k = segments[0]
+    beside = max((lengths[j] for j in (k - 1, k + 1) if 0 <= j < len(lengths)), default=0.0)
+    return (
+        f"{'-'.join(current)} (segment {k + 1} of {len(lengths)}, {lengths[k]:.3g} long beside "
+        f"{beside:.3g}; control point {hook_culprit(lengths, k)})"
+    )
+
+
+def hooked_edges_text(model, blocks) -> str:
+    """The spline edges of ``blocks`` (IDs) that hook, for a refusal about
+    folded cells: empty when none do."""
+    by_id = {block.id: block for block in model.blocks}
+    edges = [edge_key(*by_id[b].directed_edge(k)) for b in blocks if b in by_id for k in range(4)]
+    hooked = hooked_spline_edges(model, edges)
+    if not hooked:
+        return ""
+    parts = [describe_hook(*item) for item in hooked[:6]]
+    more = f" and {len(hooked) - 6} more" if len(hooked) > 6 else ""
+    return (
+        "the spline edge(s) " + "; ".join(parts) + more + " run backwards along their chord - a "
+        "segment much shorter than its neighbour loops, and cells graded into the loop fold. "
+        "Remove the control point named (remove_control_point EDGE INDEX) or make the edge "
+        "a line (set_edge_type)"
+    )
+
+
 _MAX_CACHED_SPLINE_PATH_POINTS = 4096
 
 

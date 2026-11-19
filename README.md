@@ -508,7 +508,12 @@ refused by name; `id=PREFIX` names new vertices `PREFIX_0, ...` and blocks
   with `tips=true` at the peak of each rounded convex corner (the wall
   turning 45 degrees within a hundredth of the perimeter either side: an
   elliptic nose, a leading edge), and spread by arc length between them;
-  wall edges as splines through the curve's points. The result's note lists
+  wall edges as splines through the curve's points. No spline an operator
+  writes (ring walls, band fronts, fill sides along a curve) runs backwards:
+  OpenFOAM's Catmull-Rom spline loops in a segment much shorter than its
+  neighbour (a station just past a curve point), so the control point at
+  the end of such a segment beside its longer neighbour is left out, pass
+  by pass until nothing hooks (`model.unhooked_points`). The result's note lists
   the stations. Tips are off by default: on 10:1, 4:1 and 5:1 ellipses they
   cost 0.4 to 1.1 degrees of sampled non-orthogonality at default counts.
   For `to_box`, aim ring stations at the box corners with `normals=`; a
@@ -579,9 +584,30 @@ polar grids with `outside` the bodies, two `add_band ... to_box`, one H-grid,
 251 blocks with the hand build's patches; shape, size, polish: 47,616 cells,
 Mesh OK, max 20.5 degrees against the hand mesh's 42.7); a NACA 0012 at 5
 degrees in 12 (`add_ring` with a trailing-edge fan, two mitred bands,
-`to_box`; 59,908 cells at a first width of 1e-4, Mesh OK, max 48.6 degrees,
-no face above 70). A session starts with one block (`new --box`): put it
+`to_box`; 60,976 cells at a first width of 1e-4, Mesh OK, max 49.6 degrees,
+no face above 70, since its ring stopped writing splines that run backwards;
+59,908 and 48.3 before). A session starts with one block (`new --box`): put it
 where a grid cell will reuse it, or remove it with `remove_edge` at the end.
+
+Splines that run backwards, measured: rebuilt with and without the rule,
+the three skill examples and the nine operator builds of benchmark round 2
+(the NACA 4412 and three-cylinder sessions come from the engine) apply
+unchanged, and every hooked edge goes (NACA example 12 of 160 splines,
+airfoil tunnel 26 of 80, bluff ground 4 of 8, blunt plate 2 of 16, cascade
+11 of 48, high-lift 49 of 202, ten of them now lines); the other six builds
+are byte-identical. The written edges still follow their curves: the
+largest distance of a changed wall edge from the curve's polyline rose at
+most from 3.7e-4 to 5.9e-4 (high-lift, an edge along a wake guide curve
+typed by eye), on the bodies from 1.9e-5 to 2.0e-5 chords (NACA). Default
+chain (`smooth mode=shape allow_stale_fold=true`, `size`, `smooth`) and
+checkMesh, before -> after: NACA example 59,908 -> 60,976 cells, 48.27 ->
+49.64 degrees; cascade 60.57 both; blunt plate 30.93 -> 30.63; bluff ground
+identical; airfoil tunnel 113,164 -> 128,902 cells, 27.40 -> 26.08; high-lift
+checkMesh failed (skewness 4.05, 1391 faces above 70, 77.26 degrees) -> Mesh
+OK (3.93, 198 faces, 71.93) - its shape step, refused before over 225 cells
+folding on the count-free map, now runs - at 396,460 cells against 292,143
+and 281 interface jumps above 2.5 against 96. No face above 70 gained, no
+maximum up by more than 1.4 degrees.
 
 Edits are applied atomically with `apply`. Commands are short text lines or
 JSON objects; edges are written `first-second` in either order, a grading
@@ -642,7 +668,10 @@ non-orthogonality, equiangle skewness, corner cell aspect ratios, cell-to-cell
 growth, and the cell size jump across every internal edge, with warnings at
 adjustable thresholds; the text lists the 20 worst warnings (folded cells,
 then angles by their distance from 90 degrees, then size defects by how far
-past their limit; `--max-warnings N`, `--all-warnings`). It also gives, per
+past their limit; `--max-warnings N`, `--all-warnings`). A spline edge with
+a segment running backwards along its chord is warned of in any session
+(edge, segment, the control point to remove), ranked with the worst angle
+defects, and counted in the summary's `hooked_spline_edges`. It also gives, per
 wall patch, the first cell height normal to the wall at the band spokes
 (`first_widths`, the same measure `size` reports, so it can be read after
 the polish): at each wall vertex an edge on no wall patch is a spoke of the

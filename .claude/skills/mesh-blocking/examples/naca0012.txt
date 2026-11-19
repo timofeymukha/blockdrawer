@@ -19,4 +19,4 @@ set_export_settings z_min_patch_type=empty z_max_patch_type=empty
 #> smooth mode=shape allow_stale_fold=true
 #> size 1e-4 1.0 growth=1.2 wall_aspect=50
 #> smooth
-# checkMesh: 59,908 cells, Mesh OK, max non-orthogonality 48.3, 0 faces above 70, max skewness 2.12
+# checkMesh: 60,976 cells, Mesh OK, max non-orthogonality 49.6, 0 faces above 70, max skewness 1.68

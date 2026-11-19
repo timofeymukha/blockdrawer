@@ -1662,13 +1662,17 @@ def smooth_model(
             sample_model(model, uniform=options.fold_cells) if shape
             else sample_model(model, options.verify_cells)
         )
+        from .model import hooked_edges_text
+
+        hooked = hooked_edges_text(model, [item.block_id for item in fold_sample.blocks if item.folded_cells])
         return result(
             False,
             f"not smoothed: {before['folded_cells']} sampled cell(s) already fold {where}, in "
-            f"{folded_blocks(fold_sample)}; untangle those blocks first (repair_block, "
-            "split_edge or new vertex positions)"
-            + ("; on the count-free map a block folds when its own sides cross, whatever its "
-               "counts - the shape step can be left out" if shape else ""),
+            f"{folded_blocks(fold_sample)}; "
+            + (f"{hooked}; then smooth again" if hooked else
+               "untangle those blocks first (repair_block, split_edge or new vertex positions)"
+               + ("; on the count-free map a block folds when its own sides cross, whatever its "
+                  "counts - the shape step can be left out" if shape else "")),
         )
     positions, sweeps, rounds, slides = _optimise(model, free, spokes, options, chains, lines)
     if not positions and not slides:
