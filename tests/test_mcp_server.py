@@ -76,6 +76,9 @@ class ToolFunctionTests(unittest.TestCase):
         self.assertIn("Blocks (", text)
         with self.assertRaisesRegex(ToolFailure, "Unknown section"):
             describe_session(str(self.session), sections=["nope"])
+        patches = describe_session(str(self.session), sections=["patches"], as_text=False)
+        self.assertEqual(list(patches), ["boundaries"])
+        self.assertIn("extrusion patches", describe_session(str(self.session), sections=["patches"])["text"])
         json.dumps(data)
 
     def test_describe_is_compact_for_a_large_session_and_answers_queries(self) -> None:

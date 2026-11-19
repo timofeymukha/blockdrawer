@@ -37,9 +37,11 @@ from .commands import (
 from .describe import (
     QUERY_SECTIONS,
     SECTIONS,
+    SECTION_ALIASES,
     describe_model,
     format_description,
     query_description,
+    resolve_sections,
 )
 from .domain import TopologyError
 from .foam import block_mesh_dict, write_block_mesh_dict
@@ -153,8 +155,9 @@ def build_parser() -> argparse.ArgumentParser:
     describe.add_argument("session", type=Path)
     describe.add_argument("--json", action="store_true", help="print JSON")
     describe.add_argument(
-        "--section", action="append", choices=SECTIONS, metavar="SECTION",
-        help="limit output to a section (repeatable): " + ", ".join(SECTIONS),
+        "--section", action="append", choices=(*SECTIONS, *SECTION_ALIASES), metavar="SECTION",
+        help="limit output to a section (repeatable): " + ", ".join(SECTIONS)
+        + " (" + ", ".join(f"{alias} = {name}" for alias, name in SECTION_ALIASES.items()) + ")",
     )
     describe.add_argument(
         "--only", nargs="+", metavar="ID",
@@ -392,7 +395,7 @@ def _cmd_describe(args: argparse.Namespace) -> int:
         component=args.component,
         unassigned=args.unassigned,
     )
-    sections = tuple(args.section) if args.section else None
+    sections = resolve_sections(args.section)
     text = format_description(data, sections=sections)
     if sections:
         data = {

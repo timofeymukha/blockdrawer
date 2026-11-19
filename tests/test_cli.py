@@ -150,6 +150,12 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("b0", both)
         self.assertIn("b1", both)
+        # patches is another name for the boundaries section.
+        code, out, _ = run_cli("describe", str(self.session), "--json", "--section", "patches")
+        self.assertEqual(code, 0)
+        self.assertEqual(list(json.loads(out)), ["boundaries"])
+        code, _, _ = run_cli("describe", str(self.session), "--section", "patches")
+        self.assertEqual(code, 0)
         code, _, err = run_cli("describe", str(self.session), "--only", "b0,b18")
         self.assertEqual(code, 1)
         self.assertIn("'b18'", err)

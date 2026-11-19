@@ -34,6 +34,29 @@ SECTIONS = (
 )
 # Sections a query adds; they are listed only when asked for.
 QUERY_SECTIONS = ("component", "unassigned_chains")
+# Other names accepted for a section: the commands call boundaries patches.
+SECTION_ALIASES = {"patches": "boundaries"}
+
+
+def resolve_sections(names) -> tuple[str, ...] | None:
+    """The sections ``names`` asks for, aliases resolved and repeats
+    dropped; ``None`` for none. An unknown name raises ``ValueError``."""
+    if not names:
+        return None
+    resolved: list[str] = []
+    unknown = []
+    for name in names:
+        section = SECTION_ALIASES.get(name, name)
+        if section not in SECTIONS:
+            unknown.append(name)
+        elif section not in resolved:
+            resolved.append(section)
+    if unknown:
+        raise ValueError(
+            f"Unknown section(s) {', '.join(unknown)}; choose from {', '.join(SECTIONS)} "
+            f"({', '.join(f'{alias} = {name}' for alias, name in SECTION_ALIASES.items())})"
+        )
+    return tuple(resolved)
 
 
 def describe_model(model: MeshModel) -> dict[str, Any]:

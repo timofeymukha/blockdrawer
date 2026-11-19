@@ -32,10 +32,10 @@ from .commands import (
 )
 from .describe import (
     QUERY_SECTIONS,
-    SECTIONS,
     describe_model,
     format_description,
     query_description,
+    resolve_sections,
 )
 from .foam import block_mesh_dict, write_block_mesh_dict
 from .model import MeshModel
@@ -158,7 +158,7 @@ def describe_session(
     """Describe blocks, edges, vertices, patches, curves, and spacing links.
 
     ``sections`` limits the output to some of: summary, settings, blocks,
-    edges, vertices, boundaries, curves, spacing_links. ``only`` restricts the
+    edges, vertices, boundaries (or patches), curves, spacing_links. ``only`` restricts the
     lists to the given block, edge, vertex, patch, or curve IDs (an item may
     be comma-separated; an ID that names nothing is an error; a named edge
     lists all its control points). ``bbox`` [xmin, ymin, xmax, ymax]
@@ -175,13 +175,10 @@ def describe_session(
     data = query_description(
         model, only=only, bbox=bbox, component=component, unassigned=unassigned
     )
-    wanted = tuple(sections) if sections else None
-    if wanted:
-        unknown = [name for name in wanted if name not in SECTIONS]
-        if unknown:
-            raise ToolFailure(
-                f"Unknown section(s) {', '.join(unknown)}; choose from {', '.join(SECTIONS)}"
-            )
+    try:
+        wanted = resolve_sections(sections)
+    except ValueError as exc:
+        raise ToolFailure(str(exc)) from exc
     if as_text:
         text = format_description(data, sections=wanted)
         narrowed = wanted or only or bbox is not None or component or unassigned
