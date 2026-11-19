@@ -142,7 +142,12 @@ them in the canvas widgets.
   percent, and the two spokes named), `worst_jump` (quality's interface measure on the sized session,
   with the counts above 2.5/5/20), `jump_cost`, `splits`, `moves`, `guard`,
   `refused`, `note`, empty ones left out. Parameter kinds `blocks` (block IDs) and `numbers` (a list of
-  floats, e.g. a bbox) serve `smooth`.
+  floats, e.g. a bbox) serve `smooth`. `resolve_position` gives
+  `add_vertex` and `move_vertex` (`_POSITION`) positions relative to
+  existing vertices: polar `r`/`theta` about `center` or the vertex
+  `about`, else each coordinate from exactly one of the number, `at`
+  (both), `x_of`/`y_of`, or (moving) the vertex's own; `dx`/`dy` added
+  last; a coordinate given twice or missing is refused by name.
 - `blockdrawer/command_line.py`: shared shell-like tokenization for textual
   commands and OpenFOAM command prefixes. POSIX hosts use normal shell escaping;
   Windows preserves path backslashes while retaining POSIX quote grouping for

@@ -602,16 +602,76 @@ def _run_set_control_point_count(
     return _control_point_result(model, edge)
 
 
+def resolve_position(model: MeshModel, args: dict[str, Any], own: str | None = None) -> tuple[float, float]:
+    """A position given by number or relative to existing vertices.
+
+    Polar: ``r`` and ``theta`` (degrees counter-clockwise from +x) about
+    ``center`` (x,y) or the vertex ``about``. Otherwise each coordinate from
+    exactly one of: the number (``x``/``y``), the vertex ``at`` (both), the
+    vertex ``x_of`` (its x) / ``y_of`` (its y), or - moving a vertex - the
+    vertex's own. ``dx``/``dy`` are added last, so ``at=V dx=0.1`` is an
+    offset from V and ``move_vertex V dy=0.1`` a move by 0.1."""
+    def get(name: str) -> Any:
+        return args.get(name)
+
+    def point(vertex_id: str) -> tuple[float, float]:
+        vertex = model.vertices[vertex_id]
+        return vertex.x, vertex.y
+
+    polar = [name for name in ("r", "theta", "center", "about") if get(name) not in (None, ())]
+    if polar:
+        clash = [name for name in ("x", "y", "at", "x_of", "y_of") if get(name) is not None]
+        if clash:
+            raise CommandError(f"a polar point (r, theta about center or about) takes no {', '.join(clash)}")
+        if get("r") is None or get("theta") is None:
+            raise CommandError("a polar point needs both r and theta")
+        centres = [name for name in ("center", "about") if get(name) not in (None, ())]
+        if len(centres) != 1:
+            raise CommandError("a polar point needs its centre: center=X,Y or about=VERTEX (one of them)")
+        if get("center") not in (None, ()):
+            if len(get("center")) != 2:
+                raise CommandError("center takes x,y")
+            cx, cy = get("center")
+        else:
+            cx, cy = point(get("about"))
+        angle = math.radians(get("theta"))
+        x, y = cx + get("r") * math.cos(angle), cy + get("r") * math.sin(angle)
+    else:
+        base = point(get("at")) if get("at") is not None else None
+        own_point = point(own) if own is not None else None
+        values = []
+        for axis, name, of in ((0, "x", "x_of"), (1, "y", "y_of")):
+            sources = [source for source in (name, of) if get(source) is not None]
+            if base is not None:
+                sources.append("at")
+            if len(sources) > 1:
+                raise CommandError(f"{name} is given twice ({', '.join(sources)}): give one of them")
+            if not sources:
+                if own_point is None:
+                    raise CommandError(
+                        f"no {name}: give {name}=NUMBER, {of}=VERTEX, at=VERTEX or a polar point (r, theta)"
+                    )
+                values.append(own_point[axis])
+            elif sources[0] == name:
+                values.append(get(name))
+            elif sources[0] == of:
+                values.append(point(get(of))[axis])
+            else:
+                values.append(base[axis])
+        x, y = values
+    return x + (get("dx") or 0.0), y + (get("dy") or 0.0)
+
+
 def _run_move_vertex(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
-    model.move_vertex(
-        args["vertex"], args["x"], args["y"], carry_curves=bool(args.get("carry_curves", False))
-    )
+    x, y = resolve_position(model, args, own=args["vertex"])
+    model.move_vertex(args["vertex"], x, y, carry_curves=bool(args.get("carry_curves", False)))
     vertex = model.vertices[args["vertex"]]
     return {"vertex": vertex.id, "x": vertex.x, "y": vertex.y}
 
 
 def _run_add_vertex(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
-    vertex = model.add_vertex(args["x"], args["y"], vertex_id=args.get("id"))
+    x, y = resolve_position(model, args)
+    vertex = model.add_vertex(x, y, vertex_id=args.get("id"))
     return {"vertex": vertex.id, "x": vertex.x, "y": vertex.y}
 
 
@@ -1036,6 +1096,18 @@ _register(CommandSpec(
     (_EDGE, Parameter("count", "int", "positive number of interpolation points")),
     _run_set_control_point_count,
 ))
+# Relative positions (`resolve_position`), shared by add_vertex and move_vertex.
+_POSITION = (
+    Parameter("at", "vertex", "start from this vertex's position", required=False, default=None),
+    Parameter("x_of", "vertex", "take x from this vertex", required=False, default=None),
+    Parameter("y_of", "vertex", "take y from this vertex", required=False, default=None),
+    Parameter("dx", "float", "added to x", required=False, default=0.0),
+    Parameter("dy", "float", "added to y", required=False, default=0.0),
+    Parameter("r", "float", "polar: distance from the centre", required=False, default=None),
+    Parameter("theta", "float", "polar: degrees counter-clockwise from +x", required=False, default=None),
+    Parameter("center", "numbers", "polar: centre x,y", required=False, default=()),
+    Parameter("about", "vertex", "polar: centre at this vertex", required=False, default=None),
+)
 _register(CommandSpec(
     "move_vertex",
     (
@@ -1046,28 +1118,37 @@ _register(CommandSpec(
     ),
     (
         Parameter("vertex", "vertex", "vertex ID"),
-        Parameter("x", "float", "new x coordinate"),
-        Parameter("y", "float", "new y coordinate"),
+        Parameter("x", "float", "new x coordinate (default: as now, or from x_of/at)",
+                  required=False, default=None),
+        Parameter("y", "float", "new y coordinate (default: as now, or from y_of/at)",
+                  required=False, default=None),
         Parameter(
             "carry_curves", "bool",
             "carry incident curved edges with the vertex instead of leaving their points",
             required=False, default=False,
         ),
+        *_POSITION,
     ),
     _run_move_vertex,
 ))
 _register(CommandSpec(
     "add_vertex",
-    "Create a standalone vertex for later use by add_block_from_vertices.",
     (
-        Parameter("x", "float", "x coordinate"),
-        Parameter("y", "float", "y coordinate"),
+        "Create a standalone vertex for later use by add_block_from_vertices "
+        "or as a station: at x,y, or relative to existing vertices - at=V "
+        "dx=.. dy=.. (an offset), x_of=V y_of=W (level with them), r=.. "
+        "theta=.. about=V or center=X,Y (a polar point)."
+    ),
+    (
+        Parameter("x", "float", "x coordinate", required=False, default=None),
+        Parameter("y", "float", "y coordinate", required=False, default=None),
         Parameter(
             "id", "str",
             "ID for the new vertex (default: the next free vN); naming the "
             "vertices lets a batch refer to them before it is applied",
             required=False, default=None,
         ),
+        *_POSITION,
     ),
     _run_add_vertex,
 ))

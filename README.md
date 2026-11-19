@@ -630,6 +630,16 @@ round-1 junction's branch (two `add_vertex`, a block from probed IDs,
 `split_edge` and `slide_vertex`) is two `add_stations` and two blocks: same
 vertices to 6e-13, same checkMesh numbers.
 
+A vertex relative to existing ones: `add_vertex at=V dx=0.1 dy=0` (an
+offset), `add_vertex x=-0.7 y_of=V` or `x_of=V y_of=W` (level with them),
+`add_vertex r=0.35 theta=45 about=V` or `center=X,Y` (a polar point); every
+coordinate from exactly one source, `dx`/`dy` added last. `move_vertex`
+takes the same forms, a coordinate not given staying as it is
+(`move_vertex V dy=0.1` moves it up by 0.1). Four round-2 trials typed
+17-digit coordinates of existing vertices or polar points to 1e-9 for
+this. Other commands still take numbers (`add_grid` stations, `points=`
+of `add_block_from_vertices`, which names vertices by ID anyway).
+
 Measured (`review_operators/` beside the trial data): the 27-block backward
 step in 8 commands (`add_grid` with one skip box and six `set_boundary_by`;
 `size`: 21,750 cells, Mesh OK, 0 degrees); the grooved tandem in 14 (two

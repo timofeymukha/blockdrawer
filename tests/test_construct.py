@@ -1010,3 +1010,39 @@ class OpenCurveBandTests(unittest.TestCase):
         ring = [v for v in inside.vertices.values() if math.hypot(v.x, v.y) < 1.5]
         self.assertTrue(all(math.hypot(v.x, v.y) <= 1.0 + 1e-9 for v in ring))
         self.assertEqual(sum(1 for v in ring if math.hypot(v.x, v.y) < 0.95), 8)
+
+
+class RelativePositionTests(unittest.TestCase):
+    def test_add_vertex_by_offset_level_and_polar(self) -> None:
+        batch = apply_commands(MeshModel(), [
+            "add_vertex at=v2 dx=0.5 id=a",
+            "add_vertex x_of=v1 y_of=a dy=0.25 id=b",
+            "add_vertex r=2 theta=90 about=v0 id=c",
+            "add_vertex r=1 theta=45 center=1,1 id=d",
+            "add_vertex 3 4 id=e",
+        ])
+        vertices = batch.model.vertices
+        self.assertEqual((vertices["a"].x, vertices["a"].y), (1.5, 1.0))
+        self.assertEqual((vertices["b"].x, vertices["b"].y), (1.0, 1.25))
+        self.assertAlmostEqual(vertices["c"].x, 0.0, places=15)
+        self.assertEqual(vertices["c"].y, 2.0)
+        self.assertEqual((vertices["d"].x, vertices["d"].y), (1.0 + math.sqrt(0.5), 1.0 + math.sqrt(0.5)))
+        self.assertEqual((vertices["e"].x, vertices["e"].y), (3.0, 4.0))
+
+    def test_move_vertex_relative_to_itself_and_to_others(self) -> None:
+        model = apply_commands(MeshModel(), ["split_edge v0-v1 0.5"]).model
+        moved = apply_commands(model, ["move_vertex v4 dy=0.1", "move_vertex v4 x_of=v2 dx=-0.25"]).model
+        self.assertEqual((moved.vertices["v4"].x, moved.vertices["v4"].y), (0.75, 0.1))
+
+    def test_a_coordinate_given_twice_or_missing_is_refused(self) -> None:
+        for command, text in (
+            ("add_vertex 1 2 x_of=v1", "x is given twice"),
+            ("add_vertex at=v1 y=3", "y is given twice"),
+            ("add_vertex x_of=v1", "no y"),
+            ("add_vertex r=1 theta=0", "needs its centre"),
+            ("add_vertex r=1 about=v0", "needs both r and theta"),
+            ("add_vertex r=1 theta=0 about=v0 x=2", "takes no x"),
+        ):
+            with self.assertRaises(Exception) as caught:
+                apply_commands(MeshModel(), [command])
+            self.assertIn(text, str(caught.exception), command)
