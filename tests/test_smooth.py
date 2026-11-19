@@ -1,4 +1,5 @@
 import math
+from dataclasses import replace
 import unittest
 from unittest import mock
 
@@ -120,6 +121,35 @@ class SmoothTests(unittest.TestCase):
             ratio = model.edge_length(current) / length
             self.assertLessEqual(ratio, 1.1 + 1e-9)
             self.assertGreaterEqual(ratio * 1.1, 1.0 - 1e-9)
+
+    def test_a_jump_below_the_ceiling_does_not_cross_it(self) -> None:
+        def centre_jumps(model):
+            values = []
+            for _shared, at, first, second in model.interface_pairs():
+                if at == "v6":
+                    a = model.edge_width_at_vertex(first, at)
+                    b = model.edge_width_at_vertex(second, at)
+                    values.append(max(a / b, b / a))
+            return values
+
+        def start() -> MeshModel:
+            model = stretched_two_by_two()
+            model.move_vertex("v6", 0.4, 0.3)
+            return model
+
+        # The polish moves the centre so that its jumps grow (2.24 -> 2.47);
+        # with every pair above size_cap and a wide slack, only the ceiling
+        # holds them.
+        loose = SmoothOptions(size_cap=1.0, size_slack=10.0, size_ceiling=0.0, length_tolerance=0.0)
+        free = start()
+        self.assertLess(max(centre_jumps(free)), 2.3)
+        self.assertTrue(smooth_model(free, options=loose).applied)
+        self.assertGreater(max(centre_jumps(free)), 2.3)
+        held = start()
+        result = smooth_model(held, options=replace(loose, size_ceiling=2.3))
+        self.assertTrue(result.applied, result.reason)
+        self.assertLessEqual(max(centre_jumps(held)), 2.3 + 1e-9)
+        self.assertEqual(SmoothOptions().size_ceiling, smooth_module.SIZE_CEILING)
 
     def test_a_proposal_the_full_check_refuses_is_never_applied(self) -> None:
         model = two_by_two()

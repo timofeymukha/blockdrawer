@@ -268,7 +268,8 @@ them in the canvas widgets.
   edge within `length_tolerance` (50 percent) of its length; the quality
   screen's width pairs (interface jumps, corner aspects) not crossing
   `size_cap` 2.5 / `aspect_cap` 100 where below, else growing by at most
-  `size_slack`. The result is verified with `sample_model` at 256 cells a
+  `size_slack`, an interface jump below `size_ceiling` (`SIZE_CEILING` = 5)
+  not past it. The result is verified with `sample_model` at 256 cells a
   side and applied only when untangled, with no more severe faces and no
   higher maximum, else scaled back by halves; one `MeshModel.move_vertices`
   call (atomic, curves carried by the chord similarity), so one history

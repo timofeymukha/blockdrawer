@@ -29,7 +29,7 @@ from .projection import (
     PROJECTION_DIRECTIONS,
 )
 from .session import from_data, to_data
-from .smooth import SHAPE_LENGTH_RATIO, SHAPE_PAIR_RATIO, SHAPE_SPREAD_RATIO
+from .smooth import SHAPE_LENGTH_RATIO, SHAPE_PAIR_RATIO, SHAPE_SPREAD_RATIO, SIZE_CEILING
 
 
 EDGE_SEPARATOR = "-"
@@ -684,6 +684,7 @@ def _run_smooth(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
     options = SmoothOptions(
         band_tolerance=args["band_tolerance"],
         size_cap=args["size_cap"],
+        size_ceiling=args["size_ceiling"],
         length_tolerance=args["length_tolerance"],
         mode=args["mode"],
         allow_stale_fold=args["allow_stale_fold"],
@@ -1155,7 +1156,8 @@ _register(CommandSpec(
         "the real counts and grading, without raising any block's worst face; "
         "boundary and held vertices stay, wall band spokes keep their length "
         "(band_tolerance), no edge changes length by more than "
-        "length_tolerance, and no interface size jump crosses size_cap. The "
+        "length_tolerance, and no interface size jump crosses size_cap (nor "
+        "size_ceiling from below). The "
         "result is applied only when the full sampled check stays untangled "
         "with no more severe faces and no higher maximum. mode=shape optimises "
         "the count-free block shape instead, before size sets counts and grading, "
@@ -1196,6 +1198,12 @@ _register(CommandSpec(
             "a first-cell size jump across an internal edge below this may not "
             "cross it; one above may grow by a tenth",
             required=False, default=2.5,
+        ),
+        Parameter(
+            "size_ceiling", "float",
+            "a first-cell size jump below this may not cross it either, however "
+            "far above size_cap (0: no ceiling)",
+            required=False, default=SIZE_CEILING,
         ),
         Parameter(
             "mode", "choice",

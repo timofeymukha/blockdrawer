@@ -58,10 +58,12 @@ $$
   is worth one run: on three cylinders shaped at the default floor the
   binding default left 12 jumps above 5 and `budget=90000` left 6, while a
   jump the shape step made (a column widened beside a body near a ground
-  wall, 7.17) stayed at `budget=400000` and went with `hold=` in Step 4.
+  wall, 7.17 after `size`) stayed at `budget=400000`; the default polish
+  took it to 4.18 (README shape-limit corpus).
 - Judge the jumps after the polish (`smooth`), which moves vertices and so
   changes them: NACA 4412 C-grid 4 above 5 after `size`, none after the
-  polish; three cylinders one went 4.73 -> 5.20 (`hold=` kept it).
+  polish. The polish keeps a jump below 5 below 5 (`size_ceiling`; three
+  cylinders once went 4.73 -> 5.20); one already above 5 may grow a tenth.
 - The first width is a bound, not a value: a spoke shares its count with
   its component and its strip's series (one total ratio for every member,
   so a spoke's first width is in proportion to its length), and the

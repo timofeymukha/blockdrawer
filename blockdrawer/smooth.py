@@ -72,6 +72,9 @@ VERIFY_CELLS = 256
 MIN_CORNER_SINE = math.sin(math.radians(20.0))
 # Displacement scales tried when the full verification refuses the result.
 FALLBACK_SCALES = (0.5, 0.25, 0.125)
+# The polish's ceiling on an interface jump that is below it (the benchmark's
+# target: no jump above 5).
+SIZE_CEILING = 5.0
 # Shape mode's default floor on an edge's length over its input length.
 SHAPE_LENGTH_RATIO = 0.1
 # Shape mode's default limit on how far an interface pair's length ratio
@@ -106,6 +109,10 @@ class SmoothOptions:
     # or up to ``size_cap`` where they were below it.
     size_slack: float = 0.1
     size_cap: float = 2.5
+    # An interface jump below this may not cross it either, however far it
+    # was above ``size_cap`` (0: no ceiling): the slack let a jump of 4.73
+    # grow to 5.20, past the benchmark's target.
+    size_ceiling: float = SIZE_CEILING
     aspect_cap: float = 100.0  # the same for a corner cell's aspect ratio (0: unconstrained)
     # Every edge keeps its length within this fraction (0: unbounded), so a
     # thin strip such as a wake band is not widened tenfold.
@@ -1110,14 +1117,16 @@ def _optimise(
     }
     size_pairs: dict[str, list[tuple[EdgeKey, EdgeKey, float]]] = {}
 
-    def add_pair(at: str, first: EdgeKey, second: EdgeKey, cap: float) -> None:
+    def add_pair(at: str, first: EdgeKey, second: EdgeKey, cap: float, ceiling: float = 0.0) -> None:
         ratio = _width(state, width_per_chord, first, at) / _width(
             state, width_per_chord, second, at
         )
         ratio = max(ratio, 1.0 / ratio)
         # Below the cap a ratio may grow to it, not past it; above it, by
-        # the slack at most.
+        # the slack at most, and not past the ceiling when it was below.
         limit = cap if ratio <= cap else ratio * (1.0 + options.size_slack)
+        if 0.0 < ratio <= ceiling:
+            limit = min(limit, ceiling)
         size_pairs.setdefault(at, []).append((first, second, limit))
 
     # The pairs the quality screen compares: across every internal edge the
@@ -1125,7 +1134,7 @@ def _optimise(
     # the two edges of each block corner (the corner cell's aspect ratio).
     interface_pairs = model.interface_pairs()
     for _shared, at, first, second in interface_pairs:
-        add_pair(at, first, second, options.size_cap)
+        add_pair(at, first, second, options.size_cap, options.size_ceiling)
     if options.aspect_cap > 0.0:
         for position, block in enumerate(state.blocks):
             for index in range(4):

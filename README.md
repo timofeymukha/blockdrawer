@@ -744,7 +744,15 @@ with one spoke, may turn towards the wall normal but not away from it, so a
 boundary-layer band keeps its height and first cell; every edge keeps its
 length within 50 percent (`length_tolerance`), so a thin wake strip is not
 widened; and no first-cell size jump across an internal edge crosses 2.5
-(`size_cap`), nor a corner cell's aspect 100, where it was below. The result
+(`size_cap`), nor a corner cell's aspect 100, where it was below; a jump
+above 2.5 may grow by a tenth but not past 5 (`size_ceiling`) when it was
+below 5 (the benchmark's target: three cylinders once went 4.73 -> 5.20).
+Measured on the 95 distinct sized states of the shape-limit corpus below
+(every rule's `size` output, the polish with and without this ceiling):
+three changed, all the three cylinders - 12 jumps above 5 -> 10 at the
+default shape, 2 -> 0 without the shape step and at floor 0.3 (maximum
+68.11 -> 68.13 in one) - and none got worse in faces above 70, jumps above
+2.5 or 5, or maximum non-orthogonality. The result
 is applied only when the full sampled check stays untangled with no more
 faces above 70 degrees and no higher maximum (else the displacement is
 scaled back by halves), as one undoable edit; the report gives both

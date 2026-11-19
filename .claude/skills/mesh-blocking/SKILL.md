@@ -190,8 +190,8 @@ on continuity. Read:
   spokes, in percent of the one asked, extremes named (`quality` too).
 - `worst_jump` (with the counts above 2.5, 5, 20), `splits`, `refused`,
   `guard`, `note`. Jumps are judged after the polish, not here: it moves
-  vertices (NACA 4412: 4 above 5 after `size`, none after the polish; three
-  cylinders: one 4.73 -> 5.20, held with `hold=`). `budget_binding=True`
+  vertices (NACA 4412: 4 above 5 after `size`, none after the polish; it
+  keeps a jump below 5 below 5, `size_ceiling`). `budget_binding=True`
   with jumps above 5 is worth one run with a larger budget (three
   cylinders: 12 -> 6 above 5); one that stays is the shape's (Step 4) or
   the topology's (`sizing.md`).
