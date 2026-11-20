@@ -1604,7 +1604,10 @@ def add_ring(
     corners, ``fractions``, where it crosses each of ``xs`` and ``ys``, at
     the point nearest each of ``points``, and ``count`` edges between them
     (none: the ends and corners alone); ``start``/``end`` set the first and
-    last spoke's direction (an inlet line), else they are normal to the wall.
+    last spoke's direction (an inlet line), else a spoke at an end of the
+    curve runs along another reference curve ending there when that is
+    within 60 degrees of the wall's normal (`_end_follow`), and is normal to
+    the wall otherwise.
 
     ``fan=false`` leaves every convex corner that would fan open, ``open_at``
     the station nearest each point (`_band`)."""
@@ -1640,7 +1643,7 @@ def add_ring(
 
     def work(working: MeshModel) -> ConstructResult:
         if open_curve:
-            build, chain, notes, stations = _open_ring(
+            build, chain, notes, stations, follows = _open_ring(
                 working, curves, side, between, corner_angle, corner, fractions, xs, ys, points,
                 count, prefix)
             chain.end_spokes = end_spokes
@@ -1652,7 +1655,9 @@ def add_ring(
             result.note = "; ".join(part for part in (
                 f"{stations} stations along the open curve, band on its {side}: "
                 + ("; ".join(notes) or ("by arc length" if count else "its ends alone")),
-                _front_note(chain, build.front, False), _opened_note(build)) if part)
+                _front_note(chain, build.front, False),
+                _end_spokes_note(working, build.front, end_spokes, follows),
+                _opened_note(build)) if part)
             return result
         curve_id = curves[0]
         loop = _curve_polygon(working, curve_id)
@@ -1747,6 +1752,17 @@ def add_ring(
     return _atomic(model, work)
 
 
+def _end_spokes_note(model: MeshModel, front: Sequence[str], given, follows) -> str:
+    """Where an open ring's end spokes end and what set their direction."""
+    parts = []
+    for slot, name in ((0, "start"), (1, "end")):
+        vertex = model.vertices[front[0] if slot == 0 else front[-1]]
+        how = ("as given" if given[slot] is not None else
+               f"along {follows[slot]}" if follows[slot] else "normal to the wall")
+        parts.append(f"{name} {how} to {vertex.id} ({vertex.x:.6g}, {vertex.y:.6g})")
+    return "end spokes: " + ", ".join(parts) + " (start=/end= set their directions)"
+
+
 def _wall_edges(build: _Build, ids: Sequence[str], interiors: list, points: Sequence[Point],
                 closed: bool) -> list[str]:
     """Record the wall edges between consecutive stations - splines through
@@ -1837,6 +1853,33 @@ def _station_points(nodes, closed: bool, places: Sequence[Point], extent: float,
     ]
 
 
+def _end_follow(model: MeshModel, curves: Sequence[str], point: Point, normal: Point,
+                tolerance: float) -> tuple[Point | None, str | None]:
+    """The direction an open ring's end spoke follows: along another open
+    reference curve with an end point at the wall's end ``point``, its
+    first segment from there within 60 degrees of the band's ``normal`` -
+    the nearest to the normal when several are - else none (the spoke is
+    normal to the wall)."""
+    best = None
+    for curve_id, curve in sorted(model.geometry_curves.items()):
+        if curve_id in curves or len(curve.points) < 2:
+            continue
+        try:
+            if _CurvePath(model, curve_id).closed:
+                continue
+        except TopologyError:
+            continue
+        points = [(float(p[0]), float(p[1])) for p in curve.points]
+        for here, after in ((points[0], points[1]), (points[-1], points[-2])):
+            if math.dist(here, point) > tolerance or math.dist(here, after) <= 0.0:
+                continue
+            d = _unit(after[0] - here[0], after[1] - here[1])
+            cosine = d[0] * normal[0] + d[1] * normal[1]
+            if cosine > math.cos(math.radians(60.0)) and (best is None or cosine > best[0]):
+                best = (cosine, d, curve.name or curve_id)
+    return (best[1], best[2]) if best else (None, None)
+
+
 def _open_ring(working: MeshModel, curves: Sequence[str], side: str, between: Sequence[float],
                corner_angle: float, corner: float, fractions: Sequence[float], xs: Sequence[float],
                ys: Sequence[float], places: Sequence[Point], count: int, prefix: str | None):
@@ -1850,7 +1893,9 @@ def _open_ring(working: MeshModel, curves: Sequence[str], side: str, between: Se
     refused), at the section's point nearest each of ``places``
     (`_nearest_parameter`), then ``count`` edges spread by arc length
     between them; wall edges are splines through the curve's points
-    (`_CurvePath.edge_interior`, no segment running backwards)."""
+    (`_CurvePath.edge_interior`, no segment running backwards).  An end of
+    the section at an end of the curve gets the direction its spoke
+    follows along an adjacent reference curve (`_end_follow`)."""
     name, joined, joint_indices = _joined_curve(working, curves)
     path = _CurvePath(None, name, force_open=True, points=joined)
     points = list(path.points)
@@ -1942,8 +1987,23 @@ def _open_ring(working: MeshModel, curves: Sequence[str], side: str, between: Se
     for first, last in zip(merged, merged[1:]):
         interiors.append(path.edge_interior(first, last - first, tolerance))
     kinds = _wall_edges(build, ids, interiors, station_points, False)
-    chain = _Chain(ids, interiors, kinds, False, 1.0 if side == "left" else -1.0)
-    return build, chain, notes, len(merged)
+    band_side = 1.0 if side == "left" else -1.0
+    chain = _Chain(ids, interiors, kinds, False, band_side)
+    # The end spokes: along an adjacent curve ending where the wall ends.
+    ends: list[Point | None] = [None, None]
+    follows: list[str | None] = [None, None]
+    for slot, at_end in ((0, s0 <= 1.0e-12 * total), (1, s1 >= total * (1.0 - 1.0e-12))):
+        if not at_end:
+            continue
+        path_edge = [station_points[0], *interiors[0], station_points[1]] if slot == 0 else \
+            [station_points[-2], *interiors[-1], station_points[-1]]
+        a, b = (path_edge[0], path_edge[1]) if slot == 0 else (path_edge[-2], path_edge[-1])
+        tangent = _unit(b[0] - a[0], b[1] - a[1])
+        normal = (-tangent[1] * band_side, tangent[0] * band_side)
+        ends[slot], follows[slot] = _end_follow(
+            working, curves, points[0] if slot == 0 else points[-1], normal, path.tolerance)
+    chain.ends = (ends[0], ends[1])
+    return build, chain, notes, len(merged), follows
 
 
 def _turning(loop: Sequence[Point]) -> list[float]:

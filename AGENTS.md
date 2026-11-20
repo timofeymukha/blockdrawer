@@ -616,7 +616,13 @@ them in the canvas widgets.
   refused there. `start`/`end` (`add_ring` open, `add_band` on an open
   chain; `_Chain.end_spokes`) give an end spoke's direction, turned to the
   band's side, length `height / cos` to the normal, refused when parallel
-  to the wall; without them an open ring's ends are normal. `_wall_edges`
+  to the wall; without them an open ring's spoke at an end of the curve
+  follows another open reference curve with an end point there (an inlet
+  line; `_end_follow`, set as `_Chain.ends`) when its first segment is
+  within 60 degrees of the wall normal - the nearest to the normal of
+  several - and is normal otherwise (and at a `between` end); the note
+  gives each end spoke's far vertex and what set it (`_end_spokes_note`).
+  `_wall_edges`
   writes both kinds of ring's wall edges. Wall edges are splines
   through the curve's points (at most
   `MAX_SPLINE_POINTS`, none within a thousandth of a station). Curves

@@ -1198,3 +1198,28 @@ class StationsAtPointsTests(unittest.TestCase):
         with self.assertRaises(Exception) as caught:
             apply_commands(MeshModel(), ["add_curve 0,2;1,2 name=line", "add_stations line points=q"])
         self.assertIn("neither a point x,y nor vertex IDs", str(caught.exception))
+
+
+class OpenRingEndSpokeTests(unittest.TestCase):
+    def _duct(self, *commands):
+        # A wall rising at 30 degrees from the origin; an inlet line leaning back from its start.
+        return apply_commands(MeshModel(box=(5, 5, 6, 6)), [
+            f"add_curve 0,0;1,{math.tan(math.radians(30))} name=wall", *commands,
+        ])
+
+    def test_an_end_spoke_runs_along_the_curve_ending_there(self) -> None:
+        batch = self._duct("add_curve -0.5,1;0,0 name=inlet", "add_ring wall 0.1 side=left id=w")
+        model = batch.model
+        start = next(v for v in model.vertices.values() if v.id != "w_0" and v.x < 0.0)
+        # On the inlet line x = -y / 2.
+        self.assertAlmostEqual(start.x, -start.y / 2.0, places=12)
+        note = batch.results[2].result["note"]
+        self.assertIn("end spokes: start along inlet to", note)
+        self.assertIn("end normal to the wall", note)
+
+    def test_beyond_60_degrees_or_given_the_spoke_is_not_turned(self) -> None:
+        flat = self._duct("add_curve 0,0;-1,-0.2 name=floor", "add_ring wall 0.1 side=left id=w")
+        self.assertIn("start normal to the wall", flat.results[2].result["note"])
+        given = self._duct("add_curve -0.5,1;0,0 name=inlet", "add_ring wall 0.1 side=left start=0,1 id=w")
+        self.assertIn("start as given", given.results[2].result["note"])
+        self.assertTrue(any(abs(v.x) < 1e-12 and v.y > 0.05 for v in given.model.vertices.values()))

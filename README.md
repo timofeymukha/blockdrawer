@@ -589,8 +589,13 @@ was 3.6e-5 of the extent):
   refused a count their corners made unnecessary); wall
   edges are splines through the curve's points; `start`/`end` give the
   first and last spoke's direction (its normal component is the band
-  height) so they lie on an inlet or outlet line, else they are normal to
-  the wall. `normals` and `tips` need a closed curve. `add_band` takes
+  height) so they lie on an inlet or outlet line; without them a spoke at
+  an end of the curve runs along another reference curve ending there (an
+  inlet line) when that is within 60 degrees of the wall's normal - the
+  rule `add_band` has for the boundary edge it meets - and is normal
+  otherwise. The note gives each end spoke's far vertex and what set its
+  direction (two round-3 nozzle agents first put a vertex 4e-4 outside the
+  domain with spokes normal to a sloping wall). `normals` and `tips` need a closed curve. `add_band` takes
   `start`/`end` too. The round-2 nozzle (throwaway fills outside each wall,
   a band from them, 23 `remove_edge`, two `move_vertex` for the end spokes,
   45 commands) is two `add_ring ... side=left xs=... start=0,1 end=0,1`

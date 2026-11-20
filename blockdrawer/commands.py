@@ -1699,8 +1699,10 @@ _register(CommandSpec(
         "point order, no host block): curve may list several curves, each "
         "starting where the previous one ends (the joints are stations); "
         "stations at the ends, joints and corners, fractions, crossings of "
-        "xs/ys, points and count (none needed); start/end give the end spokes' "
-        "directions, else they are normal."
+        "xs/ys, points and count (none needed); an end spoke at an end of "
+        "the curve follows another reference curve ending there when within "
+        "60 degrees of the normal (an inlet line), else is normal; start/end "
+        "set them."
     ),
     (
         Parameter("curve", "curves", "reference curve (ID or name); along an open wall several, "
