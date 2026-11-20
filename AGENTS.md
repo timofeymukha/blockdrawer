@@ -141,7 +141,14 @@ them in the canvas widgets.
   band spokes, `quality.wall_first_widths`, against the asked one in
   percent, and the two spokes named), `worst_jump` (quality's interface measure on the sized session,
   with the counts above 2.5/5/20), `jump_cost`, `splits`, `moves`, `guard`,
-  `refused`, `note`, empty ones left out. Parameter kinds `blocks` (block IDs) and `numbers` (a list of
+  `refused`, `raised` (the three components spending raised the most cells
+  into, "EDGE FROM->TO +CELLS", `size._raised`), `field_cells_after_splits`
+  (the field solved again on continuity splits' blocks), `note`, empty ones
+  left out. `size`'s note says, when it applies, that continuity splits
+  changed the cells after spending (so a larger budget can end with fewer
+  cells), and which wall patches end more than 10 percent off the first
+  width asked when the field pass was dropped or strips kept their shared
+  ratio (`size._off_walls`). Parameter kinds `blocks` (block IDs) and `numbers` (a list of
   floats, e.g. a bbox) serve `smooth`; `locations` (`_coerce_locations`:
   `x,y` points or vertex IDs, separated by `;`, each ID its vertex's
   position) serves `add_ring`/`add_stations` `points=`. `resolve_position` gives

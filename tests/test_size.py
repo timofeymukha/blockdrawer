@@ -827,3 +827,43 @@ class FoldTests(unittest.TestCase):
         self.assertIn("v0-v1 (segment 3 of 3", text)
         self.assertIn("control point 1", text)
         self.assertEqual(to_data(model), before)
+
+
+class SizeNoteTests(unittest.TestCase):
+    def test_the_raised_components_and_the_walls_off(self) -> None:
+        from blockdrawer.size import _off_walls, _raised
+
+        moves = [
+            {"kind": "raise", "component": 3, "edge": "v1-v2", "from": 10, "to": 11, "cells": 100},
+            {"kind": "raise", "component": 3, "edge": "v1-v2", "from": 11, "to": 13, "cells": 220},
+            {"kind": "raise", "component": 5, "edge": "v4-v7", "from": 20, "to": 22, "cells": 400},
+            {"kind": "regrade", "strip": 2, "from": 0.1, "to": 0.2},
+        ]
+        self.assertEqual(_raised(moves), ["v4-v7 20->22 +400", "v1-v2 10->13 +320"])
+        bands = [{"patch": "wall", "first_width": [0.0016, 0.002], "asked": 0.002},
+                 {"patch": "top", "first_width": [0.0019, 0.002], "asked": 0.002}]
+        self.assertEqual(_off_walls(bands, 0.10), ["wall 0.0016..0.002 for 0.002 (-20%..+0%)"])
+
+    def test_a_dropped_pass_names_the_walls_it_leaves_off(self) -> None:
+        from unittest import mock
+
+        from blockdrawer import size as size_module
+
+        def dropped(working, state, options):
+            return state, {"strips": 1, "own": 0, "part": 0, "shared": 1, "refused_by_jumps": 0,
+                           "refused_by_grid": 0, "dropped": "worse than the spent state"}
+
+        with mock.patch.object(size_module, "_field_pass", side_effect=dropped):
+            result = size_model(band(), SizeOptions(0.001, 0.1, growth=1.2))
+        self.assertIn("the field pass was dropped", result.note)
+        self.assertIn("first widths more than 10 percent off the one asked on wall", result.note)
+
+    def test_the_digest_carries_them_flat(self) -> None:
+        batch = apply_commands(o_grid(), ["size 0.01 0.4 growth=1.2 budget=40000"])
+        (note,) = batch_digest(batch.model, batch)["notes"]
+        result = batch.results[0].result
+        self.assertIn("raised", result)
+        self.assertIn("field_cells_after_splits", result)
+        for value in note.values():
+            self.assertTrue(isinstance(value, (int, float, str, bool)) or (
+                isinstance(value, list) and all(not isinstance(item, (list, dict)) for item in value)), value)

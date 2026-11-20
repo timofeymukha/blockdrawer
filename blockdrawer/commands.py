@@ -2347,6 +2347,7 @@ def _size_note(data: dict[str, Any]) -> dict[str, Any]:
     note = {
         "total_cells": data.get("total_cells"),
         "field_cells": data.get("field_cells"),
+        "field_cells_after_splits": data.get("field_cells_after_splits"),
         "budget": data.get("budget"),
         "budget_binding": data.get("budget_binding"),
         "verification": (
@@ -2375,6 +2376,8 @@ def _size_note(data: dict[str, Any]) -> dict[str, Any]:
             + (f" ({data['field_grading']['dropped']})" if data["field_grading"].get("dropped") else "")
             if data.get("field_grading") else None
         ),
+        # The components spending raised, the most cells first.
+        "raised": data.get("raised") or None,
         "note": data.get("note"),
     }
     return {key: value for key, value in note.items() if value not in (None, "", [])}

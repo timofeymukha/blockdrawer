@@ -239,6 +239,10 @@ class SizeResult:
     # grading=field: how many strips took their members' own gradings,
     # half of them, or kept the shared ratio (None with grading=strip).
     field_grading: dict | None = None
+    # The components spending raised, the most cells first ("EDGE A->B +N").
+    raised: list[str] = field(default_factory=list)
+    # The field's cells solved again after continuity splits (None: none).
+    field_cells_after_splits: int | None = None
     note: str = ""
 
     def to_data(self) -> dict[str, Any]:
@@ -268,6 +272,8 @@ class SizeResult:
             "budget_factor": self.budget_factor,
             "budget_binding": self.budget_binding,
             "field_grading": self.field_grading,
+            "raised": self.raised,
+            "field_cells_after_splits": self.field_cells_after_splits,
             "note": self.note,
         }
 
@@ -634,6 +640,8 @@ def size_model(
     else:
         budget = options.budget if options.budget else int(round(DEFAULT_BUDGET * field_cells))
         state, moves, guard = _spend(working, state, options, budget, skew_floor, fold_floor)
+        spent_cells = _state_cells(working, state)
+        splits_before = len(splits)
         if options.split:
             state, moves, guard = _continuity_splits(
                 working, field_, state, moves, guard, options, budget, blocks, bbox, splits, refused,
@@ -664,6 +672,32 @@ def size_model(
     result.verification = state.get("verification", {})
     result.budget_binding = state.get("budget_binding")
     result.field_grading = field_grading
+    result.raised = _raised(moves)
+    if not options.keep_counts and len(splits) > splits_before:
+        # The field was solved again on the split blocks: ``field_cells``
+        # is the first field's (the budget's base), this is the last one's.
+        result.field_cells_after_splits = state.get("field_cells")
+        made = [item["edge"] for item in splits[splits_before:]]
+        result.note = " ".join(filter(None, [result.note, (
+            f"continuity splits of {', '.join(made[:4])}{' and more' if len(made) > 4 else ''} took the "
+            f"cells from {spent_cells:,} after spending to {result.total_cells:,}; the field solved again "
+            f"on the split blocks has {state.get('field_cells', 0):,} cells against {field_cells:,} "
+            "before them, and the budget was spent again from there: a larger budget can end with "
+            "fewer cells than a smaller one"
+        )]))
+    if field_grading is not None:
+        off = _off_walls(result.bands, 0.10)
+        refused_strips = field_grading["refused_by_jumps"] + field_grading["refused_by_grid"]
+        cause = (
+            "the field pass was dropped (the verification found it worse than the spent state)"
+            if field_grading.get("dropped")
+            else f"{refused_strips} strip(s) kept their shared ratio (refused by the jump or grid guard)"
+            if refused_strips else ""
+        )
+        if off and cause:
+            result.note = " ".join(filter(None, [result.note, (
+                f"{cause}: first widths more than 10 percent off the one asked on {'; '.join(off)}"
+            )]))
     field_faces = result.verification.get("field", {}).get("severe_faces", 0)
     if field_faces:
         result.note = " ".join(filter(None, [result.note, (
@@ -725,6 +759,36 @@ def _field_pass(working: MeshModel, state: dict, options: SizeOptions) -> tuple[
         return state, record
     trial_state["verification"] = {**state["verification"], "result": _brief(summary)}
     return trial_state, record
+
+
+def _raised(moves: list[dict], largest: int = 3) -> list[str]:
+    """The components spending (and the shape repair) raised, the most cells
+    first: "EDGE FROM->TO +CELLS" for the ``largest`` few, one entry each."""
+    total: dict[str, list] = {}
+    for move in moves:
+        if move.get("component") is None or "to" not in move or "cells" not in move:
+            continue
+        item = total.setdefault(move.get("edge", str(move["component"])), [move["from"], move["to"], 0])
+        item[1] = move["to"]
+        item[2] += move["cells"]
+    ranked = sorted(total.items(), key=lambda entry: (-entry[1][2], entry[0]))[:largest]
+    return [f"{edge} {first}->{last} +{cells:,}" for edge, (first, last, cells) in ranked]
+
+
+def _off_walls(bands: list[dict], limit: float) -> list[str]:
+    """Wall patches whose first heights at the band spokes leave the one
+    asked by more than ``limit`` (a fraction): "PATCH LOW..HIGH for ASKED
+    (-X%..+Y%)"."""
+    found = []
+    for band in bands:
+        asked = band.get("asked")
+        if not asked or not band.get("first_width"):
+            continue
+        low, high = band["first_width"]
+        if max(abs(low / asked - 1.0), abs(high / asked - 1.0)) > limit:
+            found.append(f"{band['patch']} {low:.3g}..{high:.3g} for {asked:.3g} "
+                         f"({100.0 * (low / asked - 1.0):+.0f}%..{100.0 * (high / asked - 1.0):+.0f}%)")
+    return found
 
 
 def _brief(summary: dict) -> dict:
@@ -1702,7 +1766,9 @@ def _continuity_splits(working, field_, state, moves, guard, options, budget, bl
         if not _split_strips(working, field_, {"two_ended": stranded}, options, splits, refused):
             break
         trial = _solve(working, field_, options, blocks, bbox)
+        solved_cells = _state_cells(working, trial)
         trial, trial_moves, trial_guard = _spend(working, trial, options, budget, skew_floor, fold_floor)
+        trial["field_cells"] = solved_cells
         promised = state["verification"]["field"]
         verified = trial["verification"]["result"]
         if (_jump_cost(trial, options) >= _jump_cost(state, options)
@@ -2100,7 +2166,8 @@ def _spend(model: MeshModel, state: dict, options: SizeOptions, budget: int, ske
     def make_move(kind, index, value, added):
         nonlocal cells
         if kind == "raise":
-            moves.append({"kind": "shape", "component": index, "from": counts[components[index][0]],
+            moves.append({"kind": "shape", "component": index, "edge": "-".join(components[index][0]),
+                          "from": counts[components[index][0]],
                           "to": value, "cells": added})
             write_raise(index, value, {})
             for member in components[index]:
@@ -2478,7 +2545,8 @@ def _spend(model: MeshModel, state: dict, options: SizeOptions, budget: int, ske
                     refused += 1
                     continue
                 refit = {}
-            moves.append({"kind": "raise", "component": index, "from": old, "to": value, "cells": added})
+            moves.append({"kind": "raise", "component": index, "edge": "-".join(components[index][0]),
+                          "from": old, "to": value, "cells": added})
             for member in components[index]:
                 counts[member] = value
             logs_changed = refit

@@ -102,6 +102,13 @@ $$
 - `keep_counts=true` keeps every count, recomputes the gradings and
   regrades strips for continuity without raising a count (after moving
   vertices or setting a count by hand).
+- The note names what moved the result: `raised` lists the three
+  components spending raised the most cells into ("EDGE FROM->TO +CELLS"),
+  and the note says when continuity splits changed the cells after
+  spending (`field_cells_after_splits`: the field solved again on the split
+  blocks, so `total_cells` can end below `field_cells` and a larger budget
+  with fewer cells) and which walls a dropped field pass or a refused strip
+  leaves more than 10 percent off the first width asked.
 
 ## Reading `verification`
 

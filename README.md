@@ -1168,7 +1168,13 @@ left or the guard refused them), the interface jumps above 2.5, 5 and 20
 and the worst ones, the first cell heights normal to each wall patch at
 its band spokes against the one asked, with the two spokes of the extremes
 named (`bands`; `quality`'s `first_widths` measure, see above), the moves, the guard's refusals, the splits and
-the links left out of sync; the quiet digest (`apply --quiet`, MCP default)
+the links left out of sync, the three components spending raised the most
+cells into (`raised`), and the field's cells solved again after continuity
+splits (`field_cells_after_splits`: the bluff-body trial's 165,264 cells
+below its `field_cells` of 168,578 came from one continuity split, whose
+re-solved field had 162,448; its note now says so, and names the walls a
+dropped field pass or a refused strip leaves more than 10 percent off the
+first width asked); the quiet digest (`apply --quiet`, MCP default)
 carries all of it as short strings. The worst jump is `quality`'s own
 measure on the sized session: `quality` after a later `smooth` reads a
 different one because the polish moves vertices (three cylinders: 6.14
