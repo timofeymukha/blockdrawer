@@ -561,7 +561,12 @@ them in the canvas widgets.
   travel, a block not strictly convex in construction order (a direction
   into the chain's blocks), a row vertex inside an existing straight
   exterior edge, a block over an existing block or vertex
-  (`_refuse_overlap` with a row label). The map from chain to row is
+  (`_refuse_overlap` with a row label). A station on the target line is
+  the far row itself: ignored and named in the note. The note always names
+  the thinnest column (`_thinnest_column`: its chain edge, that edge's
+  length and travel), so a fan front heading a far-field column shows
+  before `size` (round-3 high-lift: a 0.0006 front carried 15, 3593 cells
+  above aspect 1000 after `size`). The map from chain to row is
   affine, so lines stay lines and polyLines polyLines; arcs (except with
   `distance` and no spread, a translation) and splines become splines
   through the carried points (`unhooked_points`), straight on the target

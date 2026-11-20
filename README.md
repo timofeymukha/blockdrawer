@@ -523,8 +523,12 @@ refused by name; `id=PREFIX` names new vertices `PREFIX_0, ...` and blocks
   existing exterior vertex on a point's path becomes a station; a row
   vertex that would cut an existing edge, a block over an existing block or
   vertex, and a block that would not be strictly convex (a direction into
-  the chain's blocks) are refused. The note gives the far row in the
-  chain's order. `add_grid` makes rectangles from station lists and
+  the chain's blocks) are refused; a station on the target line is the far
+  row and is ignored. The note gives the far row in the chain's order and
+  the thinnest column - its chain edge, that edge's length and how far it
+  is carried - so a fan's front edge carried to the far field (round-3
+  high-lift: 0.0006 wide carried 15, 3593 cells above checkMesh's aspect
+  limit after `size`) shows before sizing. `add_grid` makes rectangles from station lists and
   `add_band to_box` sends spokes along the wall normals to a box; this
   carries a given chain along one direction. A trailing edge left open and
   its two spokes carried downstream is a C-grid's wake band:

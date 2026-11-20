@@ -1066,3 +1066,20 @@ class BandToBoxEdgeTests(unittest.TestCase):
         with self.assertRaises(Exception) as caught:
             apply_commands(MeshModel(), ["add_band edges=v2-v3 to_box=0,0.5,1,1"])
         self.assertIn("corner of the box", str(caught.exception))
+
+
+class RowNoteTests(unittest.TestCase):
+    def test_a_station_on_the_target_is_ignored_and_named(self) -> None:
+        batch = apply_commands(MeshModel(), ["add_rows edges=v1-v2 direction=1,0 to_x=3 stations=2,3"])
+        model = batch.model
+        self.assertEqual(sorted({round(v.x, 9) for v in model.vertices.values()}), [0.0, 1.0, 2.0, 3.0])
+        self.assertIn("station(s) on the target ignored: 3", batch.results[0].result["note"])
+        moved = apply_commands(MeshModel(), ["add_rows edges=v2-v3 direction=0,1 distance=0.5 stations=0.5"])
+        self.assertEqual(len(moved.model.blocks), 2)
+
+    def test_the_note_names_the_thinnest_column(self) -> None:
+        # A chain of a long and a short edge carried 4: the short one is the thinnest column.
+        model = apply_commands(MeshModel(), ["split_edge v1-v2 0.9"]).model
+        batch = apply_commands(model, ["add_rows bbox=0.9,-0.1,1.1,1.1 direction=1,0 to_x=5"])
+        note = batch.results[0].result["note"]
+        self.assertRegex(note, r"thinnest column: edge v\d+-v2, 0\.1 long, carried 4 \(40 times its length\)")

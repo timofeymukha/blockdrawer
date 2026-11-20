@@ -1345,8 +1345,16 @@ def add_rows(
                     chain.interiors[e] = tuple(working.edge_points(
                         key, fractions if key[0] == a else [1.0 - f for f in fractions]))
         absolute = bool(stations)
+        ignored = []
         if absolute:
-            values = sorted(set(stations))
+            # A station on the target line is the far row itself.
+            goal = to_x if to_x is not None else to_y if to_y is not None else distance
+            values = []
+            for value in sorted(set(stations)):
+                if abs(value - goal) <= 1.0e-9 * (1.0 + abs(goal)):
+                    ignored.append(value)
+                else:
+                    values.append(value)
         else:
             weights = [growth ** r for r in range(rows)]
             values = [sum(weights[:r]) / sum(weights) for r in range(1, rows)]
@@ -1457,10 +1465,30 @@ def add_rows(
                                           f"{far[-1]} (beside {chain.vertices[-1]})")]
         if taken:
             parts.append(f"stations from existing vertices on the paths: {_id_list(taken)}")
+        if ignored:
+            parts.append(f"station(s) on the target ignored: {', '.join(f'{v:g}' for v in ignored)}")
+        parts.append(_thinnest_column(working, chain, position, edge_count, reach))
         result.note = "; ".join(parts)
         return result
 
     return _atomic(model, work)
+
+
+def _thinnest_column(model: MeshModel, chain: _Chain, position, edge_count: int, reach) -> str:
+    """The narrowest column the rows carry: its chain edge, that edge's
+    length and how far it is carried - a fan front's short edge carried to
+    the far field shows here before ``size`` fills it with thin cells."""
+    count = len(chain.vertices)
+    best = None
+    for e in range(edge_count):
+        a, b = chain.vertices[e], chain.vertices[(e + 1) % count]
+        length = model.edge_length(edge_key(a, b))
+        travel = 0.5 * (reach(position[a]) + reach(position[b]))
+        if best is None or length < best[2]:
+            best = (a, b, length, travel)
+    a, b, length, travel = best
+    return (f"thinnest column: edge {a}-{b}, {length:.3g} long, carried {travel:.3g} "
+            f"({travel / length:.3g} times its length)")
 
 
 # ---------------------------------------------------------------------------
