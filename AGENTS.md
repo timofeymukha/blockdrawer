@@ -142,7 +142,9 @@ them in the canvas widgets.
   percent, and the two spokes named), `worst_jump` (quality's interface measure on the sized session,
   with the counts above 2.5/5/20), `jump_cost`, `splits`, `moves`, `guard`,
   `refused`, `note`, empty ones left out. Parameter kinds `blocks` (block IDs) and `numbers` (a list of
-  floats, e.g. a bbox) serve `smooth`. `resolve_position` gives
+  floats, e.g. a bbox) serve `smooth`; `locations` (`_coerce_locations`:
+  `x,y` points or vertex IDs, separated by `;`, each ID its vertex's
+  position) serves `add_ring`/`add_stations` `points=`. `resolve_position` gives
   `add_vertex` and `move_vertex` (`_POSITION`) positions relative to
   existing vertices: polar `r`/`theta` about `center` or the vertex
   `about`, else each coordinate from exactly one of the number, `at`
@@ -580,7 +582,12 @@ them in the canvas widgets.
   through the carried points (`unhooked_points`), straight on the target
   line. `add_ring`
   places stations at curve corners (vertices turning more than `corner`,
-  default `CORNER_ANGLE`), at `fractions`, at `normals` (the point where
+  default `CORNER_ANGLE`), at `fractions`, at `points` (open and closed,
+  and `add_stations`: the curve point - in the section, for an open ring
+  or `between` - nearest each point, `_station_points`/
+  `_nearest_parameter`; refused naming the candidates when another point
+  more than a thousandth of the curve's size away is as near within a
+  millionth: a point on a U-bend's axis, a circle's centre), at `normals` (the point where
   the outward normal has each angle: vertex normals bisect their segments
   and vary linearly between vertices, a corner sweeps between its two
   segments' normals in place; refused unless there is exactly one point,
@@ -621,8 +628,9 @@ them in the canvas widgets.
   vertices on a `_CurvePath` (the polyline `add_ring` stations lie on):
   `count` spread by arc length over the curve or a `between` section (two
   fractions, or two points taken to the curve; forward round a closed
-  curve), arc-length `fractions`, and single crossings of `xs`/`ys`
-  (refused unless exactly one in the section); ordered along the section,
+  curve), arc-length `fractions`, single crossings of `xs`/`ys`
+  (refused unless exactly one in the section, the refusal pointing at
+  `points=`) and the nearest points to `points`; ordered along the section,
   station k named `ID_k` (`_Build.vertex(name=...)`; a reused vertex keeps
   its ID and leaves its k unused), `offset` adding a translation so a
   periodic partner chain gets the same stations node for node. A spline

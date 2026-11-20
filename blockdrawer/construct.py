@@ -1569,6 +1569,7 @@ def add_ring(
     count: int = 0,
     fractions: Sequence[float] = (),
     normals: Sequence[float] = (),
+    points: Sequence[Point] = (),
     corner: float = math.degrees(CORNER_ANGLE),
     tips: bool = False,
     rows: int = 1,
@@ -1593,14 +1594,15 @@ def add_ring(
     normal has each of the ``normals`` angles (refused unless there is
     exactly one), with ``tips`` the peak of every rounded convex corner
     (`_tip_stations`), and ``count`` edges spread by arc length between
-    them.
+    them; ``points`` puts a station at the curve point nearest each point
+    (refused where that is not unique).
 
     Along an open curve (``side=left`` or ``right`` of its point order, no
     host block needed; `_open_ring`) - or several, given in order, each
     starting where the previous one ends, the joints kept as stations: the
     section ``between`` (default the whole curve) with stations at its ends,
-    corners, ``fractions``, where it crosses each of ``xs`` and ``ys``, and
-    ``count`` edges between them
+    corners, ``fractions``, where it crosses each of ``xs`` and ``ys``, at
+    the point nearest each of ``points``, and ``count`` edges between them
     (none: the ends and corners alone); ``start``/``end`` set the first and
     last spoke's direction (an inlet line), else they are normal to the wall.
 
@@ -1619,8 +1621,8 @@ def add_ring(
                             "(a closed ring takes one curve)")
     if count < 0:
         raise TopologyError("count is the number of edges, at least 0")
-    if not open_curve and not (count or fractions or normals):
-        raise TopologyError("give count (edges round the curve), fractions or normals")
+    if not open_curve and not (count or fractions or normals or points):
+        raise TopologyError("give count (edges round the curve), fractions, normals or points")
     if not 0.0 < corner < 180.0:
         raise TopologyError("corner is an angle in degrees between 0 and 180")
     if not open_curve:
@@ -1639,7 +1641,8 @@ def add_ring(
     def work(working: MeshModel) -> ConstructResult:
         if open_curve:
             build, chain, notes, stations = _open_ring(
-                working, curves, side, between, corner_angle, corner, fractions, xs, ys, count, prefix)
+                working, curves, side, between, corner_angle, corner, fractions, xs, ys, points,
+                count, prefix)
             chain.end_spokes = end_spokes
             where = {v: (working.vertices[v].x, working.vertices[v].y) for v in chain.vertices}
             _band(build, chain, height, rows, growth, None,
@@ -1675,6 +1678,11 @@ def add_ring(
             explicit.add(_normal_station(loop, lengths, turning, orientation, corner_angle, angle))
         if normals:
             notes.append(f"{len(normals)} station(s) by normal")
+        if points:
+            nodes = [(lengths[k] / total, loop[k]) for k in range(n)]
+            extent = _extent(loop)
+            explicit.update(u * total for u in _station_points(nodes, True, points, extent, 1.0e-3 * extent))
+            notes.append(f"{len(points)} station(s) at points")
         stations.update(explicit)
         if tips:
             found = [
@@ -1786,9 +1794,52 @@ def _joined_curve(model: MeshModel, curves: Sequence[str]) -> tuple[str, list[Po
     return " + ".join(names), joined, joints
 
 
+def _nearest_parameter(nodes: Sequence[tuple[float, Point]], closed: bool, point: Point,
+                       tie: float, apart: float, what: str) -> float:
+    """The parameter of the point of a polyline (``nodes``: parameter and
+    point, in order; ``closed`` joins the last to the first at parameter 1)
+    nearest to ``point``, refused when another point of the polyline, more
+    than ``apart`` from it, is as near within ``tie``."""
+    segments = list(zip(nodes, nodes[1:]))
+    if closed:
+        segments.append((nodes[-1], (1.0 + nodes[0][0], nodes[0][1])))
+    candidates = []
+    for (ua, a), (ub, b) in segments:
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        squared = dx * dx + dy * dy
+        t = 0.0 if squared <= 0.0 else max(0.0, min(1.0, ((point[0] - a[0]) * dx + (point[1] - a[1]) * dy) / squared))
+        q = (a[0] + t * dx, a[1] + t * dy)
+        u = ua + t * (ub - ua)
+        candidates.append((math.dist(point, q), u % 1.0 if closed else u, q))
+    best = min(item[0] for item in candidates)
+    close = sorted((item for item in candidates if item[0] <= best + tie), key=lambda item: item[0])
+    distinct: list[tuple[float, float, Point]] = []
+    for item in close:
+        if all(math.dist(item[2], other[2]) > apart for other in distinct):
+            distinct.append(item)
+    if len(distinct) > 1:
+        listed = ", ".join(f"({q[0]:.6g}, {q[1]:.6g})" for _d, _u, q in distinct[:4])
+        raise TopologyError(
+            f"{what} has no unique nearest curve point: {listed} are all {best:.4g} from it; "
+            "give a point nearer the one meant"
+        )
+    return close[0][1]
+
+
+def _station_points(nodes, closed: bool, places: Sequence[Point], extent: float, tolerance: float) -> list[float]:
+    """Parameters of the stations at ``places``: each the nearest point of
+    the polyline (`_nearest_parameter`; a tie within a millionth of the
+    curve's size between points more than ``tolerance`` apart is refused)."""
+    return [
+        _nearest_parameter(nodes, closed, place, 1.0e-6 * extent, tolerance,
+                           f"the point ({place[0]:.6g}, {place[1]:.6g})")
+        for place in places
+    ]
+
+
 def _open_ring(working: MeshModel, curves: Sequence[str], side: str, between: Sequence[float],
                corner_angle: float, corner: float, fractions: Sequence[float], xs: Sequence[float],
-               ys: Sequence[float], count: int, prefix: str | None):
+               ys: Sequence[float], places: Sequence[Point], count: int, prefix: str | None):
     """The wall chain of a band along an open curve (the polyline through
     its points, no closing segment) - or several joined end to start, each
     joint a station (`_joined_curve`) - or the section ``between`` two
@@ -1796,7 +1847,8 @@ def _open_ring(working: MeshModel, curves: Sequence[str], side: str, between: Se
     the section's ends and joints, at the curve's vertices turning more
     than the corner angle, at the ``fractions`` of the whole curve, where
     the section crosses each of ``xs`` and ``ys`` (exactly once, else
-    refused), then ``count`` edges spread by arc length
+    refused), at the section's point nearest each of ``places``
+    (`_nearest_parameter`), then ``count`` edges spread by arc length
     between them; wall edges are splines through the curve's points
     (`_CurvePath.edge_interior`, no segment running backwards)."""
     name, joined, joint_indices = _joined_curve(working, curves)
@@ -1845,7 +1897,8 @@ def _open_ring(working: MeshModel, curves: Sequence[str], side: str, between: Se
         anchors.add(min(s1, max(s0, value)))
     if fractions:
         notes.append(f"{len(fractions)} station(s) by fraction")
-    samples = [0.0, *[u for u, _p in path.inside_with_parameters(s0, s1 - s0)], 1.0]
+    inside = path.inside_with_parameters(s0, s1 - s0)
+    samples = [0.0, *[u for u, _p in inside], 1.0]
     for axis, values in ((0, xs), (1, ys)):
         for value in values:
             hits = _crossings(path, s0, s1 - s0, samples, axis, value)
@@ -1854,11 +1907,17 @@ def _open_ring(working: MeshModel, curves: Sequence[str], side: str, between: Se
                 raise TopologyError(
                     f"the section of {path.name} crosses {axis_name} = {value:g} "
                     + (f"{len(hits)} times" if hits else "nowhere")
-                    + ": a station needs exactly one crossing; narrow it with between="
+                    + ": a station needs exactly one crossing; narrow it with between=, "
+                    "or give the station's point (points=)"
                 )
             anchors.add(s0 + hits[0] * (s1 - s0))
     if xs or ys:
         notes.append(f"{len(xs) + len(ys)} station(s) by crossing")
+    if places:
+        nodes = [(0.0, path.at(s0)), *inside, (1.0, path.at(s1))]
+        for u in _station_points(nodes, False, places, path.extent, path.tolerance):
+            anchors.add(s0 + u * (s1 - s0))
+        notes.append(f"{len(places)} station(s) at points")
     ordered = sorted(anchors)
     if count:
         extra = set()
@@ -2338,6 +2397,7 @@ def add_stations(
     xs: Sequence[float] = (),
     ys: Sequence[float] = (),
     offset: Sequence[float] = (),
+    points: Sequence[Point] = (),
     prefix: str | None = None,
 ) -> ConstructResult:
     """Standalone vertices on a reference curve, ordered along it.
@@ -2349,14 +2409,15 @@ def add_stations(
     ends included; round a closed curve without ``between`` they start at
     its first point), the arc-length ``fractions`` of the whole curve, and
     where the section crosses each of ``xs`` and ``ys`` (refused unless it
-    crosses exactly once).  ``offset`` translates every station after it is
+    crosses exactly once), and the section's point nearest each of
+    ``points`` (refused where that is not unique).  ``offset`` translates every station after it is
     placed, so the translated partner of a periodic chain gets stations
     matching this chain's node for node.  With ``id=NAME`` station k along
     the section is ``NAME_k``; a station on an existing vertex reuses it."""
     if count < 0 or count == 1:
         raise TopologyError("count is the number of stations, at least 2 (0: none)")
-    if not (count or fractions or xs or ys):
-        raise TopologyError("give count, fractions, xs or ys")
+    if not (count or fractions or xs or ys or points):
+        raise TopologyError("give count, fractions, xs, ys or points")
     if between and len(between) not in (2, 4):
         raise TopologyError("between takes two fractions or two points (x0,y0,x1,y1)")
     if offset and len(offset) != 2:
@@ -2410,9 +2471,17 @@ def add_stations(
                     raise TopologyError(
                         f"the section of {path.name} crosses {name} = {value:g} "
                         + (f"{len(hits)} times (fractions {where})" if hits else "nowhere")
-                        + ": a station needs exactly one crossing; narrow it with between="
+                        + ": a station needs exactly one crossing; narrow it with between=, "
+                        "or give the station's point (points=)"
                     )
                 found.append(hits[0])
+        if points:
+            if whole_loop:
+                nodes = [(path.lengths[k] / total, p) for k, p in enumerate(path.points)]
+            else:
+                nodes = [(0.0, path.at(s0)), *path.inside_with_parameters(s0, length),
+                         (1.0, path.at(s0 + length))]
+            found += _station_points(nodes, whole_loop, points, path.extent, path.tolerance)
         ordered: list[float] = []
         for u in sorted(found):
             if not ordered or abs(u - ordered[-1]) * abs(length) > build.tol:

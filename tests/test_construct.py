@@ -1153,3 +1153,48 @@ class JoinedCurveRingTests(unittest.TestCase):
         with self.assertRaises(Exception) as caught:
             self._walls("add_ring lower,ramp 0.1 count=4")
         self.assertIn("a closed ring takes one curve", str(caught.exception))
+
+
+class StationsAtPointsTests(unittest.TestCase):
+    def _bend(self, *commands):
+        # A U: along y = 0.25 to x = 0, a half circle about the origin, back along y = -0.25.
+        arc = ";".join(f"{0.25 * math.sin(math.pi * k / 16)},{0.25 * math.cos(math.pi * k / 16)}"
+                       for k in range(1, 16))
+        return apply_commands(MeshModel(box=(5, 5, 6, 6)), [
+            f"add_curve -2,0.25;0,0.25;{arc};0,-0.25;-2,-0.25 name=u", *commands,
+        ])
+
+    def test_an_open_ring_station_at_a_point_where_xs_crosses_twice(self) -> None:
+        with self.assertRaises(Exception) as caught:
+            self._bend("add_ring u 0.1 side=left xs=-1")
+        self.assertIn("2 times", str(caught.exception))
+        self.assertIn("points=", str(caught.exception))
+        batch = self._bend("add_vertex -1 -0.6 id=a", "add_ring u 0.1 side=left points=-1,0.3;a id=r")
+        stations = {(round(v.x, 9), round(v.y, 9)) for v in batch.model.vertices.values()}
+        self.assertIn((-1.0, 0.25), stations)
+        self.assertIn((-1.0, -0.25), stations)
+        self.assertIn("2 station(s) at points", batch.results[2].result["note"])
+
+    def test_a_point_with_no_unique_nearest_curve_point_is_refused(self) -> None:
+        with self.assertRaises(Exception) as caught:
+            self._bend("add_ring u 0.1 side=left points=0,0")
+        self.assertIn("no unique nearest curve point", str(caught.exception))
+        with self.assertRaises(Exception) as caught:
+            self._bend("add_stations u points=-1,0")
+        self.assertIn("(-1, 0.25)", str(caught.exception))
+
+    def test_closed_rings_and_stations_take_points(self) -> None:
+        batch = apply_commands(MeshModel(box=(5, 5, 6, 6)), [
+            f"add_curve {circle_points(1.0, 64)} name=c",
+            "add_ring c 0.1 points=2,0;0,3;-2,0;0,-4 id=r",
+        ])
+        ring = sorted((round(v.x, 9), round(v.y, 9)) for v in batch.model.vertices.values()
+                      if abs(math.hypot(v.x, v.y) - 1.0) < 1e-9)
+        self.assertEqual(ring, [(-1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (1.0, 0.0)])
+        stations = apply_commands(MeshModel(), [
+            "add_curve 0,2;1,2;2,2 name=line", "add_stations line points=1.5,3;v0 between=0.25,1 id=s",
+        ]).results[1].result
+        self.assertEqual(stations["stations"], ["s_0", "s_1"])
+        with self.assertRaises(Exception) as caught:
+            apply_commands(MeshModel(), ["add_curve 0,2;1,2 name=line", "add_stations line points=q"])
+        self.assertIn("neither a point x,y nor vertex IDs", str(caught.exception))

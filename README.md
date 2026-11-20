@@ -550,11 +550,16 @@ was 3.6e-5 of the extent):
   `move_vertex`, the wake strips one `add_rows ... to_x=2 rows=3`),
   Mesh OK 49,182 cells, 60.62 degrees, skewness 2.86 against 50,974, 60.57
   and 2.53.
-- `add_ring CURVE HEIGHT count=N | fractions=... | normals=... [corner=DEG]
-  [tips=true] [side=in]` - a band round a closed reference curve: vertices on the
+- `add_ring CURVE HEIGHT count=N | fractions=... | normals=... | points=...
+  [corner=DEG] [tips=true] [side=in]` - a band round a closed reference curve: vertices on the
   curve at its corners (turning more than `corner`, default 30 degrees), at
   the given arc-length fractions, where the outward normal points at each
   `normals` angle (degrees from +x; exactly one such point, else refused),
+  at the curve point nearest each of `points` (`x,y` or vertex IDs,
+  separated by `;`; refused naming the candidates where two points of the
+  curve are equally near: a station at a point, or opposite a vertex on
+  the other wall, with no crossing index - five round-3 trials computed
+  such fractions by script or typed them from `describe`),
   with `tips=true` at the peak of each rounded convex corner (the wall
   turning 45 degrees within a hundredth of the perimeter either side: an
   elliptic nose, a leading edge), and spread by arc length between them;
@@ -570,14 +575,16 @@ was 3.6e-5 of the extent):
   band block that would fold against the box is refused with the spokes and
   corners named. `side=in` puts the band inside a closed curve.
 - `add_ring CURVE[,CURVE...] HEIGHT side=left|right [count=N] [fractions=...] [xs=...]
-  [ys=...] [between=F0,F1 | between=X0,Y0,X1,Y1] [start=DX,DY] [end=DX,DY]` -
+  [ys=...] [points=...] [between=F0,F1 | between=X0,Y0,X1,Y1] [start=DX,DY] [end=DX,DY]` -
   a band along an open reference curve (internal flow: a wall chain, no
   host block), on its left or right as its points run - or along several
   curves given in order, each starting where the previous one ends, joined
   into one wall with every joint a station (three round-3 agents joined
   point files by hand for the Y-junction's wall chains): stations at the
   section's two ends, at its corners, at the fractions, where it crosses
-  each x or y (exactly once, else refused) and by count between them (with
+  each x or y (exactly once, else refused: `points=` takes a station where
+  `xs=` crosses twice), at the section's point nearest each of `points`
+  and by count between them (with
   none of these, from its ends and corners alone: three round-3 agents were
   refused a count their corners made unnecessary); wall
   edges are splines through the curve's points; `start`/`end` give the
@@ -591,12 +598,13 @@ was 3.6e-5 of the extent):
   1.4e-6 of the trial's (its two hand-moved inlet spokes); default chain
   and checkMesh identical (14,620 cells, Mesh OK, 12.01 degrees).
 - `add_stations CURVE count=N [between=F0,F1 | between=X0,Y0,X1,Y1] |
-  fractions=... | xs=... | ys=... [offset=DX,DY] [id=NAME]` - standalone
+  fractions=... | xs=... | ys=... | points=... [offset=DX,DY] [id=NAME]` - standalone
   vertices on a reference curve (on the polyline through its points, where
   `add_ring` puts its stations), ordered along it and named `NAME_0, ...`:
   a count spread by arc length over the curve or a section of it, the given
-  arc-length fractions, or where it crosses each x or y (exactly one
-  crossing in the section, else refused). `offset` translates every station,
+  arc-length fractions, where it crosses each x or y (exactly one
+  crossing in the section, else refused), or at its point nearest each of
+  `points` (as `add_ring`'s). `offset` translates every station,
   so the partner chain of a translational periodic pair gets matching
   stations in one command; `add_fill` then takes them as a side's stations.
   A spline edge along a curve keeps its points symmetrically from both ends,

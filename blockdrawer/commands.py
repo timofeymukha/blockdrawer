@@ -329,6 +329,42 @@ def _coerce_points(value: Any, name: str) -> tuple[tuple[float, float], ...]:
     )
 
 
+def _coerce_locations(model: MeshModel, value: Any, name: str) -> tuple[tuple[float, float], ...]:
+    """Points given as coordinates or as vertex IDs (their positions):
+    ``x,y;ID;x,y`` - items separated by semicolons, an item of comma-separated
+    vertex IDs giving each - or a JSON list of ``[x, y]`` pairs, ``"x,y"``
+    strings and IDs."""
+    if isinstance(value, str):
+        text = value.strip()
+        items: list[Any] = _coerce_list(text, name) if text.startswith("[") else \
+            [item.strip() for item in text.split(";") if item.strip()]
+    elif isinstance(value, (list, tuple)):
+        items = list(value)
+    else:
+        raise CommandError(f"{name} must be points x,y or vertex IDs, separated by ';'")
+    out: list[tuple[float, float]] = []
+    for index, item in enumerate(items):
+        if isinstance(item, str) and item.strip() in model.vertices:
+            vertex = model.vertices[item.strip()]
+            out.append((vertex.x, vertex.y))
+            continue
+        try:
+            out.append(_coerce_point(item, f"{name}[{index}]"))
+            continue
+        except CommandError:
+            if not isinstance(item, str):
+                raise
+        identifiers = [part.strip() for part in item.split(",") if part.strip()]
+        unknown = [part for part in identifiers if part not in model.vertices]
+        if unknown or not identifiers:
+            raise CommandError(
+                f"{name}[{index}] {item!r} is neither a point x,y nor vertex IDs"
+                + (f" (unknown vertex {unknown[0]!r})" if unknown else "")
+            )
+        out.extend((model.vertices[v].x, model.vertices[v].y) for v in identifiers)
+    return tuple(out)
+
+
 def _coerce_vertex(model: MeshModel, value: Any, name: str) -> str:
     vertex_id = _coerce_str(value, name)
     if vertex_id not in model.vertices:
@@ -376,6 +412,8 @@ def coerce_argument(
         return _coerce_point(value, name)
     if kind == "points":
         return _coerce_points(value, name)
+    if kind == "locations":
+        return _coerce_locations(model, value, name)
     if kind == "blocks":
         known = {block.id for block in model.blocks}
         identifiers = [str(item).strip() for item in _coerce_list(value, name)]
@@ -1480,7 +1518,7 @@ def _run_add_ring(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
 
     return add_ring(
         model, args["curve"], args["height"], count=args["count"],
-        fractions=args["fractions"], normals=args["normals"], corner=args["corner"],
+        fractions=args["fractions"], normals=args["normals"], points=args["points"], corner=args["corner"],
         tips=args["tips"], rows=args["rows"], growth=args["growth"], side=args["side"],
         between=args["between"], xs=args["xs"], ys=args["ys"], start=args["start"], end=args["end"],
         fan=args["fan"], open_at=args["open_at"], prefix=args["id"],
@@ -1493,7 +1531,7 @@ def _run_add_stations(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
     return add_stations(
         model, args["curve"], count=args["count"], between=args["between"],
         fractions=args["fractions"], xs=args["xs"], ys=args["ys"],
-        offset=args["offset"], prefix=args["id"],
+        offset=args["offset"], points=args["points"], prefix=args["id"],
     ).to_data()
 
 
@@ -1531,6 +1569,10 @@ _START = Parameter("start", "numbers", "dx,dy of an open chain's first spoke (el
 _END = Parameter("end", "numbers", "dx,dy of an open chain's last spoke", required=False, default=())
 _BETWEEN = Parameter("between", "vertices", "select the unassigned exterior chain joining these two vertices",
                      required=False, default=())
+_POINTS = Parameter("points", "locations",
+                    "stations at the curve points nearest these points: x,y or vertex IDs, "
+                    "separated by ';' (refused where the nearest point is not unique)",
+                    required=False, default=())
 _register(CommandSpec(
     "add_grid",
     (
@@ -1643,6 +1685,7 @@ _register(CommandSpec(
         "at the given arc-length fractions from its first point, where the "
         "outward normal points at each of the normals angles (degrees "
         "counter-clockwise from +x; exactly one such point is required), "
+        "at the curve point nearest each of points (x,y or vertex IDs), "
         "with tips=true at the peak of each rounded convex corner (a nose "
         "turning 45 degrees within a hundredth of the perimeter either "
         "side), and count edges spread by arc length between them; wall "
@@ -1656,7 +1699,7 @@ _register(CommandSpec(
         "point order, no host block): curve may list several curves, each "
         "starting where the previous one ends (the joints are stations); "
         "stations at the ends, joints and corners, fractions, crossings of "
-        "xs/ys and count (none needed); start/end give the end spokes' "
+        "xs/ys, points and count (none needed); start/end give the end spokes' "
         "directions, else they are normal."
     ),
     (
@@ -1669,6 +1712,7 @@ _register(CommandSpec(
                   required=False, default=()),
         Parameter("normals", "numbers", "outward-normal angles (degrees) of extra stations",
                   required=False, default=()),
+        _POINTS,
         Parameter("corner", "float", "a vertex turning more than this many degrees is a station",
                   required=False, default=30.0),
         Parameter("tips", "bool", "a station at the peak of each rounded convex corner",
@@ -1699,7 +1743,8 @@ _register(CommandSpec(
         "(two fractions, or two points taken to the curve; forward round a "
         "closed curve), the arc-length fractions of the whole curve, and "
         "where it crosses each xs and ys (exactly one crossing, else "
-        "refused). offset=DX,DY translates them all: the stations of a "
+        "refused), and at the curve point nearest each of points (x,y or "
+        "vertex IDs; in the section). offset=DX,DY translates them all: the stations of a "
         "periodic partner chain, node for node. id=NAME names station k "
         "NAME_k; a station on an existing vertex reuses it."
     ),
@@ -1713,6 +1758,7 @@ _register(CommandSpec(
         Parameter("xs", "numbers", "stations where the curve crosses these x", required=False, default=()),
         Parameter("ys", "numbers", "stations where the curve crosses these y", required=False, default=()),
         Parameter("offset", "numbers", "dx,dy added to every station", required=False, default=()),
+        _POINTS,
         Parameter("id", "optional_str", "name station k ID_k (default: next vN)",
                   required=False, default=None),
     ),
