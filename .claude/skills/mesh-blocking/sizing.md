@@ -47,8 +47,9 @@ $$
   sized at `core_size` and the note says so.
 - Widths are bounded across every block interface by `interface_growth`
   (default 1.25 with `directional`, unmatched with `distance`); opposite
-  sides of a strip of similar blocks share one series, so rectangles are not
-  sheared; a strip fine at both ends is split where its size peaks unless a
+  sides of a strip of similar blocks share one series until the field pass
+  (`grading=field`, below) grades them apart; a strip fine at both ends is
+  split where its size peaks unless a
   piece would be shorter than one wanted cell (`refused` says so).
 - `count_rule=max` lets the finest demand in a count component decide;
   `mean` the length-weighted mean (coarser where a short wall piece shares
@@ -99,6 +100,17 @@ $$
   first height 20 -> 13 percent off on average, NACA 4412 68.6 -> 45.1
   degrees, no session worse by the rule. The high-lift flap stays 84
   percent fine: its spokes' count is tied to the far-field fills.
+  It shears long thin blocks: each strip passes its guard alone, and with
+  both pairs of sides of the same blocks graded apart the cells between
+  them tilt. A U-bend's 5 x 0.15 band blocks: checkMesh average 15.8
+  degrees for 2.6 with `grading=strip` at the same maximum (37.6 / 38.0),
+  where `strip` leaves the first width up to 19 percent fine. The rule
+  that made it the default had no term on the average; a version that
+  kept the strips buying neither a first width nor a jump on their shared
+  ratio gave 2.8 there and failed the rule elsewhere (39 sessions: three
+  maxima +2.1 degrees, a cascade's skewness 2.84 -> 3.66), so it is not
+  in. When the average is several times what the block angles explain,
+  run `size ... grading=strip` on a copy and keep what the brief prefers.
 - `keep_counts=true` keeps every count, recomputes the gradings and
   regrades strips for continuity without raising a count (after moving
   vertices or setting a count by hand). As a step after the polish on 39
