@@ -505,8 +505,16 @@ them in the canvas widgets.
   `ID_k`/next `vN`, blocks ordered and checked strictly convex
   (`_validate_convex_ccw`, refused by name) or reused when the same four
   vertices already form one, counts merged as `add_block_from_vertices`
-  does, arc/spline geometry on new edges only, one `validate()`.
-  `add_grid` skips cells by centre (skip boxes, inside `outside` curves,
+  does, arc/spline geometry on new edges only, one `validate()`. A new
+  vertex closer to another vertex than `NEAR_FRACTION` (1.5e-5) of the
+  model's extent but outside the reuse tolerance is named in the note
+  (`_Build.near_note`, `ConstructResult.near`; a note, not a refusal): a
+  station meant to be that vertex, missed by a rounded fraction or a fill
+  side read as open. The fraction lies between the closest pair an
+  operator made on the 19 round-3 builds and the skill's examples (3.6e-5)
+  and the defects reproduced (3.7e-7, a six-digit fraction on the U-bend;
+  8.2e-6, a high-lift fill side beside a wall vertex), at about their
+  geometric mean. `add_grid` skips cells by centre (skip boxes, inside `outside` curves,
   inside existing blocks), conforms to existing exterior vertices on kept
   cells' sides (fixed point, stations merged within tolerance) and refuses
   a grid vertex inside an existing straight exterior edge. `_band` builds

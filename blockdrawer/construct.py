@@ -96,6 +96,18 @@ MITRE_LIMIT = 3.0
 MAX_SPLINE_POINTS = 40
 # An add_fill refusal lists at most this many rejected readings of its sides.
 MAX_FILL_REASONS = 4
+# A new vertex closer than this fraction of the model's extent (the diagonal
+# of all its vertices' bounding box) to another vertex, but outside the
+# reuse tolerance, is named in the operator's note: a station meant to be
+# that vertex and missed by a rounded fraction or a side read as open. On the
+# 19 round-3 benchmark builds and the skill's four examples the closest pair
+# an operator made was 3.6e-5 of the extent (high-lift ring and fill
+# stations); the defects reproduced were 3.7e-7 (a six-digit fraction,
+# U-bend) and 8.2e-6 (a fill side read as open beside a wall vertex,
+# high-lift). The fraction is about their geometric mean, 1.7e-5, rounded down.
+NEAR_FRACTION = 1.5e-5
+# Notes list at most this many such vertices.
+NEAR_LISTED = 4
 
 
 @dataclass
@@ -108,6 +120,8 @@ class ConstructResult:
     edges: int = 0
     note: str = ""
     stations: list[str] = field(default_factory=list)
+    # New vertices beside another vertex but not reused (`_Build.near_note`).
+    near: str = ""
 
     def to_data(self) -> dict[str, Any]:
         data = {
@@ -122,8 +136,9 @@ class ConstructResult:
             data["edges"] = self.edges
         if self.operation == "add_stations":
             data["stations"] = self.stations
-        if self.note:
-            data["note"] = self.note
+        note = "; ".join(part for part in (self.note, self.near) if part)
+        if note:
+            data["note"] = note
         return data
 
 
@@ -249,11 +264,61 @@ class _Build:
         model.validate()
 
     def result(self, operation: str) -> ConstructResult:
-        return ConstructResult(
+        result = ConstructResult(
             operation,
             list(self.created_vertices),
             list(self.created_blocks),
             len(self.reused),
+        )
+        result.near = self.near_note()
+        return result
+
+    def near_pairs(self) -> tuple[float, list[tuple[str, str, float]]]:
+        """New vertices closer to another vertex than ``NEAR_FRACTION`` of the
+        model's extent but outside the reuse tolerance, each with its
+        nearest such vertex: the extent and (new, other, distance), closest
+        first."""
+        vertices = self.model.vertices
+        new = [v for v in self.created_vertices if v in vertices]
+        if not new:
+            return 0.0, []
+        xs = [v.x for v in vertices.values()]
+        ys = [v.y for v in vertices.values()]
+        extent = math.hypot(max(xs) - min(xs), max(ys) - min(ys))
+        limit = NEAR_FRACTION * extent
+        if limit <= self.tol:
+            return extent, []
+        grid: dict[tuple[int, int], list[str]] = {}
+        for vertex in vertices.values():
+            grid.setdefault((math.floor(vertex.x / limit), math.floor(vertex.y / limit)), []).append(vertex.id)
+        found: dict[frozenset, tuple[str, str, float]] = {}
+        for identifier in new:
+            p = vertices[identifier]
+            i, j = math.floor(p.x / limit), math.floor(p.y / limit)
+            best = None
+            for di in (-1, 0, 1):
+                for dj in (-1, 0, 1):
+                    for other in grid.get((i + di, j + dj), ()):
+                        if other == identifier:
+                            continue
+                        d = math.hypot(vertices[other].x - p.x, vertices[other].y - p.y)
+                        if self.tol < d < limit and (best is None or d < best[2]):
+                            best = (identifier, other, d)
+            if best is not None:
+                found.setdefault(frozenset(best[:2]), best)
+        return extent, sorted(found.values(), key=lambda item: item[2])
+
+    def near_note(self) -> str:
+        extent, pairs = self.near_pairs()
+        if not pairs:
+            return ""
+        listed = ", ".join(f"{a} {d:.2g} from {b}" for a, b, d in pairs[:NEAR_LISTED])
+        more = f" (and {len(pairs) - NEAR_LISTED} more)" if len(pairs) > NEAR_LISTED else ""
+        return (
+            f"NOTE: new vertex beside another, not reused (closer than {NEAR_FRACTION:g} of the "
+            f"extent {extent:.4g}): {listed}{more} - where one was meant to be the other, give "
+            "that vertex itself (a station by points=ID, a fill side by sideK=..., not a rounded "
+            "coordinate or fraction)"
         )
 
 

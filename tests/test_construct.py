@@ -1083,3 +1083,23 @@ class RowNoteTests(unittest.TestCase):
         batch = apply_commands(model, ["add_rows bbox=0.9,-0.1,1.1,1.1 direction=1,0 to_x=5"])
         note = batch.results[0].result["note"]
         self.assertRegex(note, r"thinnest column: edge v\d+-v2, 0\.1 long, carried 4 \(40 times its length\)")
+
+
+class NearVertexNoteTests(unittest.TestCase):
+    def _line(self):
+        return apply_commands(MeshModel(box=(0, 0, 1, 1)), ["add_curve 0,1;1,1 name=top"]).model
+
+    def test_a_station_just_beside_a_vertex_is_named(self) -> None:
+        # A six-digit fraction leaves the station 1e-6 short of the corner (1, 1).
+        batch = apply_commands(self._line(), ["add_stations top fractions=0.5,0.999999 id=s"])
+        note = batch.results[0].result["note"]
+        self.assertIn("NOTE: new vertex beside another, not reused", note)
+        self.assertIn("s_1 1e-06 from v2", note)
+        self.assertEqual(batch_digest(self._line(), batch)["notes"][0]["note"], note)
+
+    def test_silent_when_reused_or_apart(self) -> None:
+        batch = apply_commands(self._line(), ["add_stations top fractions=0.5,1 id=s"])
+        self.assertNotIn("NOTE", batch.results[0].result["note"])
+        self.assertEqual(batch.results[0].result["reused_vertices"], 1)
+        batch = apply_commands(MeshModel(), ["add_grid xs=1,1.001,2 ys=0,1"])
+        self.assertNotIn("note", batch.results[0].result)

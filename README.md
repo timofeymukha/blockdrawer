@@ -476,7 +476,14 @@ blockdrawer-cli commands                           # lists every editing command
 Seven registry commands build whole rows and patches of blocks so a layout is
 stated, not computed (every one atomic, one history entry, a non-convex block
 refused by name; `id=PREFIX` names new vertices `PREFIX_0, ...` and blocks
-`PREFIX_b0, ...`):
+`PREFIX_b0, ...`). Vertices within a billionth of the drawing's size are
+reused; a new vertex closer than 1.5e-5 of the model's extent to another
+one is named in the note ("NOTE: new vertex beside another, not reused"),
+since it is nearly always a station meant to be that vertex: a six-digit
+fraction left a U-bend station 2e-6 off a corner, and a high-lift fill
+side read as open put a vertex 0.00036 from a wall vertex (the closest
+pair the operators made on the 19 round-3 builds and the skill's examples
+was 3.6e-5 of the extent):
 
 - `add_grid xs=... ys=... [skip=XMIN,YMIN,XMAX,YMAX ...] [outside=CURVES]` or
   `add_grid center=X,Y rs=... thetas=... [period=DEG]` - blocks from station
