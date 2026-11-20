@@ -116,8 +116,8 @@ to be copied. Rules that follow from the table; the first that matches decides:
      rows: an open trailing edge's spokes to the outlet (`spread=10` widens
      them, else `size` carries the wall spacing out; `examples/naca0012_cgrid.txt`).
      `between=A,B` takes the shortest unassigned chain: assign the wall first.
-     Never from a fan's front: its columns are as wide as the front (high-lift:
-     3593 cells above aspect 1000); the note names the thinnest (`failures.md`).
+     Never from a fan's front (high-lift: 3593 cells above aspect 1000); the note
+     names the thinnest column. `far_ratio=2`: mixed on five builds (`failures.md`).
    - `add_band bbox=... height=H rows=N` - more rows along the unassigned
      exterior edges in a box; `to_box=...` carries them to a rectangle
      (spokes at its corners: ring stations by `normals=` aimed at them).

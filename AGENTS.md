@@ -594,7 +594,10 @@ them in the canvas widgets.
   widths (1e-4: 38,300 cells for 41,152, 0 faces above 70 for 11, aspect
   376 for 978); R = 1.5 cost 21 percent more cells at 5e-4, R = 1.2 8
   faces above 70, and a blend towards even columns (0.5, 1) 29 and 44
-  percent more cells at 1e-4. Refused before anything is
+  percent more cells at 1e-4. On five round-3 builds it failed the
+  rule for the skill to recommend it (README): it cannot widen a chain of
+  thin columns only, nor a column of normal width holding many cells.
+  Refused before anything is
   built: a point not reaching the line, a station outside every point's
   travel, a block not strictly convex in construction order (a direction
   into the chain's blocks), a row vertex inside an existing straight

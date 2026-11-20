@@ -545,7 +545,18 @@ was 3.6e-5 of the extent):
   41,152, 11, 76.2, 0.89, 978). Measured before choosing, at 1e-4: R = 1.5
   42,532 cells (and 17,472 at 5e-4), R = 1.2 8 faces above 70 and max
   87.7, a blend of the far row towards even columns half and all the way
-  52,920 and 59,256 cells.
+  52,920 and 59,256 cells. On five round-3 builds with `far_ratio=2` on
+  their far-field `add_rows` lines, each through its own chain, the
+  aspect ratio fell by 30 percent or more on three (airfoil in a tunnel 93
+  -> 52; bluff body over ground 303 -> 87; high-lift without its hand
+  repairs 3873 with 1738 cells above 1000, failing, -> 950, Mesh OK), not
+  on the triangle (648 -> 518: its inlet columns come from the apex fan's
+  front alone, every column thin) nor the blunt plate (893 -> 1000: the
+  columns above the base corners are no thinner than their neighbours,
+  they hold the base's 24 streamwise cells); the bluff body gained 6.4
+  percent cells and a jump above 5, the high-lift 17 -> 19 jumps above 5.
+  The rule fixed beforehand (four of five falling 30 percent, nothing
+  worse) failed, so the skill does not recommend it for far-field rows.
   Vertices are reused by coordinate, and with `conform` (default) an
   existing exterior vertex on a point's path becomes a station; a row
   vertex that would cut an existing edge, a block over an existing block or
