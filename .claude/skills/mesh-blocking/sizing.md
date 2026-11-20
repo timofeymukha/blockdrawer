@@ -23,7 +23,12 @@ $$
   times the largest $\delta_{99}$ on the body, usually the suction side near
   the trailing edge (A-airfoil at 13 degrees: $\delta_{99} = 0.094c$, band
   0.15 chords; `cases/a_airfoil/sizing.md`). "One to a few percent of the
-  chord" is only the attached-flow default.
+  chord" is only the attached-flow default. Internal flow with no profile:
+  the round-3 internal builds banded their walls at 5 to 20 percent of the
+  channel width (nozzle 0.05-0.06 of 1.0, bump 0.08 of 1.0, junction
+  0.1-0.12 of 1.0 and 0.7, U-bend 0.1-0.2 of 1.0) and all ten passed
+  checkMesh with no face above 70; about a tenth is a start, not a measured
+  optimum (no trial compared heights), and the two fronts must leave a core.
 - **Cells along a wall**: `wall_aspect=25` makes them 25 first widths long,
   the usual RANS stretching; without it the wall is resolved as finely
   along as across.
@@ -59,7 +64,9 @@ $$
   binding default left 12 jumps above 5 and `budget=90000` left 6, while a
   jump the shape step made (a column widened beside a body near a ground
   wall, 7.17 after `size`) stayed at `budget=400000`; the default polish
-  took it to 4.18 (README shape-limit corpus).
+  took it to 4.18 (README shape-limit corpus). Nor beside a fan or an open
+  corner or across a channel one block thick (high-lift: 22 above 5 at a
+  budget that was not binding): `failures.md`.
 - Judge the jumps after the polish (`smooth`), which moves vertices and so
   changes them: NACA 4412 C-grid 4 above 5 after `size`, none after the
   polish. The polish keeps a jump below 5 below 5 (`size_ceiling`; three

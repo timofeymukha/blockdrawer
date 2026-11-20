@@ -18,8 +18,9 @@ python experiments/agentic_topology/research_cli.py run \
 
 - A run takes seconds on a synthetic body and minutes on an airfoil at
   fifteen chords (A-airfoil 263 s, NACA 0012 C-grid 320 s; NACA 4412 C-grid
-  8.5 min on two cores at low priority): start it in the background and
-  poll, or give it a timeout above that. `run` prints a line to stderr as
+  8.5 min on two cores at low priority): run it in the foreground with a
+  timeout above that (a tool call is capped at 10 minutes; polling a
+  background run costs turns). `run` prints a line to stderr as
   each stage starts, with the seconds since the start (`[engine] 6.3 s
   grid_quality`; a trial's stages as `cgrid/sizing`).
 - Give sizes in the geometry's units (`--first-width`, `--core-size`,
@@ -48,7 +49,7 @@ python experiments/agentic_topology/research_cli.py run \
 |---|---|
 | far field: a circle of radius $R$ about a point | `--farfield-shape circle --farfield-radius R --farfield-center X,Y`; `--farfield-outlet DEGREES` cuts it into cap, legs and an outlet arc about the wake direction so the C-grid applies |
 | far field: a C-shape, or a rectangle | `--farfield-shape cshape` / `rectangle`, same radius and centre |
-| far field: these point lists, these names | `--outer NAME:ROLE=PATH` per chain, anticlockwise, joined end to end; the names become the patches |
+| far field: these point lists, these names | `--outer NAME:ROLE=PATH` per chain, anticlockwise, joined end to end; the names become the patches. The C-grid takes them too: four chains `--outer bottom:farfield=... --outer outlet:outlet=... --outer top:farfield=... --outer inlet:inlet=...` (NACA 4412, round 3: 250 blocks, resolved) |
 | internal flow: wall / inlet / outlet lists | the same `--outer` chains and no `--curve`: the sweep producer builds it (roles `wall`, `inlet`, `outlet`, `symmetry`; a `cyclic` pair is refused there) |
 | free-stream direction | `--wake-direction dx,dy` (also selects which sharp vertices get a wake) |
 | first cell, band height, far cells | `--first-width W`, `--layer-height H`, `--core-size C` |
@@ -149,7 +150,14 @@ best verdict, and judge a candidate in the orientation you export.
   36.2). A reflex corner on a guide wall - a backward-facing step, any
   L-shaped channel - is refused (`sweep_correspondence: ribs cross or
   invert`, the join named under `reflex_joins`): build it with the operators
-  (`examples/backward_step.txt`).
+  (`examples/backward_step.txt`). A turn round a divider tip (a U-bend) has
+  no engine measurement; it goes by hand too (`SKILL.md`, route rule 1).
+  The sweep places its ribs where it needs them, and `resolved` does not test
+  a brief's line directions: on the round-3 nozzle (lines near the wall
+  normals asked through the contraction) it resolved with one core block of
+  near-vertical lines; by the operators - an open ring per wall with
+  stations, one fill - it took 16 commands, 3 minutes and max 12 degrees for
+  three agents. Such a duct goes by hand.
 - **Concave corner** (fluid sector below about 157 degrees): a gate whose
   spoke runs along the bisector, the two blocks beside it at 45 degrees.
   The band keeps the corner's height along each wall in the mitre shadow.
