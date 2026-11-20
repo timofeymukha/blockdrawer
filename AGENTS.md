@@ -151,7 +151,8 @@ them in the canvas widgets.
   ratio (`size._off_walls`). Parameter kinds `blocks` (block IDs) and `numbers` (a list of
   floats, e.g. a bbox) serve `smooth`; `locations` (`_coerce_locations`:
   `x,y` points or vertex IDs, separated by `;`, each ID its vertex's
-  position) serves `add_ring`/`add_stations` `points=`. `resolve_position` gives
+  position) serves `add_ring`/`add_stations` `points=` and `smooth`'s
+  `hold_line=` (consecutive pairs). `resolve_position` gives
   `add_vertex` and `move_vertex` (`_POSITION`) positions relative to
   existing vertices: polar `r`/`theta` about `center` or the vertex
   `about`, else each coordinate from exactly one of the number, `at`
@@ -356,7 +357,21 @@ them in the canvas widgets.
   `LINE_ANGLE` = 1 degree); on one line `search` tries only the two
   directions along it (a band spoke's projection may slide it along the
   line, nothing else) and `slide` does not carry it as a front; on two it
-  is dropped from the free set (`line_vertices`, `line_fixed`). `slide=True` adds the boundary
+  is dropped from the free set (`line_vertices`, `line_fixed`).
+  `hold_box`/`hold_line`/`hold_along` (both modes, `select_holds`) hold
+  vertices without listing IDs: the free vertices inside boxes
+  (`xmin,ymin,xmax,ymax` repeated) or on segments (pairs of points or
+  vertex IDs, kind `locations`), within `HOLD_TOLERANCE` (1e-9) of the
+  model's size, are fixed (`hold_along=none`, the default) or join the
+  `lines` the search keeps them on: `line` - the segment's direction,
+  whether or not their edges are collinear (crossing hold lines, a box
+  selection, or a `keep_lines` line crossing it: fixed); `x`/`y` - the
+  axis. Selected boundary vertices do not slide. The result gives
+  `held_vertices` (fixed by `hold` and the selections) and `line_vertices`,
+  and `hold_notes` names a box or segment selecting no free vertex (a
+  note, not a refusal); the digest note shows `held`, `line_held` and
+  `hold_note` only when non-zero. Measured on two round-3 reproducers in
+  the README. `slide=True` adds the boundary
   vertices `slide.slidable` accepts (in scope, not held) as 1D variables:
   `_State.attach_slides` keeps a scratch model, `_move_slide` re-cuts the
   two boundary edges from the chain (`Chain.recut`) and resamples them,

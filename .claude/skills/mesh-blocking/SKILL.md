@@ -165,10 +165,10 @@ lengths A (EDGE) to B (EDGE) of their input" (`min_edge_ratio`); it is applied
 only when no worse ("nothing to gain" is normal on rectangles). Engine square
 cylinder: 87.7 -> 56.9 deg at real counts, checkMesh 52.2 sized. Optional. Then:
 
-- Lines meant to stay straight (a wake line, a column off a corner) bent:
-  `hold=V1,V2` on their vertices (one trial: a jump of 7.17 after `size` became
-  3.28), or `keep_lines=true` (a vertex on a straight block line moves only along
-  it; off by default: it holds every straight band spoke, cost 4-16 deg, README).
+- Lines meant to stay straight (a wake line, a grid's cross lines) bent: here and in
+  the polish `hold_line=A,B;C,D hold_along=line` - the vertices on each segment move
+  along it only (cylinder in a channel: 35.99 deg; fixed by `hold=` 41.21; free 34.88,
+  chevrons). `hold_box=`/`hold=` fix; `keep_lines=true` holds every line (4-16 deg).
 - the polish leaves a jump above 5 where the step shrank an edge (`min_edge_ratio`
   near 0.1, `max_pair_change` large): rerun it with `shape_pair_ratio=2.5`, which
   trades the worst face for jumps and skewness (three cylinders, round 3: 64.7 ->
@@ -214,9 +214,9 @@ non-orthogonality checkMesh measures, never raising a block's worst face,
 wall-band spokes within 5 percent of their length, edges within 50 percent, no
 size jump past 2.5 created; applied only when the sampled check at 256 cells a
 side is no worse and checkMesh's aspect limit 1000 is not crossed (`reason`
-says when it bound). `hold=V1,V2` keeps vertices you placed on purpose;
-`blocks=`/`bbox=` limit it. Read `reason`. `slide=true` also slides boundary
-vertices along their boundary; it changed little: keep it when `check` agrees.
+says when it bound). `hold=V1,V2`, `hold_box=X0,Y0,X1,Y1` or `hold_line=A,B` keep
+vertices placed on purpose (`hold_along=line`, `x`, `y`: along it only); `blocks=`/`bbox=`
+limit it. Read `reason`. `slide=true` slides boundary vertices too; keep it when `check` agrees.
 The spokes' 5 percent is `band_tolerance`: the first width moves up to 5 percent
 with it. Where the brief wants it exact, `size FIRST CORE keep_counts=true` after the
 polish regrades the spokes; `check` after it (39 sessions: 7 maxima +1..32 degrees).

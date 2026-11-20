@@ -14,7 +14,9 @@ shows why.
    70 to none, max 77.9 -> 68.7; on its 475k-cell sizing 8725 faces to 4716
    (README, `smooth`). Where it stops - a seam wedge whose apex is fixed by a
    wall corner, a size jump it may not create - `reason` says so and the
-   topology is the remedy. `hold=` keeps vertices you placed on purpose.
+   topology is the remedy. `hold=` (IDs), `hold_box=` or `hold_line=A,B`
+   (the vertices on the segment) keep vertices you placed on purpose;
+   `hold_along=line` (or `x`, `y`) lets them move along that line only.
 2. **`repair_block ID`** on the worst block, repeated: it tries moving the
    block's interior vertices (curved edges carried), merging it across an
    internal edge, splitting its edges and regrading an edge to its opposite

@@ -130,6 +130,23 @@ class SmoothSlideTests(unittest.TestCase):
         smooth_model(model, hold=("w",), options=SmoothOptions(slide=True))
         self.assertEqual(model.vertices["w"].x, 1.9)
 
+    def test_a_hold_box_stops_a_boundary_vertex_sliding(self) -> None:
+        model = banded(0.4)
+        result = smooth_model(model, hold_box=(1.8, -0.1, 2.0, 0.1), options=SmoothOptions(slide=True))
+        self.assertEqual(model.vertices["w"].x, 1.9)
+        # w is no free vertex: the box is said to hold none.
+        self.assertIn("holds no free vertex", result.reason)
+
+    def test_a_sliding_wall_vertex_does_not_carry_a_line_held_front_off_its_line(self) -> None:
+        model = banded(0.4)
+        result = smooth_model(model, hold_line=((0.0, 0.2), (3.0, 0.2)), hold_along="line",
+                              options=SmoothOptions(slide=True))
+        self.assertEqual(result.line_vertices, 1)
+        self.assertEqual(model.vertices["f"].y, 0.2)
+        spoke = math.hypot(model.vertices["f"].x - model.vertices["w"].x,
+                           model.vertices["f"].y - model.vertices["w"].y)
+        self.assertLessEqual(abs(spoke / math.hypot(0.4, 0.2) - 1.0), 0.05 + 1e-9)
+
 
 if __name__ == "__main__":
     unittest.main()

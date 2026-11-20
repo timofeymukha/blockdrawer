@@ -34,7 +34,11 @@ width with its length.
 With ``keep_lines`` an interior vertex on a straight block line (two
 opposite ``line`` edges, collinear) is searched along that line only, and
 one on two such lines does not move, so prescribed wake lines and grid rows
-stay straight. In shape mode every edge keeps ``shape_length_ratio`` of its
+stay straight. ``hold_box`` and ``hold_line`` hold the free vertices in a
+box or on a segment without listing them: fixed, or with ``hold_along``
+free only along that segment (or an axis), searched along it like a
+``keep_lines`` vertex whether or not its edges are collinear; a vertex on
+two crossing hold lines stays. In shape mode every edge keeps ``shape_length_ratio`` of its
 input length; ``shape_pair_ratio`` keeps the length ratio of every interface
 pair (two edges continuing each other across a shared edge) within that
 factor of its input, and ``shape_spread_ratio`` keeps every count
@@ -94,6 +98,13 @@ SHAPE_SPREAD_RATIO = 0.0
 # Two straight edges at a vertex are one block line when their directions
 # differ by at most this (degrees).
 LINE_ANGLE = 1.0
+# A vertex lies in a hold box or on a hold line within this fraction of the
+# model's size (the construction operators' vertex-reuse tolerance).
+HOLD_TOLERANCE = 1.0e-9
+# How the vertices a hold box or line selects are held: ``none`` fixed;
+# ``line`` free only along the hold line they lie on; ``x``/``y`` free only
+# along that axis.
+HOLD_ALONG = ("none", "line", "x", "y")
 
 
 @dataclass(frozen=True)
@@ -217,6 +228,11 @@ class SmoothResult:
     # The polish: the blocks whose cells the full optimised displacement
     # took past checkMesh's aspect ratio limit (empty when it did not bind).
     aspect_blocks: tuple[str, ...] = ()
+    # Free vertices kept fixed by hold, hold_box and hold_line (line_vertices
+    # counts those held to a line), and a sentence per box or line that
+    # selected no free vertex.
+    held_vertices: int = 0
+    hold_notes: tuple[str, ...] = ()
 
     def to_data(self) -> dict[str, Any]:
         extra: dict[str, Any] = {}
@@ -224,6 +240,8 @@ class SmoothResult:
             extra = {"real_before": self.real_before, "real_after": self.real_after}
         if self.aspect_blocks:
             extra["aspect_blocks"] = list(self.aspect_blocks)
+        if self.hold_notes:
+            extra["hold_notes"] = list(self.hold_notes)
         if self.sliders:
             extra.update({
                 "sliders": self.sliders,
@@ -249,6 +267,7 @@ class SmoothResult:
             "min_edge": self.min_edge,
             "max_edge_ratio": self.max_edge_ratio,
             "max_edge": self.max_edge,
+            "held_vertices": self.held_vertices,
             "line_vertices": self.line_vertices,
             "line_fixed": self.line_fixed,
             "max_pair_change": self.max_pair_change,
@@ -992,6 +1011,119 @@ def select_free(
     ]
 
 
+@dataclass(frozen=True)
+class HoldSelection:
+    """What ``hold_box``/``hold_line`` select (`select_holds`): free vertices
+    kept fixed, free vertices kept to a direction, the boundary vertices
+    selected (they never slide) and a sentence per box or line selecting no
+    free vertex."""
+
+    fixed: frozenset[str] = frozenset()
+    along: dict[str, complex] = field(default_factory=dict)
+    boundary: frozenset[str] = frozenset()
+    notes: tuple[str, ...] = ()
+
+
+def _hold_lines(values: Sequence[Any]) -> list[tuple[complex, complex]]:
+    points = [complex(float(x), float(y)) for x, y in values]
+    if len(points) % 2:
+        raise TopologyError(
+            f"hold_line needs two points or vertices per line, got {len(points)} in all"
+        )
+    return [(points[k], points[k + 1]) for k in range(0, len(points), 2)]
+
+
+def select_holds(
+    model: MeshModel,
+    free: Sequence[str],
+    *,
+    boxes: Sequence[float] = (),
+    lines: Sequence[Any] = (),
+    along: str = "none",
+) -> HoldSelection:
+    """The vertices held by boxes (``xmin,ymin,xmax,ymax`` repeated) and by
+    straight segments (consecutive pairs of points), within
+    ``HOLD_TOLERANCE`` of the model's size (as the construction operators
+    reuse a vertex). Of the selected ``free`` vertices, ``along`` ``none``
+    keeps every one fixed; ``x``/``y`` lets every one move along that axis
+    only; ``line`` lets a vertex on hold lines that are all parallel move
+    along them only, and keeps one on two crossing lines, or selected by a
+    box alone, fixed. Selected vertices not in ``free`` (on a boundary, held,
+    out of scope) are only reported in ``boundary`` when on a boundary."""
+    if along not in HOLD_ALONG:
+        raise TopologyError(f"hold_along must be one of {', '.join(HOLD_ALONG)}, got {along!r}")
+    boxes = [float(value) for value in boxes]
+    if len(boxes) % 4:
+        raise TopologyError("hold_box needs four numbers per box: xmin, ymin, xmax, ymax")
+    segments = _hold_lines(lines)
+    if not boxes and not segments:
+        return HoldSelection()
+    used: list[str] = []
+    seen: set[str] = set()
+    for block in model.blocks:
+        for vertex_id in block.vertices:
+            if vertex_id not in seen:
+                seen.add(vertex_id)
+                used.append(vertex_id)
+    size = max((abs(v.x) + abs(v.y) for v in model.vertices.values()), default=1.0)
+    tolerance = HOLD_TOLERANCE * max(1.0, size)
+    point = {vertex_id: complex(model.vertices[vertex_id].x, model.vertices[vertex_id].y) for vertex_id in used}
+    free_set = set(free)
+    selected: set[str] = set()
+    boxed: set[str] = set()
+    on_lines: dict[str, list[complex]] = {}
+    notes: list[str] = []
+    for k in range(0, len(boxes), 4):
+        xmin, ymin, xmax, ymax = boxes[k:k + 4]
+        if xmin > xmax or ymin > ymax:
+            raise TopologyError(f"hold_box {xmin:g},{ymin:g},{xmax:g},{ymax:g}: min above max")
+        inside = {
+            vertex_id for vertex_id, p in point.items()
+            if xmin - tolerance <= p.real <= xmax + tolerance and ymin - tolerance <= p.imag <= ymax + tolerance
+        }
+        selected |= inside
+        boxed |= inside & free_set
+        if not inside & free_set:
+            notes.append(f"hold_box {xmin:g},{ymin:g},{xmax:g},{ymax:g} holds no free vertex")
+    for start, end in segments:
+        chord = end - start
+        length = abs(chord)
+        if length <= tolerance:
+            raise TopologyError(f"hold_line {start.real:g},{start.imag:g} to itself is no line")
+        direction = chord / length
+        hits = set()
+        for vertex_id, p in point.items():
+            local = (p - start) * direction.conjugate()
+            if abs(local.imag) <= tolerance and -tolerance <= local.real <= length + tolerance:
+                hits.add(vertex_id)
+        selected |= hits
+        for vertex_id in hits & free_set:
+            on_lines.setdefault(vertex_id, []).append(direction)
+        if not hits & free_set:
+            notes.append(
+                f"hold_line {start.real:g},{start.imag:g} to {end.real:g},{end.imag:g} holds no free vertex"
+            )
+    held = [vertex_id for vertex_id in free if vertex_id in boxed or vertex_id in on_lines]
+    fixed: set[str] = set()
+    directions: dict[str, complex] = {}
+    parallel = math.sin(math.radians(LINE_ANGLE))
+    for vertex_id in held:
+        if along == "none":
+            fixed.add(vertex_id)
+        elif along in ("x", "y"):
+            directions[vertex_id] = 1.0 + 0j if along == "x" else 1j
+        elif vertex_id in boxed or vertex_id not in on_lines:
+            fixed.add(vertex_id)
+        else:
+            first, *others = on_lines[vertex_id]
+            if all(abs((first.conjugate() * other).imag) <= parallel for other in others):
+                directions[vertex_id] = first
+            else:
+                fixed.add(vertex_id)
+    boundary = boundary_vertices(model) & selected
+    return HoldSelection(frozenset(fixed), directions, frozenset(boundary), tuple(notes))
+
+
 def straight_lines(model: MeshModel, vertices: Iterable[str]) -> dict[str, complex | None]:
     """The straight block lines through the given vertices.
 
@@ -1587,8 +1719,18 @@ def smooth_model(
     bbox: Sequence[float] | None = None,
     hold: Sequence[str] = (),
     options: SmoothOptions | None = None,
+    hold_box: Sequence[float] = (),
+    hold_line: Sequence[Any] = (),
+    hold_along: str = "none",
 ) -> SmoothResult:
     """Smooth ``model`` in place when that is no worse; see the module docstring.
+
+    ``hold`` keeps vertices fixed by ID; ``hold_box`` (``xmin,ymin,xmax,ymax``
+    repeated) and ``hold_line`` (consecutive pairs of points, each pair a
+    segment) select the free vertices in a box or on a segment, which
+    ``hold_along`` keeps fixed (``none``) or free only along their line
+    (``line``) or an axis (``x``, ``y``); see `select_holds`. Selected
+    boundary vertices do not slide.
 
     The polish keeps checkMesh's aspect ratio limit as ``size`` does
     (`sampling.aspect_worse`): a result crossing 1000, or gaining cells
@@ -1598,8 +1740,9 @@ def smooth_model(
     took past the limit held - those moves refused - and the result with
     fewer faces above 70 degrees, then the lower maximum, is applied."""
     options = options or SmoothOptions()
+    holds = dict(hold_box=hold_box, hold_line=hold_line, hold_along=hold_along)
     first = from_data(to_data(model))
-    result = _smooth_once(first, blocks=blocks, bbox=bbox, hold=hold, options=options)
+    result = _smooth_once(first, blocks=blocks, bbox=bbox, hold=hold, options=options, **holds)
     if not result.aspect_blocks:
         if result.applied:
             for key, value in first.__dict__.items():
@@ -1608,7 +1751,7 @@ def smooth_model(
     corners = {v for block in model.blocks if block.id in result.aspect_blocks for v in block.vertices}
     retry_model = from_data(to_data(model))
     retry = _smooth_once(retry_model, blocks=blocks, bbox=bbox, hold=tuple(hold) + tuple(sorted(corners)),
-                         options=options)
+                         options=options, **holds)
     better = retry.applied and (
         not result.applied
         or retry.after["severe_faces"] < result.after["severe_faces"]
@@ -1638,6 +1781,9 @@ def _smooth_once(
     bbox: Sequence[float] | None = None,
     hold: Sequence[str] = (),
     options: SmoothOptions,
+    hold_box: Sequence[float] = (),
+    hold_line: Sequence[Any] = (),
+    hold_along: str = "none",
 ) -> SmoothResult:
     """One optimisation and its verified application (`smooth_model`)."""
     if options.samples < 1 or options.power <= 0.0 or options.band_tolerance < 0.0:
@@ -1652,6 +1798,10 @@ def _smooth_once(
         raise TopologyError("smooth needs shape_spread_ratio > 1 (or 0: unbounded)")
     model.validate()
     free = select_free(model, blocks=blocks, bbox=bbox, hold=hold)
+    held_ids = len(select_free(model, blocks=blocks, bbox=bbox)) - len(free) if hold else 0
+    holds = select_holds(model, free, boxes=hold_box, lines=hold_line, along=hold_along)
+    if holds.fixed:
+        free = [vertex_id for vertex_id in free if vertex_id not in holds.fixed]
     lines: dict[str, complex] = {}
     line_fixed = 0
     if options.keep_lines:
@@ -1659,9 +1809,26 @@ def _smooth_once(
         line_fixed = sum(1 for direction in on_lines.values() if direction is None)
         free = [vertex_id for vertex_id in free if on_lines.get(vertex_id, 0) is not None]
         lines = {vertex_id: direction for vertex_id, direction in on_lines.items() if direction is not None}
+    # A vertex held to a line by hold_line/hold_along that keep_lines holds to
+    # another (or fixes) stays where it is.
+    crossed = {
+        vertex_id for vertex_id, direction in holds.along.items()
+        if vertex_id in lines
+        and abs((lines[vertex_id].conjugate() * direction).imag) > math.sin(math.radians(LINE_ANGLE))
+    }
+    if crossed:
+        free = [vertex_id for vertex_id in free if vertex_id not in crossed]
+        for vertex_id in crossed:
+            del lines[vertex_id]
+    kept = set(free)
+    for vertex_id, direction in holds.along.items():
+        if vertex_id in kept and vertex_id not in lines:
+            lines[vertex_id] = direction
+    held_count = held_ids + len(holds.fixed) + len(crossed)
     spokes = band_spokes(model, free)
     shape = options.mode == "shape"
-    chains = _slide_chains(model, blocks, bbox, hold) if options.slide else {}
+    chains = _slide_chains(model, blocks, bbox, tuple(hold) + tuple(sorted(holds.boundary))) \
+        if options.slide else {}
 
     def judge(candidate: MeshModel) -> dict[str, Any]:
         if not shape:
@@ -1704,6 +1871,8 @@ def _smooth_once(
                         edges_change,
                         abs(working.edge_length(current) / lengths_before[current] - 1.0),
                     )
+        if holds.notes:
+            reason += "; " + "; ".join(holds.notes)
         return SmoothResult(
             applied, reason, before, after or before, len(free), len(positions),
             displacement, sum(len(items) for items in spokes.values()), band,
@@ -1712,6 +1881,7 @@ def _smooth_once(
             len(chains), slid_count if applied else 0, max_slide if applied else 0.0,
             boundary[0] if applied else 0.0, boundary[1] if applied else 0.0,
             *ratios, len(lines), line_fixed, *pair, *spread, aspect_blocks=tuple(aspect_blocks),
+            held_vertices=held_count, hold_notes=holds.notes,
         )
 
     real_after: dict[str, Any] | None = None
@@ -1873,6 +2043,13 @@ def _smooth_once(
             reason += (
                 f"; {len(lines)} vertices on a straight block line moved only along it, "
                 f"{line_fixed} on two stayed"
+            )
+        if hold_box or hold_line:
+            along = sum(1 for vertex_id in holds.along if vertex_id in lines)
+            reason += (
+                f"; hold_box/hold_line: {held_count} vertices held"
+                + (f", {along} only along " + ("their hold line" if hold_along == "line" else hold_along)
+                   if hold_along != "none" else "")
             )
         return result(True, reason, after, scaled, scale, sweeps, rounds, working)
     if deviation_refusals:

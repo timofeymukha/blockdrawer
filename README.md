@@ -1115,6 +1115,56 @@ limit where the floor is what an agent would raise (a ring pulled onto the
 next ring: the three cylinders go from 12 jumps above 5 to none at pair
 1.5 or 2.5, and to 2 at spread 2.5).
 
+Holds by selection, in both modes: `hold_box=XMIN,YMIN,XMAX,YMAX` (more
+boxes: more groups of four numbers) and `hold_line=A,B` (more segments:
+`A,B;C,D`; each end a vertex ID or a point `x,y`) select the free vertices
+inside a box or on the segment between two ends, within 1e-9 of the
+model's size, so a row of vertices is held without listing its IDs (the
+round-3 bluff body's trial listed twenty). `hold_along` says how they are
+held: `none` (the default) keeps them where they are, as `hold=` does;
+`line` lets each move only along the segment it lies on - the search tries
+the two directions along it, as `keep_lines` does on a straight block line,
+but for the line given and whether or not the edges there are collinear -
+and keeps a vertex on two crossing segments (or in a box) fixed; `x` or `y`
+lets each move along that axis only, the other coordinate kept. Every
+check on a trial position applies as before; a band spoke's projection may
+only slide its front along the line; selected boundary vertices do not
+slide, and a sliding wall vertex does not carry a line-held front off its
+line. The result and the digest note count the vertices held
+(`held_vertices`; note `held`) and held to a line (`line_vertices`; note
+`line_held`); a box or segment that names no free vertex is said in the
+note (`hold_notes`, `hold_note`), not refused. Measured on two round-3
+reproducers, their trials' own `size` lines, checkMesh; "bent" counts the
+built session's interior vertices on a straight block line (16 and 261)
+whose line ends turned more than 2 degrees at them, "offset" the largest
+distance of a held line's vertex from that line as built:
+
+| reproducer | chain (shape step and polish alike) | cells | max (avg) | worst jump (>2.5) | first width, worst off | bent | offset |
+|---|---|---|---|---|---|---|---|
+| cylinder in a channel, trial 3: wake line y = 0.2 (`v27,v37`), cross lines x = 0.1 (`v1,v29`) and 0.3 (`v33,v34`) | the trial's (no hold) | 16,720 | 34.88 (5.05) | 1.71 (0) | 5.0% | 8 | 0.038 |
+| | `hold=` the eight vertices on them | 20,296 | 41.21 (19.18) | 2.23 (0) | 5.0% | 6 | 0 |
+| | `hold_line=v27,v37;v1,v29;v33,v34` (fixed) | identical to `hold=` | | | | | |
+| | the same, `hold_along=line` (two fixed where lines cross, six along) | 21,776 | 35.99 (17.79) | 1.93 (0) | 5.0% | 10 | 0 |
+| | the same in the polish only (the shape step free) | 16,720 | 34.88 (4.88) | 1.71 (0) | 5.0% | 8 | 0.038 |
+| | the trial's, `size ... grading=strip` | 16,720 | 35.15 (4.95) | 1.47 (0) | 18.8% | 8 | 0.036 |
+| | `hold=`, `grading=strip` | 20,296 | 41.36 (3.08) | 1.73 (0) | 20.3% | 6 | 0 |
+| | `hold_along=line`, `grading=strip` | 21,776 | 36.20 (3.03) | 1.61 (0) | 30.7% | 10 | 0 |
+| bluff body over ground, trial 3 (no shape step): the base-corner and kite rows | the trial's polish, `hold=` twenty IDs | 165,264 | 38.99 (3.91) | 2.50 (0) | 5.3% | 77 | 0 |
+| | `hold_box=1.2,0.34,7,0.37,1.2,0.03,7,0.06` | identical session (same twenty vertices) | | | | | |
+| | the same, `hold_along=x` (= `hold_line` on the four rows, `hold_along=line`: identical) | 165,264 | 39.00 (3.84) | 2.50 (0) | 5.3% | 81 | 0 |
+| | no hold (the default polish) | 165,264 | 39.03 (3.80) | 2.50 (0) | 5.3% | 79 | 0.025 |
+
+Holding the cylinder's lines along them instead of fixed costs 1.1 degrees
+of maximum where fixing them costs 6.3, and leaves the held lines exactly
+straight; the corners where two held lines cross stay fixed, and the box's
+other lines (y = 0.1, 0.3, not held) bend more than with `hold=`. The
+average of 17.8 to 19.2 with any hold is `size`'s field pass on the H-grid's
+long rectangles once they stay rectangular (with `grading=strip` it is 3.0
+to 3.1, the first width 19 to 31 percent off; `sizing.md`), not the hold.
+On the bluff body the four rows held along x instead of fixed gain 0.07
+degrees of average for 0.003 of maximum. Held only in the polish, a line the
+shape step has already bent is not straightened: hold in both steps.
+
 `size` sets every cell count and grading from a few physical inputs
 (`first_width`, `core_size`, `growth`, optional `wall_aspect`,
 `interface_growth` (default 1.25), `count_rule`, `budget`, per-patch

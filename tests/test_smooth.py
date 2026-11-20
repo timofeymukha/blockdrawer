@@ -573,3 +573,97 @@ class StraightLineTests(unittest.TestCase):
         self.assertFalse(result["applied"])
         self.assertEqual(result["line_fixed"], 1)
         self.assertIn("on two straight block lines", result["reason"])
+
+
+class HoldSelectionTests(unittest.TestCase):
+    def test_a_box_holds_as_hold_does(self) -> None:
+        by_id, by_box = two_by_two(), two_by_two()
+        smooth_model(by_id, hold=["v6"])
+        result = smooth_model(by_box, hold_box=(0.6, 0.55, 0.7, 0.65))
+        self.assertEqual(positions(by_box), positions(by_id))
+        self.assertFalse(result.applied)
+        self.assertEqual(result.held_vertices, 1)
+        self.assertIn("no free vertex", result.reason)
+
+    def test_a_selection_naming_no_free_vertex_is_said_not_refused(self) -> None:
+        model = two_by_two()
+        result = smooth_model(model, hold_box=(0.0, 0.0, 0.2, 0.2),
+                              hold_line=((0.0, 0.0), (1.0, 0.0)))
+        self.assertTrue(result.applied, result.reason)
+        self.assertEqual(result.held_vertices, 0)
+        self.assertEqual(len(result.hold_notes), 2)
+        self.assertIn("hold_box 0,0,0.2,0.2 holds no free vertex", result.reason)
+        self.assertIn("hold_line 0,0 to 1,0 holds no free vertex", result.reason)
+
+    def test_a_line_held_vertex_moves_only_along_the_line_given(self) -> None:
+        # v6 at (0.66, 0.6): its edges are not collinear, so keep_lines would
+        # not hold it; the line given does.
+        for mode in ("shape", "real"):
+            with self.subTest(mode=mode):
+                model = two_by_two()
+                result = smooth_model(model, hold_line=((0.0, 0.6), (1.0, 0.6)), hold_along="line",
+                                      options=SmoothOptions(mode=mode))
+                self.assertTrue(result.applied, result.reason)
+                self.assertEqual((result.line_vertices, result.held_vertices), (1, 0))
+                self.assertAlmostEqual(model.vertices["v6"].y, 0.6, places=12)
+                self.assertGreater(abs(model.vertices["v6"].x - 0.66), 1e-3)
+                self.assertIn("1 only along their hold line", result.reason)
+
+    def test_an_axis_hold_keeps_the_other_coordinate(self) -> None:
+        for along, kept in (("x", 1), ("y", 0)):
+            with self.subTest(along=along):
+                model = two_by_two()
+                result = smooth_model(model, hold_box=(0.6, 0.55, 0.7, 0.65), hold_along=along)
+                self.assertTrue(result.applied, result.reason)
+                self.assertEqual(result.line_vertices, 1)
+                self.assertEqual((model.vertices["v6"].x, model.vertices["v6"].y)[kept], (0.66, 0.6)[kept])
+
+    def test_a_vertex_on_two_crossing_hold_lines_stays(self) -> None:
+        model = two_by_two()
+        result = smooth_model(model, hold_line=((0.0, 0.6), (1.0, 0.6), (0.66, 0.0), (0.66, 1.0)),
+                              hold_along="line")
+        self.assertFalse(result.applied)
+        self.assertEqual(result.held_vertices, 1)
+        self.assertEqual(positions(model), positions(two_by_two()))
+        # Parallel lines through it are one line.
+        parallel = smooth_model(two_by_two(), hold_line=((0.0, 0.6), (1.0, 0.6), (0.5, 0.6), (0.9, 0.6)),
+                                hold_along="line")
+        self.assertEqual(parallel.line_vertices, 1)
+
+    def test_a_vertex_off_the_segment_or_beyond_its_end_is_not_selected(self) -> None:
+        holds = smooth_module.select_holds(two_by_two(), ["v6"], lines=[(0.0, 0.6), (0.6, 0.6)])
+        self.assertEqual(holds.fixed, frozenset())
+        holds = smooth_module.select_holds(two_by_two(), ["v6"], lines=[(0.0, 0.6000001), (1.0, 0.6000001)])
+        self.assertEqual(holds.fixed, frozenset())
+        holds = smooth_module.select_holds(two_by_two(), ["v6"], lines=[(0.0, 0.6), (0.66, 0.6)])
+        self.assertEqual(holds.fixed, frozenset({"v6"}))
+
+    def test_a_crossing_keep_lines_line_fixes_a_line_held_vertex(self) -> None:
+        model = kinked_cross()
+        centre = vertex_at(model, 0.5, 0.5)
+        result = smooth_model(model, hold_box=(0.4, 0.4, 0.6, 0.6), hold_along="y",
+                              options=SmoothOptions(keep_lines=True))
+        self.assertFalse(result.applied)
+        self.assertEqual(result.held_vertices, 1)
+        self.assertEqual((model.vertices[centre].x, model.vertices[centre].y), (0.5, 0.5))
+
+    def test_the_command_takes_the_holds_and_the_digest_counts_them(self) -> None:
+        model = two_by_two()
+        batch = apply_commands(model, ["smooth hold_line=v4,v2 hold_along=line"])
+        # v4 (0.5, 0) and v2 (1, 1) do not pass through v6: nothing held.
+        (note,) = batch_digest(model, batch)["notes"]
+        self.assertIn("holds no free vertex", note["hold_note"])
+        self.assertNotIn("held", note)
+        batch = apply_commands(model, ["smooth hold_line=0,0.6;1,0.6 hold_along=line"])
+        (note,) = batch_digest(model, batch)["notes"]
+        self.assertEqual(note["line_held"], 1)
+        self.assertNotIn("hold_note", note)
+        batch = apply_commands(model, ["smooth hold_box=0.6,0.55,0.7,0.65"])
+        (note,) = batch_digest(model, batch)["notes"]
+        self.assertEqual(note["held"], 1)
+        default = batch_digest(model, apply_commands(model, ["smooth"]))["notes"][0]
+        self.assertFalse({"held", "line_held", "hold_note"} & set(default))
+        for bad in ("smooth hold_box=0,0,1", "smooth hold_line=v4", "smooth hold_along=z"):
+            with self.subTest(bad=bad):
+                with self.assertRaises(Exception):
+                    apply_commands(model, [bad])

@@ -792,12 +792,23 @@ def _run_smooth(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
         shape_spread_ratio=args["shape_spread_ratio"],
         keep_lines=args["keep_lines"],
     )
+    hold_box = args.get("hold_box") or ()
+    if len(hold_box) % 4:
+        raise CommandError("hold_box needs four numbers per box: xmin,ymin,xmax,ymax")
+    hold_line = args.get("hold_line") or ()
+    if len(hold_line) % 2:
+        raise CommandError(
+            f"hold_line needs two points or vertex IDs per line (A,B;C,D), got {len(hold_line)}"
+        )
     result = smooth_model(
         model,
         blocks=args.get("blocks") or None,
         bbox=bbox,
         hold=args.get("hold") or (),
         options=options,
+        hold_box=hold_box,
+        hold_line=hold_line,
+        hold_along=args.get("hold_along") or "none",
     )
     return result.to_data()
 
@@ -1284,7 +1295,9 @@ _register(CommandSpec(
         "shape_pair_ratio, every interface pair its length ratio within that "
         "factor; with shape_spread_ratio, no count component's length spread "
         "growing past that factor). keep_lines=true "
-        "moves a vertex on a straight block line only along it. "
+        "moves a vertex on a straight block line only along it. hold_box and "
+        "hold_line hold the free vertices in a box or on a segment, fixed or, "
+        "with hold_along, free only along that line or an axis. "
         "slide=true also slides boundary vertices along their boundary. The "
         "reason gives the shortest and longest edge over its input length "
         "and, in shape mode, the largest change of an interface pair's length "
@@ -1301,6 +1314,27 @@ _register(CommandSpec(
         ),
         Parameter(
             "hold", "vertices", "vertices that must not move", required=False, default=(),
+        ),
+        Parameter(
+            "hold_box", "numbers",
+            "the free vertices inside xmin,ymin,xmax,ymax (several boxes: 8, 12, ... "
+            "numbers) are held as hold= holds them (bbox= is the opposite: it limits "
+            "what moves); boundary vertices in it do not slide",
+            required=False, default=(),
+        ),
+        Parameter(
+            "hold_line", "locations",
+            "straight segments, each two vertex IDs or points x,y (A,B or A;B; several: "
+            "A,B;C,D): the free vertices on a segment between its ends are held; "
+            "boundary vertices on it do not slide",
+            required=False, default=(),
+        ),
+        Parameter(
+            "hold_along", "choice",
+            "how hold_box/hold_line vertices are held: none - they stay; line - each "
+            "moves only along the hold_line it lies on (on two crossing lines, or in a "
+            "hold_box, it stays); x / y - each moves only along that axis",
+            required=False, default="none", choices=("none", "line", "x", "y"),
         ),
         Parameter(
             "band_tolerance", "float",
@@ -2408,7 +2442,7 @@ def _note(result: CommandResult) -> dict[str, Any] | None:
             "reason": data.get("reason"),
         }
     if result.name == "smooth":
-        return {
+        note = {
             **base,
             "applied": data.get("applied"),
             "moved": data.get("moved"),
@@ -2421,8 +2455,16 @@ def _note(result: CommandResult) -> dict[str, Any] | None:
             "max_pair": data.get("max_pair") if data.get("mode") == "shape" else None,
             "max_spread_growth": data.get("max_spread_growth") if data.get("mode") == "shape" else None,
             "aspect_blocks": data.get("aspect_blocks"),
-            "reason": data.get("reason"),
         }
+        # Holds (hold, hold_box, hold_line, keep_lines): only when there are any.
+        if data.get("held_vertices"):
+            note["held"] = data["held_vertices"]
+        if data.get("line_vertices"):
+            note["line_held"] = data["line_vertices"]
+        if data.get("hold_notes"):
+            note["hold_note"] = "; ".join(data["hold_notes"])
+        note["reason"] = data.get("reason")
+        return note
     if result.name == "slide_vertex":
         return {
             **base,
