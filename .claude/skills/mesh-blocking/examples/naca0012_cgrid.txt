@@ -10,9 +10,11 @@ set_boundary_by airfoil type=wall curves=naca
 add_rows edges=r_0-r_42,r_0-r_82 direction=1,0 to_x=15 stations=1.5,2.5,4,7,11 spread=10 id=w
 # Far field as rows carried from the band front: the nose (r_61..r_62) to the inlet, the upper and lower
 # fronts with the wake band's sides to the top and bottom (front ends from each note: l_10, u_135, d_135).
+# far_ratio=2: on the far row neighbouring columns differ by at most 2 times - the columns beside the
+# trailing edge (0.05 wide on the front) fan out towards the wake's (1 to 4 wide); the row keeps its ends.
 add_rows edges=r_61-r_62 direction=-1,0 to_x=-10 rows=6 growth=1.8 id=l
-add_rows between=r_61,w_15 direction=0,1 to_y=10 rows=6 growth=1.8 id=u
-add_rows between=r_62,w_17 direction=0,-1 to_y=-10 rows=6 growth=1.8 id=d
+add_rows between=r_61,w_15 direction=0,1 to_y=10 rows=6 growth=1.8 far_ratio=2 id=u
+add_rows between=r_62,w_17 direction=0,-1 to_y=-10 rows=6 growth=1.8 far_ratio=2 id=d
 # The two corners: far-field corners level with the row ends (no typed coordinate), then a fill each.
 add_vertex x_of=l_10 y_of=u_135 id=TL
 add_vertex x_of=l_11 y_of=d_135 id=BL
@@ -29,8 +31,10 @@ set_export_settings z_min_patch_type=empty z_max_patch_type=empty
 #> smooth mode=shape allow_stale_fold=true
 #> size 5e-4 1.0 growth=1.2 wall_aspect=50
 #> smooth
-# checkMesh: 14,393 cells, Mesh OK, max non-orthogonality 38.1, 0 faces above 70, max skewness 0.57,
-# max aspect ratio 308. At a first width of 1e-4 (size 1e-4 1.0 growth=1.2 wall_aspect=50): 41,152
-# cells, Mesh OK, 11 faces above 70, max 76.2, skewness 0.89, aspect 978 - the straight columns above
-# the trailing edge carry the wake's first streamwise cell (4e-4) to the top; without spread=10 the
-# wake band carried it to the outlet (aspect 6390: checkMesh fails).
+# checkMesh: 14,469 cells, Mesh OK, max non-orthogonality 37.7, 0 faces above 70, max skewness 0.61,
+# max aspect ratio 111. At a first width of 1e-4 (size 1e-4 1.0 growth=1.2 wall_aspect=50): 38,300
+# cells, Mesh OK, 0 faces above 70, max 55.3, skewness 0.69, aspect 376. With the far row the chain's
+# image (no far_ratio) the straight columns above the trailing edge carried the wake's first streamwise
+# cell (4e-4) to the top: 14,393 cells, max 38.1, aspect 308 at 5e-4; 41,152 cells, 11 faces above 70,
+# max 76.2, skewness 0.89, aspect 978 at 1e-4. Without spread=10 the wake band carried it to the outlet
+# (aspect 6390: checkMesh fails).

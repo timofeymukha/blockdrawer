@@ -923,7 +923,8 @@ fewer faces above 70 degrees (then the lower maximum) is applied. `reason`
 says when the limit bound and the result lists `aspect_blocks`; `mode=shape`
 judges stale counts, so the limit does not apply there. Measured with the
 polish before and after on the 20 corpus sessions' sized states (default
-chain) and the skill's C-grid example sized at a first width of 1e-4: the
+chain) and the skill's C-grid example (before its far field took
+`far_ratio=2`) sized at a first width of 1e-4: the
 20 never crossed the limit and are byte-identical; the C-grid went from
 checkMesh failing (aspect 1356, 40 cells; 10 faces above 70, max 75.42) to
 Mesh OK (aspect 978, applied at half the displacement; 11 faces above 70,
