@@ -493,7 +493,9 @@ refused by name; `id=PREFIX` names new vertices `PREFIX_0, ...` and blocks
   degrees of turning or part of it (a square corner gets one block, a sharp
   trailing edge two), open ends following the boundary they meet, offset
   arcs kept arcs; `to_box` carries every spoke to a rectangle, its corners
-  taken by the nearest spokes, with no fans. The note gives the front's
+  taken by the nearest spokes, with no fans; an open chain's end on the
+  box's edge (a band front ending on a line the box shares) sends its spoke
+  along that edge to the box corner on the band's side. The note gives the front's
   vertices in the chain's order and its two ends (new IDs are numbered in
   creation order, not along the chain). A band block that would
   fold - a mitre at a concave corner moves the offset end `height *

@@ -1046,3 +1046,23 @@ class RelativePositionTests(unittest.TestCase):
             with self.assertRaises(Exception) as caught:
                 apply_commands(MeshModel(), [command])
             self.assertIn(text, str(caught.exception), command)
+
+
+class BandToBoxEdgeTests(unittest.TestCase):
+    def test_an_open_chain_end_on_the_box_edge_runs_along_it(self) -> None:
+        # The square's top edge as the chain, its ends on x = 0 and x = 1: a box
+        # sharing those lines takes the end spokes along its sides to its corners.
+        batch = apply_commands(MeshModel(), ["add_band edges=v2-v3 to_box=0,0.5,1,2"])
+        model = batch.model
+        top = sorted((round(v.x, 9), round(v.y, 9)) for v in model.vertices.values() if v.y > 1.5)
+        self.assertEqual(top, [(0.0, 2.0), (1.0, 2.0)])
+        self.assertEqual(len(model.blocks), 2)
+        model.validate()
+
+    def test_a_vertex_outside_or_at_a_corner_is_refused(self) -> None:
+        with self.assertRaises(Exception) as caught:
+            apply_commands(MeshModel(), ["add_band edges=v2-v3 to_box=0.5,0.5,2,2"])
+        self.assertIn("not inside the box", str(caught.exception))
+        with self.assertRaises(Exception) as caught:
+            apply_commands(MeshModel(), ["add_band edges=v2-v3 to_box=0,0.5,1,1"])
+        self.assertIn("corner of the box", str(caught.exception))

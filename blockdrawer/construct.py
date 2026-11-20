@@ -950,8 +950,36 @@ def _band_to_box(build, chain, position, spokes, box, edge_path):
     for k in range(count):
         (dx, dy), _factor = spokes[k][0]
         px, py = position[chain.vertices[k]]
-        if not (x0 < px < x1 and y0 < py < y1):
-            raise TopologyError(f"vertex {chain.vertices[k]} is not inside the box")
+        # An open chain's end may lie on the box's edge (a band front ending
+        # on a line the box shares); its spoke runs to another side.
+        end = not chain.closed and k in (0, count - 1)
+        slack = build.tol if end else 0.0
+        if not (x0 - slack < px < x1 + slack and y0 - slack < py < y1 + slack):
+            raise TopologyError(
+                f"vertex {chain.vertices[k]} is not inside the box"
+                + ("" if end else " (only an open chain's end vertex may lie on its edge)")
+            )
+        on = [side for side, gap in enumerate((py - y0, x1 - px, y1 - py, px - x0)) if abs(gap) <= build.tol]
+        if end and on:
+            # On the box's edge: the spoke runs along that edge, as a band's
+            # open end follows the boundary it meets, to the box corner on
+            # the band's side.
+            if len(on) > 1:
+                raise TopologyError(f"vertex {chain.vertices[k]} is at a corner of the box: no spoke runs from it")
+            side = on[0]
+            ends = {0: ((x0, y0), (x1, y0)), 1: ((x1, y0), (x1, y1)),
+                    2: ((x1, y1), (x0, y1)), 3: ((x0, y1), (x0, y0))}[side]
+            along = [(dx * (c[0] - px) + dy * (c[1] - py), c) for c in ends]
+            reach, target = max(along)
+            if reach <= 0.0:
+                raise TopologyError(
+                    f"the spoke of {chain.vertices[k]}, on the box's edge, runs out of the box"
+                )
+            hits.append(list(target))
+            # It arrives at the corner on the side across the one it runs along.
+            sides.append(next(other for other, on_it in enumerate(
+                (target[1] == y0, target[0] == x1, target[1] == y1, target[0] == x0)) if on_it and other != side))
+            continue
         candidates = []
         if dx > 0:
             candidates.append(((x1 - px) / dx, 1))

@@ -514,7 +514,10 @@ them in the canvas widgets.
   `ceil(turn/FAN_SECTOR)` kite blocks at a convex turn above `FAN_ANGLE`;
   open ends along the adjacent boundary edge when within 60 degrees of the
   normal; exact arc tangents) and rows by `growth`; `_band_to_box` snaps a
-  box corner to the nearer of the two spokes straddling it. Band blocks
+  box corner to the nearer of the two spokes straddling it; an open
+  chain's end on the box's edge sends its spoke along that edge to the
+  corner on the band's side (a vertex at a box corner, or an inner chain
+  vertex on the edge, is refused). Band blocks
   are checked strictly convex in their construction order
   (`_ordered_convex`, `_Build.block(expect=...)`) before the corners are
   sorted, since sorting turned a folded block into a valid-looking one
