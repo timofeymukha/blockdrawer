@@ -101,7 +101,12 @@ $$
   percent fine: its spokes' count is tied to the far-field fills.
 - `keep_counts=true` keeps every count, recomputes the gradings and
   regrades strips for continuity without raising a count (after moving
-  vertices or setting a count by hand).
+  vertices or setting a count by hand). As a step after the polish on 39
+  sessions (19 round-3 builds and the 20-session corpus) it made the first
+  widths exact on most walls (mean worst miss 14.4 -> 12.5 percent) but
+  raised seven maxima by 1 to 32 degrees (a triangle's 37.7 -> 69.9), added
+  faces above 70 on both high-lifts and took the jumps above 2.5 from 303
+  to 364: `check` after it, keep it only where the brief needs the width.
 - The note names what moved the result: `raised` lists the three
   components spending raised the most cells into ("EDGE FROM->TO +CELLS"),
   and the note says when continuity splits changed the cells after

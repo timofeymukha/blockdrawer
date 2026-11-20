@@ -218,8 +218,8 @@ says when it bound). `hold=V1,V2` keeps vertices you placed on purpose;
 `blocks=`/`bbox=` limit it. Read `reason`. `slide=true` also slides boundary
 vertices along their boundary; it changed little: keep it when `check` agrees.
 The spokes' 5 percent is `band_tolerance`: the first width moves up to 5 percent
-with it. Where the brief wants it exact, run `size FIRST CORE keep_counts=true`
-after the polish: it regrades the spokes and moves no vertex (U-bend: exact).
+with it. Where the brief wants it exact, `size FIRST CORE keep_counts=true` after the
+polish regrades the spokes; `check` after it (39 sessions: 7 maxima +1..32 degrees).
 
 ## Step 7 - Judge
 
