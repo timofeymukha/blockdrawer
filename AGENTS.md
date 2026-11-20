@@ -609,7 +609,9 @@ them in the canvas widgets.
   before `size` (round-3 high-lift: a 0.0006 front carried 15, 3593 cells
   above aspect 1000 after `size`), then the far row's narrowest and
   widest column and both end vertices with their coordinates
-  (`_far_row_note`). The map from
+  (`_far_row_note`); the chain and the far row are listed in the order
+  given (`between=A,B` from A, `edges=` from the end of the first edge
+  listed), which the construction order need not follow. The map from
   chain to row is affine (piecewise, with `far_ratio`), so lines stay
   lines and polyLines polyLines; arcs (except with `distance` and no
   spread or `far_ratio`, a translation) and splines become splines

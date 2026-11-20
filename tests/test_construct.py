@@ -936,6 +936,15 @@ class RowTests(unittest.TestCase):
                      if abs(v.x - 4.0) < 1e-12)
         self.assertEqual(far, [0.0, 0.1, 0.145, 1.0])
 
+    def test_the_note_lists_the_far_row_in_the_order_given(self) -> None:
+        for given, first in (("between=v2,v1", "v2"), ("between=v1,v2", "v1"),
+                             ("edges=t-v2,s-t,v1-s", "v2"), ("edges=v1-s,s-t,t-v2", "v1")):
+            note = apply_commands(MeshModel(), [
+                "split_edge v1-v2 0.1 id=s", "split_edge s-v2 0.05 id=t",
+                f"add_rows {given} direction=1,0 to_x=4",
+            ]).results[-1].result["note"]
+            self.assertIn(f"far row along the chain {first}..", note)
+
     def test_rows_reuse_and_conform_to_what_is_there(self) -> None:
         # A block already right of the square, with a vertex on the bottom path.
         model = apply_commands(MeshModel(), [

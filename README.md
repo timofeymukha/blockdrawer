@@ -562,8 +562,9 @@ was 3.6e-5 of the extent):
   vertex that would cut an existing edge, a block over an existing block or
   vertex, and a block that would not be strictly convex (a direction into
   the chain's blocks) are refused; a station on the target line is the far
-  row and is ignored. The note gives the far row in the chain's order with
-  its two ends, the thinnest column - its chain edge, that
+  row and is ignored. The note gives the far row in the order the chain
+  was given (`between=A,B` from A, `edges=` from the end of the first edge
+  listed) with its two ends, the thinnest column - its chain edge, that
   edge's length and how far it is carried - so a fan's front edge carried
   to the far field (round-3 high-lift: 0.0006 wide carried 15, 3593 cells
   above checkMesh's aspect limit after `size`) shows before sizing, and

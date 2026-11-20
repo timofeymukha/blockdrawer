@@ -1576,7 +1576,16 @@ def add_rows(
         build.finish()
         result = build.result("add_rows")
         far = [ids[k, len(rows_at)] for k in range(count)]
+        # The note lists the chain in the order it was given (between=A,B
+        # from A; edges= from the end of the first edge listed), which the
+        # construction order need not follow.
         listed = list(chain.vertices)
+        first_given = (between[0] if between else
+                       next((v for v in edges[0] if v in (listed[0], listed[-1])), None)
+                       if edges and len(edges) > 1 else None)
+        if not chain.closed and first_given == listed[-1]:
+            listed.reverse()
+            far.reverse()
         parts = [f"{len(rows_at)} row(s) of {edge_count} block(s) to {target}"
                  + (f", widened {spread:g} times" if spread != 1.0 else "")
                  + (f" about {spread_about}" if spread != 1.0 and spread_about is not None else "")
