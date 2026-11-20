@@ -350,7 +350,11 @@ them in the canvas widgets.
   `max_pair` and `max_spread_growth`/`spread_edge`. Neither passed the
   default rule over the 20-session corpus (README table): pair limits and
   higher floors lose the square cylinder's gain, the spread limit cost the
-  NACA 4412 3.5 degrees and a face above 70.
+  NACA 4412 3.5 degrees and a face above 70. On the 19 round-3 hand builds
+  neither no shape step, `keep_lines` nor `shape_pair_ratio=2.5` passed the
+  rule for the skill to name it for operator builds (README, with the
+  default chain's noise under a 1 percent change of the core size,
+  measured first); Step 4 says what the step's report shows before `size`.
   `keep_lines=True` (off by default in both modes: measured in the README)
   finds each free vertex's straight block lines (`straight_lines`: two
   internal `line` edges at it sharing no block, collinear within

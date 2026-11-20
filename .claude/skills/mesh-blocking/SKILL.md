@@ -160,20 +160,20 @@ near 1000 blocks, the engine's C-grid 8.5 min; set a timeout above that.
 the count-free block map before any count exists; band spokes keep their length
 and do not turn from the wall normal; no edge ends below `shape_length_ratio`
 (0.1) of its input (unlimited, a ring edge went to 0.002, a jump of 269 after
-`size`). Read `reason`: the count-free maximum before and after and "edge
-lengths A (EDGE) to B (EDGE) of their input" (`min_edge_ratio`); it is applied
-only when no worse ("nothing to gain" is normal on rectangles). Engine square
-cylinder: 87.7 -> 56.9 deg at real counts, checkMesh 52.2 sized. Optional. Then:
+`size`). Read `reason`: the count-free maximum before and after, `min_edge_ratio` and
+`max_pair_change`; applied only when no worse ("nothing to gain" on rectangles).
+Optional; on 19 hand builds, sized and polished, it lowered checkMesh's maximum by
+over a degree against no step on 10 (y-junction 39.1 -> 32.0, bump 39.4 -> 31.0), raised
+it on 3 (triangle +12.3); no step, `keep_lines` or pair 2.5 instead failed (README). Then:
 
 - Lines meant to stay straight (a wake line, a grid's cross lines) bent: here and in
-  the polish `hold_line=A,B;C,D hold_along=line` - the vertices on each segment move
-  along it only (cylinder in a channel: 35.99 deg; fixed by `hold=` 41.21; free 34.88,
-  chevrons). `hold_box=`/`hold=` fix; `keep_lines=true` holds every line (4-16 deg).
-- the polish leaves a jump above 5 where the step shrank an edge (`min_edge_ratio`
-  near 0.1, `max_pair_change` large): rerun it with `shape_pair_ratio=2.5`, which
-  trades the worst face for jumps and skewness (three cylinders, round 3: 64.7 ->
-  67.9 deg, skewness 3.84 -> 3.46, jumps above 2.5 19 -> 10), or a higher
-  `shape_length_ratio` (cascade 0.4); neither is a default (README).
+  the polish `hold_line=A,B;C,D hold_along=line` moves their vertices along them only
+  (cylinder in a channel: 35.99 deg; `hold=` fixed 41.21; free 34.88, chevrons).
+  `hold_box=`/`hold=` fix; `keep_lines=true` holds every line (4-16 deg).
+- `min_edge_ratio` 0.1, `max_pair_change` above 15 (triangle, cascade, high-lift): jumps
+  above 5 after the polish (9, 3, 37) - rerun with `shape_pair_ratio=2.5` (0, 0, 17)
+  or size the unshaped build too and keep what `check` prefers (triangle: 25.4 deg
+  unshaped, 37.7 shaped). A count-free gain of 1-2 deg cost the bluff body 27% cells.
 - "already fold ... on the count-free block map": a spline running backwards
   (`failures.md`), else move a station, split, or leave the step out.
 

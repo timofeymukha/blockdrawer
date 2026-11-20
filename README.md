@@ -1115,6 +1115,112 @@ limit where the floor is what an agent would raise (a ring pulled onto the
 next ring: the three cylinders go from 12 jumps above 5 to none at pair
 1.5 or 2.5, and to 2 at spread 2.5).
 
+The default chain's noise, measured first so that a rule with a
+per-session term is not decided by it: the 19 round-3 hand builds (the
+construction part of each trial's batch, the trial's own `size` line), each
+through shape, `size` and the polish with the `size` line's core size times
+0.99, 1 and 1.01; per session the band (largest minus smallest of the three)
+of checkMesh's maximum and average non-orthogonality, skewness, aspect ratio
+and cells, the quality screen's jumps above 2.5 and 5, and the worst wall
+patch's first-height deviation in percent points:
+
+| session | max | avg | skew | aspect | cells | jumps >2.5 | jumps >5 | worst first width (points) |
+|---|---|---|---|---|---|---|---|---|
+| u_bend 3 | 0.47 | 0.40 | 0.02 | 0.0 | 1,888 | 0 | 0 | 0.0 |
+| u_bend 3b | 0.01 | 0.36 | 0.13 | 1.4 | 354 | 0 | 0 | 8.3 |
+| u_bend 3c | 0.00 | 0.00 | 0.00 | 0.0 | 0 | 0 | 0 | 0.0 |
+| y_junction 3 | 0.85 | 0.92 | 0.18 | 2.4 | 2,516 | 0 | 0 | 0.0 |
+| y_junction 3b | 0.00 | 0.01 | 0.00 | 0.0 | 0 | 0 | 0 | 0.0 |
+| y_junction 3c | 0.00 | 0.00 | 0.00 | 0.0 | 0 | 0 | 0 | 0.0 |
+| cylinder_channel 3 | 0.00 | 0.00 | 0.00 | 0.0 | 0 | 0 | 0 | 0.0 |
+| cylinder_channel 3b | 0.00 | 0.00 | 0.00 | 0.0 | 0 | 0 | 0 | 0.0 |
+| cylinder_channel 3c | 0.00 | 0.00 | 0.00 | 0.0 | 0 | 0 | 0 | 0.0 |
+| nozzle 3 | 0.03 | 0.02 | 0.01 | 0.0 | 173 | 0 | 0 | 0.0 |
+| nozzle 3b | 0.49 | 0.00 | 0.00 | 0.0 | 174 | 0 | 0 | 0.0 |
+| nozzle 3c | 0.10 | 0.04 | 0.01 | 0.0 | 360 | 0 | 0 | 0.0 |
+| bump_channel 3 | 0.00 | 0.00 | 0.00 | 0.0 | 0 | 0 | 0 | 0.0 |
+| cascade 3 | 0.21 | 1.01 | 0.18 | 4.2 | 1,857 | 6 | 5 | 12.7 |
+| triangle 3 | 1.53 | 0.33 | 0.02 | 72.7 | 603 | 1 | 5 | 0.0 |
+| airfoil_tunnel 3 | 0.55 | 0.02 | 0.04 | 6.7 | 808 | 1 | 0 | 0.0 |
+| blunt_plate 3 | 0.00 | 0.00 | 0.00 | 0.0 | 0 | 0 | 0 | 0.0 |
+| bluff_ground 3 | 0.00 | 0.00 | 0.00 | 0.0 | 0 | 0 | 0 | 0.0 |
+| high_lift 3 | 0.00 | 0.24 | 0.00 | 261.9 | 7,890 | 3 | 1 | 0.0 |
+| median | 0.00 | 0.01 | 0.00 | 0.0 | 173 | 0 | 0 | 0.0 |
+| largest | 1.53 | 1.01 | 0.18 | 261.9 | 7,890 | 6 | 5 | 12.7 |
+
+Eight of the 19 do not move at all; where a session moves, the maximum
+moves by up to 1.5 degrees (triangle), the average by up to 1.0 (cascade),
+the jumps above 5 by up to 5 (cascade, triangle), the cells by up to 7.5
+percent (U-bend 3) and the worst first width by up to 12.7 points
+(cascade). The term "higher by more than the band, at least a degree" below
+uses these bands.
+
+The shape step on operator builds: the same 19 inputs through four chains
+that differ only in the shape step, each followed by the trial's `size` line
+and the default polish - D, `smooth mode=shape allow_stale_fold=true` (the
+default); N, no shape step; L, D with `keep_lines=true`; P, D with
+`shape_pair_ratio=2.5`. Each cell reads checkMesh maximum (average), cells,
+jumps above 2.5 / above 5, and bent lines (of the built session's interior
+vertices on a straight block line, those whose line ends the chain turned more
+than 2 degrees at them). No face above 70 anywhere:
+
+| session | D: the default | N: no shape step | L: `keep_lines=true` | P: `shape_pair_ratio=2.5` |
+|---|---|---|---|---|
+| u_bend 3 | 37.64 (15.84), 25,074, 0/0, 7 | 39.47 (15.89), 23,754, 0/0, 7 | 39.34 (15.80), 23,186, 0/0, 7 | 37.64 (15.84), 25,074, 0/0, 7 |
+| u_bend 3b | 44.97 (24.11), 69,974, 0/0, 0 | 44.97 (24.28), 79,462, 0/0, 0 | 45.00 (21.32), 43,588, 0/0, 0 | 44.97 (24.11), 69,974, 0/0, 0 |
+| u_bend 3c | 44.98 (16.75), 39,822, 0/0, 10 | 44.98 (17.08), 42,446, 0/0, 13 | 44.98 (17.19), 41,942, 0/0, 13 | 44.98 (16.75), 39,822, 0/0, 10 |
+| y_junction 3 | 31.95 (8.94), 60,163, 0/0, 7 | 39.09 (13.63), 57,060, 0/0, 6 | 33.70 (9.23), 57,659, 0/0, 7 | 33.39 (14.48), 57,105, 8/0, 6 |
+| y_junction 3b | 29.14 (15.23), 88,124, 0/0, 9 | 40.07 (13.60), 71,560, 3/1, 10 | 28.76 (14.77), 88,911, 0/0, 8 | 29.14 (15.29), 88,124, 0/0, 10 |
+| y_junction 3c | 32.39 (17.28), 108,559, 2/0, 7 | 26.72 (13.83), 89,711, 0/0, 5 | 25.14 (13.22), 81,297, 0/0, 7 | 32.39 (17.28), 108,559, 2/0, 7 |
+| cylinder_channel 3 | 34.88 (5.05), 16,720, 0/0, 8 | 38.01 (19.11), 22,548, 0/0, 9 | 38.23 (18.40), 22,548, 0/0, 9 | 34.88 (5.08), 16,720, 0/0, 8 |
+| cylinder_channel 3b | 34.88 (5.05), 16,720, 0/0, 8 | 38.01 (19.11), 22,548, 0/0, 9 | 38.23 (18.40), 22,548, 0/0, 9 | 34.88 (5.08), 16,720, 0/0, 8 |
+| cylinder_channel 3c | 35.01 (3.27), 16,715, 0/0, 15 | 38.37 (8.17), 19,648, 0/0, 15 | 38.58 (8.15), 19,909, 0/0, 15 | 35.01 (3.24), 16,715, 0/0, 15 |
+| nozzle 3 | 12.01 (2.77), 14,878, 0/0, 2 | 11.78 (2.73), 14,878, 0/0, 2 | 12.01 (2.82), 14,878, 0/0, 2 | 12.01 (2.77), 14,878, 0/0, 2 |
+| nozzle 3b | 11.45 (2.73), 14,964, 0/0, 2 | 11.30 (2.54), 14,964, 0/0, 0 | 11.45 (2.77), 14,964, 0/0, 2 | 11.45 (2.73), 14,964, 0/0, 2 |
+| nozzle 3c | 11.75 (2.52), 15,480, 0/0, 0 | 11.79 (2.54), 15,480, 0/0, 0 | 11.74 (2.55), 15,480, 0/0, 2 | 11.75 (2.52), 15,480, 0/0, 0 |
+| bump_channel 3 | 31.00 (13.06), 64,620, 0/0, 20 | 39.35 (14.40), 53,058, 0/0, 21 | 35.13 (13.15), 57,360, 0/0, 19 | 31.93 (14.14), 66,928, 0/0, 17 |
+| cascade 3 | 53.61 (26.72), 43,120, 8/3, 18 | 56.05 (26.02), 57,974, 0/0, 14 | 53.75 (25.92), 57,956, 0/0, 14 | 53.70 (25.30), 49,183, 0/0, 16 |
+| triangle 3 | 37.70 (8.93), 39,283, 20/9, 152 | 25.44 (9.62), 31,708, 0/0, 147 | 24.74 (8.82), 32,254, 0/0, 107 | 29.59 (7.95), 37,234, 0/0, 158 |
+| airfoil_tunnel 3 | 25.23 (3.25), 107,127, 1/0, 116 | 31.64 (2.41), 101,666, 1/0, 121 | 31.20 (2.13), 102,419, 3/0, 88 | 23.84 (2.07), 104,344, 8/0, 92 |
+| blunt_plate 3 | 37.82 (4.31), 64,604, 2/0, 139 | 39.99 (4.18), 58,720, 0/0, 109, **fails** (20 cells above 1000) | 40.65 (4.02), 63,775, 8/0, 141, **fails** (20 cells above 1000) | 37.40 (4.37), 64,195, 0/0, 133 |
+| bluff_ground 3 | 41.19 (3.77), 209,367, 3/0, 74 | 39.03 (3.80), 165,264, 0/0, 79 | 38.60 (3.45), 171,648, 0/0, 80 | 40.33 (3.87), 197,818, 1/0, 76 |
+| high_lift 3 | 66.24 (14.21), 246,640, 90/37, 186, **fails** (1695 cells above 1000) | 67.22 (15.03), 285,869, 75/9, 116, **fails** (3016 cells above 1000) | 66.24 (14.48), 275,866, 76/20, 134, **fails** (2274 cells above 1000) | 66.24 (13.95), 275,760, 67/17, 183, **fails** (1738 cells above 1000) |
+
+A rule fixed before measuring, for the skill to name N, L or P as what an
+operator build does (against D: no session gains a checkMesh failure, a face
+above 70, a jump above 5 or a cell above aspect 1000; the maximum higher by
+more than the session's band above - at least a degree - on at most two
+sessions and by more than 5 on none; the mean of the averages not higher;
+cells at most 2 percent more; bent lines at most half of D's). None passes:
+
+| term | N | L | P |
+|---|---|---|---|
+| checkMesh failure gained | blunt plate (aspect 1115, 20 cells) | blunt plate (the same) | none |
+| jump above 5 gained | Y-junction 3b (0 -> 1) | none | none |
+| cells above 1000 gained | blunt plate 0 -> 20, high-lift 1695 -> 3016 | blunt plate 0 -> 20, high-lift 1695 -> 2274 | high-lift 1695 -> 1738 (failing already) |
+| maximum above D by more than the band | 10 sessions | 8 | 1 (Y-junction 3, +1.44) |
+| ... by more than 5 degrees | 4 (Y-junction 3b +10.9) | 1 (airfoil tunnel +6.0) | none |
+| mean of the averages (D 10.20) | 12.00 | 11.40 | 10.36 |
+| cells (D 1,261,954) | -2.7% | -4.3% | +1.4% |
+| bent lines (D 780; half 390) | 683 | 664 | 750 |
+
+The bent-lines term fails for every chain, N included: most of the bending
+is the polish's, not the shape step's. P comes closest and removes every jump
+above 5 D leaves except on the high-lift (triangle 9 -> 0, cascade 3 -> 0,
+high-lift 37 -> 17), but raises the mean average and the Y-junction 3's
+maximum. So the step stays optional with the default rules (`SKILL.md` Step
+4), and what the step's own report shows before `size` is what tells: its
+three worst losses against N are the triangle (`min_edge_ratio` at the floor
+0.1, `max_pair_change` 20.5: +12.3 degrees, 9 jumps above 5), the cascade
+(0.1, 20.6: 3 jumps above 5) and the bluff body (a count-free gain of 1.5
+degrees, 41.0 -> 39.4: 27 percent more cells, +2.2 degrees), while it paid
+most where the count-free maximum fell by 10 degrees or more with the pair
+change under 7 (Y-junction 3 65.2 -> 35.9: checkMesh 39.1 -> 32.0; bump
+45.4 -> 29.0: 39.4 -> 31.0; airfoil tunnel 39.2 -> 21.3: 31.6 -> 25.2). The
+Y-junction 3c (pair change 1.07) is the exception the report does not show:
+32.4 with the step, 26.7 without, and its first width 53 percent off with
+the step against 8 without (not diagnosed).
+
 Holds by selection, in both modes: `hold_box=XMIN,YMIN,XMAX,YMAX` (more
 boxes: more groups of four numbers) and `hold_line=A,B` (more segments:
 `A,B;C,D`; each end a vertex ID or a point `x,y`) select the free vertices
