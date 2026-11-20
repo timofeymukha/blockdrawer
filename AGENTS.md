@@ -596,7 +596,11 @@ them in the canvas widgets.
   sampled non-orthogonality at default counts and the blunt plate's
   `to_box` needed the normal stations anyway. `side=in` bands the inside
   of a closed curve. With `side=left|right` the curve is open
-  (`_open_ring`: `_CurvePath(force_open=True)`, no closing segment), the
+  (`_open_ring`: `_CurvePath(force_open=True)`, no closing segment) - or
+  several curves given in order (`curve` is a list), joined where each
+  starts at the previous one's last point (`_joined_curve`; one that does
+  not is refused, saying when it ends there instead: its points run the
+  other way), each joint a station whatever it turns -, the
   section `between` two fractions or points: stations at its ends, at
   vertices turning more than `corner`, at `fractions`, at single crossings
   of `xs`/`ys` (`_crossings`, as `add_stations`), `count` spread between

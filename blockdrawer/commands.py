@@ -1652,10 +1652,16 @@ _register(CommandSpec(
         "per 90 degrees of turning or part of it (a square corner one block, "
         "a sharp trailing edge two or more), every other station one spoke; "
         "fan=false (or open_at) leaves such a corner open for a wake band "
-        "(add_rows)."
+        "(add_rows). Along an open wall (side=left|right of the curve's "
+        "point order, no host block): curve may list several curves, each "
+        "starting where the previous one ends (the joints are stations); "
+        "stations at the ends, joints and corners, fractions, crossings of "
+        "xs/ys and count (none needed); start/end give the end spokes' "
+        "directions, else they are normal."
     ),
     (
-        Parameter("curve", "curve", "closed reference curve (ID or name)"),
+        Parameter("curve", "curves", "reference curve (ID or name); along an open wall several, "
+                  "comma-separated, joined end to start"),
         Parameter("height", "float", "band height"),
         Parameter("count", "int", "edges round the curve (0: stations only)",
                   required=False, default=0),

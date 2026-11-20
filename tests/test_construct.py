@@ -1123,3 +1123,33 @@ class OpenRingStationTests(unittest.TestCase):
                 f"add_curve {circle_points(1.0, 16)} name=c", "add_ring c 0.1",
             ])
         self.assertIn("give count", str(caught.exception))
+
+
+class JoinedCurveRingTests(unittest.TestCase):
+    def _walls(self, *commands):
+        return apply_commands(MeshModel(box=(5, 5, 6, 6)), [
+            "add_curve 0,0;1,0;2,0 name=lower", "add_curve 2,0;2.5,0.5;3,1 name=ramp",
+            *commands,
+        ])
+
+    def test_several_curves_joined_end_to_start_with_the_joint_a_station(self) -> None:
+        batch = self._walls("add_ring lower,ramp 0.1 side=left id=w")
+        model = batch.model
+        band = [block for block in model.blocks if block.id.startswith("w_b")]
+        self.assertEqual(len(band), 2)
+        self.assertTrue(any(abs(v.x - 2.0) < 1e-12 and abs(v.y) < 1e-12 for v in model.vertices.values()))
+        self.assertIn("1 joint(s) between curves", batch.results[2].result["note"])
+        # The wall edges follow both curves: set_boundary_by finds them on each.
+        walls = apply_commands(model, ["set_boundary_by wall type=wall curves=lower,ramp"]).results[0].result
+        self.assertEqual(walls["edges"], 2)
+
+    def test_curves_that_do_not_join_are_refused(self) -> None:
+        with self.assertRaises(Exception) as caught:
+            self._walls("add_ring ramp,lower 0.1 side=left")
+        self.assertIn("does not start where ramp ends", str(caught.exception))
+        with self.assertRaises(Exception) as caught:
+            self._walls("add_curve 3,1;2,0 name=back", "add_ring lower,back 0.1 side=left")
+        self.assertIn("its points run the other way", str(caught.exception))
+        with self.assertRaises(Exception) as caught:
+            self._walls("add_ring lower,ramp 0.1 count=4")
+        self.assertIn("a closed ring takes one curve", str(caught.exception))

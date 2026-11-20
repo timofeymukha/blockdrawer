@@ -1563,7 +1563,7 @@ def _thinnest_column(model: MeshModel, chain: _Chain, position, edge_count: int,
 
 def add_ring(
     model: MeshModel,
-    curve: str,
+    curve: str | Sequence[str],
     height: float,
     *,
     count: int = 0,
@@ -1596,7 +1596,9 @@ def add_ring(
     them.
 
     Along an open curve (``side=left`` or ``right`` of its point order, no
-    host block needed; `_open_ring`): the section ``between`` (default the whole curve) with stations at its ends,
+    host block needed; `_open_ring`) - or several, given in order, each
+    starting where the previous one ends, the joints kept as stations: the
+    section ``between`` (default the whole curve) with stations at its ends,
     corners, ``fractions``, where it crosses each of ``xs`` and ``ys``, and
     ``count`` edges between them
     (none: the ends and corners alone); ``start``/``end`` set the first and
@@ -1609,6 +1611,12 @@ def add_ring(
     if side not in ("", "out", "in", "left", "right"):
         raise TopologyError("side is out or in (closed curve), left or right (open curve)")
     open_curve = side in ("left", "right")
+    curves = [curve] if isinstance(curve, str) else list(curve)
+    if not curves:
+        raise TopologyError("give the curve")
+    if len(curves) > 1 and not open_curve:
+        raise TopologyError("several curves are joined into one open wall: give side=left or side=right "
+                            "(a closed ring takes one curve)")
     if count < 0:
         raise TopologyError("count is the number of edges, at least 0")
     if not open_curve and not (count or fractions or normals):
@@ -1631,7 +1639,7 @@ def add_ring(
     def work(working: MeshModel) -> ConstructResult:
         if open_curve:
             build, chain, notes, stations = _open_ring(
-                working, curve, side, between, corner_angle, corner, fractions, xs, ys, count, prefix)
+                working, curves, side, between, corner_angle, corner, fractions, xs, ys, count, prefix)
             chain.end_spokes = end_spokes
             where = {v: (working.vertices[v].x, working.vertices[v].y) for v in chain.vertices}
             _band(build, chain, height, rows, growth, None,
@@ -1643,7 +1651,8 @@ def add_ring(
                 + ("; ".join(notes) or ("by arc length" if count else "its ends alone")),
                 _front_note(chain, build.front, False), _opened_note(build)) if part)
             return result
-        loop = _curve_polygon(working, curve)
+        curve_id = curves[0]
+        loop = _curve_polygon(working, curve_id)
         if len(loop) < 3:
             raise TopologyError("add_ring needs a closed curve of at least three points")
         n = len(loop)
@@ -1748,19 +1757,50 @@ def _wall_edges(build: _Build, ids: Sequence[str], interiors: list, points: Sequ
     return kinds
 
 
-def _open_ring(working: MeshModel, curve: str, side: str, between: Sequence[float],
+def _joined_curve(model: MeshModel, curves: Sequence[str]) -> tuple[str, list[Point], list[int]]:
+    """The points of one curve, or of several open curves in order joined
+    where each starts at the previous one's last point (the shared point
+    kept once), with the indices of the joints in the joined list."""
+    names, joined, joints = [], [], []
+    for curve_id in curves:
+        curve = model.geometry_curves.get(curve_id)
+        if curve is None:
+            raise TopologyError(f"Unknown curve {curve_id!r}")
+        names.append(curve.name or curve_id)
+        points = [(float(p[0]), float(p[1])) for p in curve.points]
+        if not joined:
+            joined = points
+            continue
+        size = _extent(joined + points)
+        here = joined[-1]
+        if math.dist(here, points[0]) > 1.0e-6 * size:
+            reverse = math.dist(here, points[-1]) <= 1.0e-6 * size
+            raise TopologyError(
+                f"curve {names[-1]} does not start where {names[-2]} ends ({here[0]:.6g}, {here[1]:.6g}); "
+                + ("it ends there: its points run the other way" if reverse else
+                   f"it starts at ({points[0][0]:.6g}, {points[0][1]:.6g})")
+                + " - several curves are joined end to start, in order"
+            )
+        joints.append(len(joined) - 1)
+        joined.extend(points[1:])
+    return " + ".join(names), joined, joints
+
+
+def _open_ring(working: MeshModel, curves: Sequence[str], side: str, between: Sequence[float],
                corner_angle: float, corner: float, fractions: Sequence[float], xs: Sequence[float],
                ys: Sequence[float], count: int, prefix: str | None):
     """The wall chain of a band along an open curve (the polyline through
-    its points, no closing segment) or the section ``between`` two
+    its points, no closing segment) - or several joined end to start, each
+    joint a station (`_joined_curve`) - or the section ``between`` two
     arc-length fractions or two points (taken to the curve): stations at
-    the section's ends, at the curve's vertices turning more
+    the section's ends and joints, at the curve's vertices turning more
     than the corner angle, at the ``fractions`` of the whole curve, where
     the section crosses each of ``xs`` and ``ys`` (exactly once, else
     refused), then ``count`` edges spread by arc length
     between them; wall edges are splines through the curve's points
     (`_CurvePath.edge_interior`, no segment running backwards)."""
-    path = _CurvePath(working, curve, force_open=True)
+    name, joined, joint_indices = _joined_curve(working, curves)
+    path = _CurvePath(None, name, force_open=True, points=joined)
     points = list(path.points)
     lengths = _polyline_lengths(points)
     total = lengths[-1]
@@ -1783,9 +1823,13 @@ def _open_ring(working: MeshModel, curve: str, side: str, between: Sequence[floa
         s0, s1 = 0.0, total
     notes = []
     anchors = {s0, s1}
+    joints = [lengths[k] for k in joint_indices if s0 < lengths[k] < s1]
+    anchors.update(joints)
+    if joints:
+        notes.append(f"{len(joints)} joint(s) between curves")
     corners = []
     for k in range(1, len(points) - 1):
-        if not s0 < lengths[k] < s1:
+        if not s0 < lengths[k] < s1 or k in joint_indices:
             continue
         t1 = _unit(points[k][0] - points[k - 1][0], points[k][1] - points[k - 1][1])
         t2 = _unit(points[k + 1][0] - points[k][0], points[k + 1][1] - points[k][1])
@@ -2137,17 +2181,23 @@ class _CurvePath:
     ``set_boundary_by``'s default, a thousandth of the curve's size: a
     vertex that close is on the curve."""
 
-    def __init__(self, model: MeshModel, curve_id: str, force_open: bool = False) -> None:
-        curve = model.geometry_curves.get(curve_id)
-        if curve is None:
-            raise TopologyError(f"Unknown curve {curve_id!r}")
-        points = [(float(p[0]), float(p[1])) for p in curve.points]
+    def __init__(self, model: MeshModel | None, curve_id: str, force_open: bool = False,
+                 points: Sequence[Point] | None = None) -> None:
+        if points is None:
+            curve = model.geometry_curves.get(curve_id) if model is not None else None
+            if curve is None:
+                raise TopologyError(f"Unknown curve {curve_id!r}")
+            name = curve.name or curve_id
+            points = curve.points
+        else:
+            name = curve_id
+        points = [(float(p[0]), float(p[1])) for p in points]
         extent = _extent(points)
         repeated = len(points) > 2 and math.dist(points[0], points[-1]) <= 1.0e-12 * (1.0 + extent)
         if repeated and not force_open:
             points.pop()
         segments = [math.dist(a, b) for a, b in zip(points, points[1:])]
-        self.name = curve.name or curve_id
+        self.name = name
         self.points = points
         self.closed = not force_open and (repeated or (
             len(points) >= 3 and math.dist(points[-1], points[0]) <= max(segments) * (1.0 + 1.0e-6)))
