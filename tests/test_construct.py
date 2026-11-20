@@ -1103,3 +1103,23 @@ class NearVertexNoteTests(unittest.TestCase):
         self.assertEqual(batch.results[0].result["reused_vertices"], 1)
         batch = apply_commands(MeshModel(), ["add_grid xs=1,1.001,2 ys=0,1"])
         self.assertNotIn("note", batch.results[0].result)
+
+
+class OpenRingStationTests(unittest.TestCase):
+    def test_an_open_ring_from_its_ends_and_corners_alone(self) -> None:
+        batch = apply_commands(MeshModel(box=(5, 5, 6, 6)), [
+            "add_curve 0,0;1,0;2,1 name=wall", "add_ring wall 0.1 side=left id=w",
+        ])
+        band = [block for block in batch.model.blocks if block.id.startswith("w_b")]
+        self.assertEqual(len(band), 2)
+        self.assertIn("3 stations along the open curve, band on its left: 1 corner(s) above 30 degrees",
+                      batch.results[1].result["note"])
+        straight = apply_commands(MeshModel(box=(5, 5, 6, 6)), [
+            "add_curve 0,0;1,0;2,0 name=flat", "add_ring flat 0.1 side=left",
+        ])
+        self.assertIn("its ends alone", straight.results[1].result["note"])
+        with self.assertRaises(Exception) as caught:
+            apply_commands(MeshModel(box=(5, 5, 6, 6)), [
+                f"add_curve {circle_points(1.0, 16)} name=c", "add_ring c 0.1",
+            ])
+        self.assertIn("give count", str(caught.exception))

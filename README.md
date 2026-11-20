@@ -569,12 +569,14 @@ was 3.6e-5 of the extent):
   For `to_box`, aim ring stations at the box corners with `normals=`; a
   band block that would fold against the box is refused with the spokes and
   corners named. `side=in` puts the band inside a closed curve.
-- `add_ring CURVE HEIGHT side=left|right count=N | fractions=... | xs=... |
-  ys=... [between=F0,F1 | between=X0,Y0,X1,Y1] [start=DX,DY] [end=DX,DY]` -
+- `add_ring CURVE HEIGHT side=left|right [count=N] [fractions=...] [xs=...]
+  [ys=...] [between=F0,F1 | between=X0,Y0,X1,Y1] [start=DX,DY] [end=DX,DY]` -
   a band along an open reference curve (internal flow: a wall chain, no
   host block), on its left or right as its points run: stations at the
   section's two ends, at its corners, at the fractions, where it crosses
-  each x or y (exactly once, else refused) and by count between them; wall
+  each x or y (exactly once, else refused) and by count between them (with
+  none of these, from its ends and corners alone: three round-3 agents were
+  refused a count their corners made unnecessary); wall
   edges are splines through the curve's points; `start`/`end` give the
   first and last spoke's direction (its normal component is the band
   height) so they lie on an inlet or outlet line, else they are normal to

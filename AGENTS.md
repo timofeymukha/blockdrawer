@@ -600,7 +600,8 @@ them in the canvas widgets.
   section `between` two fractions or points: stations at its ends, at
   vertices turning more than `corner`, at `fractions`, at single crossings
   of `xs`/`ys` (`_crossings`, as `add_stations`), `count` spread between
-  them; wall edges by `_CurvePath.edge_interior`; `normals`/`tips` are
+  them (none of these is needed: the ends and corners alone build); wall
+  edges by `_CurvePath.edge_interior`; `normals`/`tips` are
   refused there. `start`/`end` (`add_ring` open, `add_band` on an open
   chain; `_Chain.end_spokes`) give an end spoke's direction, turned to the
   band's side, length `height / cos` to the normal, refused when parallel

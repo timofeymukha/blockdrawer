@@ -1596,11 +1596,11 @@ def add_ring(
     them.
 
     Along an open curve (``side=left`` or ``right`` of its point order, no
-    host block needed; `_open_ring`): the section ``between`` (default the
-    whole curve) with stations at its ends, corners, ``fractions``, where it
-    crosses each of ``xs`` and ``ys``, and ``count`` edges between them;
-    ``start``/``end`` set the first and last spoke's direction (an inlet
-    line), else they are normal to the wall.
+    host block needed; `_open_ring`): the section ``between`` (default the whole curve) with stations at its ends,
+    corners, ``fractions``, where it crosses each of ``xs`` and ``ys``, and
+    ``count`` edges between them
+    (none: the ends and corners alone); ``start``/``end`` set the first and
+    last spoke's direction (an inlet line), else they are normal to the wall.
 
     ``fan=false`` leaves every convex corner that would fan open, ``open_at``
     the station nearest each point (`_band`)."""
@@ -1609,9 +1609,10 @@ def add_ring(
     if side not in ("", "out", "in", "left", "right"):
         raise TopologyError("side is out or in (closed curve), left or right (open curve)")
     open_curve = side in ("left", "right")
-    if count < 0 or (not count and not fractions and not normals and not (open_curve and (xs or ys))):
-        raise TopologyError("give count (edges round the curve), fractions or normals"
-                            + (", xs or ys" if open_curve else ""))
+    if count < 0:
+        raise TopologyError("count is the number of edges, at least 0")
+    if not open_curve and not (count or fractions or normals):
+        raise TopologyError("give count (edges round the curve), fractions or normals")
     if not 0.0 < corner < 180.0:
         raise TopologyError("corner is an angle in degrees between 0 and 180")
     if not open_curve:
@@ -1639,7 +1640,7 @@ def add_ring(
             result = build.result("add_ring")
             result.note = "; ".join(part for part in (
                 f"{stations} stations along the open curve, band on its {side}: "
-                + ("; ".join(notes) or "by arc length"),
+                + ("; ".join(notes) or ("by arc length" if count else "its ends alone")),
                 _front_note(chain, build.front, False), _opened_note(build)) if part)
             return result
         loop = _curve_polygon(working, curve)
@@ -1747,18 +1748,18 @@ def _wall_edges(build: _Build, ids: Sequence[str], interiors: list, points: Sequ
     return kinds
 
 
-def _open_ring(working: MeshModel, curve: str, side: str, between: Sequence[float], corner_angle: float,
-               corner: float, fractions: Sequence[float], xs: Sequence[float], ys: Sequence[float],
-               count: int, prefix: str | None):
+def _open_ring(working: MeshModel, curve: str, side: str, between: Sequence[float],
+               corner_angle: float, corner: float, fractions: Sequence[float], xs: Sequence[float],
+               ys: Sequence[float], count: int, prefix: str | None):
     """The wall chain of a band along an open curve (the polyline through
-    its points, no closing segment) or the section ``between`` two arc-length
-    fractions or two points (taken to the curve): stations at the section's
-    ends, at the curve's vertices turning more than the corner angle, at
-    the ``fractions`` of the whole curve and where the section crosses each
-    of ``xs`` and ``ys`` (exactly once, else refused), then ``count`` edges
-    spread by arc length between them; wall edges are splines through the
-    curve's points (`_CurvePath.edge_interior`, no segment running
-    backwards)."""
+    its points, no closing segment) or the section ``between`` two
+    arc-length fractions or two points (taken to the curve): stations at
+    the section's ends, at the curve's vertices turning more
+    than the corner angle, at the ``fractions`` of the whole curve, where
+    the section crosses each of ``xs`` and ``ys`` (exactly once, else
+    refused), then ``count`` edges spread by arc length
+    between them; wall edges are splines through the curve's points
+    (`_CurvePath.edge_interior`, no segment running backwards)."""
     path = _CurvePath(working, curve, force_open=True)
     points = list(path.points)
     lengths = _polyline_lengths(points)
@@ -1798,14 +1799,16 @@ def _open_ring(working: MeshModel, curve: str, side: str, between: Sequence[floa
         if not s0 - 1.0e-12 * total <= value <= s1 + 1.0e-12 * total:
             raise TopologyError(f"fraction {f:g} is outside the section given by between")
         anchors.add(min(s1, max(s0, value)))
+    if fractions:
+        notes.append(f"{len(fractions)} station(s) by fraction")
     samples = [0.0, *[u for u, _p in path.inside_with_parameters(s0, s1 - s0)], 1.0]
     for axis, values in ((0, xs), (1, ys)):
         for value in values:
             hits = _crossings(path, s0, s1 - s0, samples, axis, value)
             if len(hits) != 1:
-                name = "x" if axis == 0 else "y"
+                axis_name = "x" if axis == 0 else "y"
                 raise TopologyError(
-                    f"the section of {path.name} crosses {name} = {value:g} "
+                    f"the section of {path.name} crosses {axis_name} = {value:g} "
                     + (f"{len(hits)} times" if hits else "nowhere")
                     + ": a station needs exactly one crossing; narrow it with between="
                 )
