@@ -580,7 +580,21 @@ them in the canvas widgets.
   from the middle of the chain's extent grows linearly with its travel
   fraction to `spread` times on the far row (the skill's C-grid example:
   with the wake band at constant width the wall's clustering ran to the
-  outlet in one `size` strip, aspect 6390). Refused before anything is
+  outlet in one `size` strip, aspect 6390); `spread_about=V` takes the
+  offsets from the chain vertex V instead (its column stays straight: a
+  wall on one side). `far_ratio=R` (off by default) gives the far row its
+  own distribution (`_far_distribution`): between the pinned columns -
+  the chain's two ends and any column holding a `conform` vertex - each
+  far-row width is raised to the widest's over R per column between
+  them, then the stretch is scaled back to its length; every point's
+  displacement along the target line is taken in proportion to its
+  travel (as `spread`), so column lines stay straight and the ends stay
+  where two carried chains meet. Measured on the skill's C-grid before
+  choosing: R = 2 kept every term of the example's rule at both first
+  widths (1e-4: 38,300 cells for 41,152, 0 faces above 70 for 11, aspect
+  376 for 978); R = 1.5 cost 21 percent more cells at 5e-4, R = 1.2 8
+  faces above 70, and a blend towards even columns (0.5, 1) 29 and 44
+  percent more cells at 1e-4. Refused before anything is
   built: a point not reaching the line, a station outside every point's
   travel, a block not strictly convex in construction order (a direction
   into the chain's blocks), a row vertex inside an existing straight
@@ -590,9 +604,12 @@ them in the canvas widgets.
   the thinnest column (`_thinnest_column`: its chain edge, that edge's
   length and travel), so a fan front heading a far-field column shows
   before `size` (round-3 high-lift: a 0.0006 front carried 15, 3593 cells
-  above aspect 1000 after `size`). The map from chain to row is
-  affine, so lines stay lines and polyLines polyLines; arcs (except with
-  `distance` and no spread, a translation) and splines become splines
+  above aspect 1000 after `size`), then the far row's narrowest and
+  widest column and both end vertices with their coordinates
+  (`_far_row_note`). The map from
+  chain to row is affine (piecewise, with `far_ratio`), so lines stay
+  lines and polyLines polyLines; arcs (except with `distance` and no
+  spread or `far_ratio`, a translation) and splines become splines
   through the carried points (`unhooked_points`), straight on the target
   line. `add_ring`
   places stations at curve corners (vertices turning more than `corner`,

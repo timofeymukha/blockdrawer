@@ -881,6 +881,61 @@ class RowTests(unittest.TestCase):
         self.assertEqual(middle, [-0.5, 1.5])
         self.assertIn("widened 3 times", batch.results[0].result["note"])
 
+    def test_spread_about_a_chain_vertex_keeps_its_column_straight(self) -> None:
+        batch = apply_commands(MeshModel(), ["add_rows edges=v1-v2 direction=1,0 to_x=3 stations=2 "
+                                             "spread=3 spread_about=v1"])
+        far = sorted(round(v.y, 9) for v in batch.model.vertices.values() if abs(v.x - 3.0) < 1e-12)
+        # v1 (1, 0) keeps y = 0; v2's offset from it is three times as large.
+        self.assertEqual(far, [0.0, 3.0])
+        self.assertIn("widened 3 times about v1", batch.results[0].result["note"])
+        with self.assertRaises(Exception) as caught:
+            apply_commands(MeshModel(), ["add_rows edges=v1-v2 direction=1,0 to_x=3 spread=3 spread_about=v0"])
+        self.assertIn("not a vertex of the chain", str(caught.exception))
+
+    def _clustered(self, *extra: str):
+        # The square's right side cut at y = 0.1 and 0.145: columns 0.1,
+        # 0.045 and 0.855 wide carried to x = 4.
+        return apply_commands(MeshModel(), [
+            "split_edge v1-v2 0.1 id=s", "split_edge s-v2 0.05 id=t",
+            "add_rows between=v1,v2 direction=1,0 to_x=4 stations=2 " + " ".join(extra),
+        ])
+
+    def test_the_far_row_is_the_chain_image_by_default_and_the_note_says_so(self) -> None:
+        batch = self._clustered()
+        far = sorted(round(v.y, 9) for v in batch.model.vertices.values() if abs(v.x - 4.0) < 1e-12)
+        self.assertEqual(far, [0.0, 0.1, 0.145, 1.0])
+        note = batch.results[-1].result["note"]
+        self.assertIn("far row columns 0.045 (from s-t", note)
+        self.assertIn("to 0.855 wide (from t-v2", note)
+        self.assertIn("at (4, 0) and", note)
+
+    def test_far_ratio_widens_thin_far_columns_between_fixed_ends(self) -> None:
+        batch = self._clustered("far_ratio=1.5")
+        model = batch.model
+        far = sorted(v.y for v in model.vertices.values() if abs(v.x - 4.0) < 1e-12)
+        widths = [b - a for a, b in zip(far, far[1:])]
+        self.assertAlmostEqual(far[0], 0.0)
+        self.assertAlmostEqual(far[-1], 1.0)
+        for a, b in zip(widths, widths[1:]):
+            self.assertLessEqual(max(a / b, b / a), 1.5 + 1e-9)
+        # The rows between blend in proportion to the travel: lines stay
+        # straight from each chain vertex to its far vertex.
+        middle = sorted(v.y for v in model.vertices.values() if abs(v.x - 2.0) < 1e-12)
+        chain = [0.0, 0.1, 0.145, 1.0]
+        for c, m, f in zip(chain, middle, far):
+            self.assertAlmostEqual(m, c + (f - c) / 3.0)
+        model.validate()
+        self.assertIn("neighbouring columns within 1.5 times", batch.results[-1].result["note"])
+
+    def test_far_ratio_is_off_by_default_and_checked(self) -> None:
+        with self.assertRaises(Exception) as caught:
+            self._clustered("far_ratio=1")
+        self.assertIn("far_ratio must be above 1", str(caught.exception))
+        # Columns already within the ratio: the far row is the chain's image.
+        far = sorted(round(v.y, 9) for v in self._clustered("far_ratio=100").model.vertices.values()
+                     if abs(v.x - 4.0) < 1e-12)
+        self.assertEqual(far, [0.0, 0.1, 0.145, 1.0])
+
     def test_rows_reuse_and_conform_to_what_is_there(self) -> None:
         # A block already right of the square, with a vertex on the bottom path.
         model = apply_commands(MeshModel(), [

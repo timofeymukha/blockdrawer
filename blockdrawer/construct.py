@@ -1313,6 +1313,8 @@ def add_rows(
     conform: bool = True,
     between: Sequence[str] = (),
     spread: float = 1.0,
+    spread_about: str | None = None,
+    far_ratio: float = 0.0,
     prefix: str | None = None,
 ) -> ConstructResult:
     """Rows of blocks carrying a chain of exterior edges along ``direction``.
@@ -1335,7 +1337,16 @@ def add_rows(
     the middle of the chain's extent grows linearly with its travel, to
     ``spread`` times it on the far row - a wake band that is thin at a
     trailing edge and wide at the outlet, so the wall's clustering is not
-    carried to the outlet in one strip."""
+    carried to the outlet in one strip; ``spread_about`` names a chain
+    vertex to widen about instead (its column stays straight).
+
+    ``far_ratio`` gives the far row its own distribution
+    (`_far_distribution`): neighbouring far-row columns within that ratio
+    of each other, the row's two ends where the chain's image puts them.
+    Every point's displacement along the target line grows with its
+    travel, so the column lines stay straight and a fan front's or a
+    trailing edge's thin column fans out instead of reaching the outer
+    boundary at its own width."""
     if len(direction) != 2 or math.hypot(direction[0], direction[1]) <= 0.0:
         raise TopologyError("direction takes dx,dy, not zero")
     targets = [to_x is not None, to_y is not None, distance > 0.0]
@@ -1354,6 +1365,8 @@ def add_rows(
         raise TopologyError("give rows (with growth) or stations, not both")
     if spread <= 0.0:
         raise TopologyError("spread must be positive (1: no widening)")
+    if far_ratio and far_ratio <= 1.0:
+        raise TopologyError("far_ratio must be above 1 (0: the far row is the chain's image)")
     lateral = (0.0, 1.0) if to_x is not None else (1.0, 0.0) if to_y is not None else (-d[1], d[0])
 
     def reach(p: Point) -> float:
@@ -1398,7 +1411,7 @@ def add_rows(
             for p in chain.interiors[e]:
                 if reach(p) <= build.tol:
                     raise TopologyError(f"the curved edge from {chain.vertices[e]} crosses {target}")
-        translation = distance > 0.0 and spread == 1.0
+        translation = distance > 0.0 and spread == 1.0 and not far_ratio
         if not translation:
             # An arc carried by different distances is no longer an arc:
             # its rows follow samples of it as splines.
@@ -1425,12 +1438,15 @@ def add_rows(
             values = [sum(weights[:r]) / sum(weights) for r in range(1, rows)]
         # Existing exterior vertices on a point's path become stations.
         taken = []
+        # Existing vertex taken as a station -> the chain vertex on whose
+        # path it lies (that column keeps its straight line).
+        conformed: dict[str, str] = {}
         if conform:
             occurrences = working.edge_occurrences()
             rim = sorted({v for e, items in occurrences.items() if len(items) == 1 for v in e} - set(chain.vertices))
             for vertex_id in rim:
                 q = (working.vertices[vertex_id].x, working.vertices[vertex_id].y)
-                for p in position.values():
+                for chain_vertex, p in position.items():
                     along = (q[0] - p[0]) * d[0] + (q[1] - p[1]) * d[1]
                     across = abs((q[0] - p[0]) * d[1] - (q[1] - p[1]) * d[0])
                     if across <= build.tol and build.tol < along < reach(p) - build.tol:
@@ -1441,6 +1457,7 @@ def add_rows(
                         if all(abs(value - kept) > build.tol for kept in values):
                             values.append(value)
                             taken.append(vertex_id)
+                        conformed[vertex_id] = chain_vertex
                         break
             values = sorted(values)
         for value in values:
@@ -1457,21 +1474,57 @@ def add_rows(
         rows_at.append((1.0, False))
 
         offsets = [p[0] * lateral[0] + p[1] * lateral[1] for p in position.values()]
-        middle = 0.5 * (min(offsets) + max(offsets))
+        if spread_about is None:
+            middle = 0.5 * (min(offsets) + max(offsets))
+        elif spread_about in position:
+            middle = position[spread_about][0] * lateral[0] + position[spread_about][1] * lateral[1]
+        else:
+            raise TopologyError(f"spread_about={spread_about} is not a vertex of the chain "
+                                f"{chain.vertices[0]}..{chain.vertices[-1]}")
+        last = len(rows_at)
 
-        def carried(p: Point, row: int) -> Point:
+        def carried(p: Point, row: int, shift: float = 0.0) -> Point:
+            """``p`` on row ``row``; ``shift`` is its far-row displacement
+            along the target line, taken in proportion to the travel."""
             if row == 0:
                 return p
             t = travel(p, *rows_at[row - 1])
             widen = (spread - 1.0) * (t / reach(p)) * (p[0] * lateral[0] + p[1] * lateral[1] - middle)
+            widen += shift * (t / reach(p))
             return p[0] + t * d[0] + widen * lateral[0], p[1] + t * d[1] + widen * lateral[1]
+
+        # The far row's own distribution: each vertex's displacement along
+        # the target line from the chain's image there (none by default).
+        shifts = {vertex: 0.0 for vertex in chain.vertices}
+        if far_ratio:
+            if chain.closed:
+                raise TopologyError("far_ratio takes an open chain")
+            along = [carried(position[v], last)[0] * lateral[0] + carried(position[v], last)[1] * lateral[1]
+                     for v in chain.vertices]
+            pinned = {0, count - 1} | {chain.vertices.index(v) for v in conformed.values()}
+            moved = _far_distribution(along, sorted(pinned), far_ratio)
+            if moved is None:
+                raise TopologyError(
+                    "the chain's image on the far row runs back on itself: the rows would cross "
+                    "whatever the far row's distribution"
+                )
+            shifts = {v: moved[k] - along[k] for k, v in enumerate(chain.vertices)}
+
+        def interior_shift(e: int, p: Point) -> float:
+            """An interior point of chain edge ``e`` takes its two vertices'
+            shifts by its position along their chord."""
+            a, b = chain.vertices[e], chain.vertices[(e + 1) % count]
+            pa, pb = position[a], position[b]
+            dx, dy = pb[0] - pa[0], pb[1] - pa[1]
+            f = min(1.0, max(0.0, ((p[0] - pa[0]) * dx + (p[1] - pa[1]) * dy) / (dx * dx + dy * dy)))
+            return (1.0 - f) * shifts[a] + f * shifts[b]
 
         quads = []
         for row in range(1, len(rows_at) + 1):
             for e in range(edge_count):
                 a, b = chain.vertices[e], chain.vertices[(e + 1) % count]
-                corners = [carried(position[a], row - 1), carried(position[b], row - 1),
-                           carried(position[b], row), carried(position[a], row)]
+                corners = [carried(position[a], row - 1, shifts[a]), carried(position[b], row - 1, shifts[b]),
+                           carried(position[b], row, shifts[b]), carried(position[a], row, shifts[a])]
                 if not _ordered_convex(corners, chain.side):
                     raise TopologyError(
                         f"the row {row} block from edge {a}-{b} would not be strictly convex: the "
@@ -1491,7 +1544,7 @@ def add_rows(
                 if row == 0:
                     ids[k, row] = vertex
                     continue
-                point = carried(position[vertex], row)
+                point = carried(position[vertex], row, shifts[vertex])
                 if build.find(*point) is None:
                     for current in before_rim:
                         pa, pb = working.vertices[current[0]], working.vertices[current[1]]
@@ -1510,8 +1563,9 @@ def add_rows(
                 interior = chain.interiors[e]
                 if not interior:
                     continue
-                pa, pb = carried(position[chain.vertices[a]], row), carried(position[chain.vertices[b]], row)
-                moved = [carried(p, row) for p in interior]
+                va, vb = chain.vertices[a], chain.vertices[b]
+                pa, pb = carried(position[va], row, shifts[va]), carried(position[vb], row, shifts[vb])
+                moved = [carried(p, row, interior_shift(e, p)) for p in interior]
                 if all(_segment_distance(p, pa, pb) <= build.tol * 10 for p in moved):
                     continue
                 if chain.kinds[e] == "arc" and translation:
@@ -1522,21 +1576,78 @@ def add_rows(
         build.finish()
         result = build.result("add_rows")
         far = [ids[k, len(rows_at)] for k in range(count)]
+        listed = list(chain.vertices)
         parts = [f"{len(rows_at)} row(s) of {edge_count} block(s) to {target}"
-                 + (f", widened {spread:g} times" if spread != 1.0 else ""),
-                 f"far row along the chain {chain.vertices[0]}..{chain.vertices[-1]}, in its order: "
+                 + (f", widened {spread:g} times" if spread != 1.0 else "")
+                 + (f" about {spread_about}" if spread != 1.0 and spread_about is not None else "")
+                 + (f", far row with neighbouring columns within {far_ratio:g} times" if far_ratio else ""),
+                 f"far row along the chain {listed[0]}..{listed[-1]}, in its order: "
                  f"{_id_list(far, 12)}" + ("" if chain.closed else
-                                          f"; its ends {far[0]} (beside {chain.vertices[0]}) and "
-                                          f"{far[-1]} (beside {chain.vertices[-1]})")]
+                                          f"; its ends {far[0]} (beside {listed[0]}) and "
+                                          f"{far[-1]} (beside {listed[-1]})")]
         if taken:
             parts.append(f"stations from existing vertices on the paths: {_id_list(taken)}")
         if ignored:
             parts.append(f"station(s) on the target ignored: {', '.join(f'{v:g}' for v in ignored)}")
         parts.append(_thinnest_column(working, chain, position, edge_count, reach))
+        if not chain.closed:
+            parts.append(_far_row_note(working, listed, far))
         result.note = "; ".join(parts)
         return result
 
     return _atomic(model, work)
+
+
+def _far_distribution(along: Sequence[float], pinned: Sequence[int], ratio: float) -> list[float] | None:
+    """The far row's positions along the target line, from the chain's
+    image ``along`` (one value per chain vertex, monotone).  Between
+    consecutive ``pinned`` indices (the chain's ends and any column holding
+    an existing vertex) the stretch keeps its length and ``ratio`` caps the
+    ratio of neighbouring column widths: each width is raised to the
+    widest's divided by ``ratio`` per column between them, then the stretch
+    is scaled back to its length.  ``None`` when the image is not monotone.
+
+    Measured before choosing (the skill's C-grid example, first width
+    1e-4): a blend towards even columns cost 29 percent more cells half
+    way and 44 percent all the way; ``ratio`` 2 kept the example's rule."""
+    count = len(along)
+    widths = [along[k + 1] - along[k] for k in range(count - 1)]
+    sign = 1.0 if along[-1] >= along[0] else -1.0
+    if any(w * sign <= 0.0 for w in widths):
+        return None
+    result = list(along)
+    for i0, i1 in zip(pinned, pinned[1:]):
+        if i1 - i0 < 2:
+            continue
+        own = [abs(w) for w in widths[i0:i1]]
+        total = sum(own)
+        target = [max(w / ratio ** abs(j - k) for j, w in enumerate(own)) for k in range(len(own))]
+        scale = total / sum(target)
+        position = along[i0]
+        for k, w in enumerate(target[:-1]):
+            position += sign * w * scale
+            result[i0 + k + 1] = position
+    return result
+
+
+def _far_row_note(model: MeshModel, chain: Sequence[str], far: Sequence[str]) -> str:
+    """The far row's narrowest and widest column and where its two ends
+    are, so a fill between two carried chains finds its corners."""
+    widths = []
+    for k in range(len(far) - 1):
+        a, b = model.vertices[far[k]], model.vertices[far[k + 1]]
+        widths.append((math.hypot(b.x - a.x, b.y - a.y), k))
+    narrow, wide = min(widths), max(widths)
+    first, final = model.vertices[far[0]], model.vertices[far[-1]]
+    ends = f"{far[0]} at ({first.x:.6g}, {first.y:.6g}) and {far[-1]} at ({final.x:.6g}, {final.y:.6g})"
+    if len(widths) == 1:
+        return f"far row one column {narrow[0]:.3g} wide, its ends {ends}"
+
+    def column(k: int) -> str:
+        return f"{chain[k]}-{chain[k + 1]} ({far[k]}-{far[k + 1]})"
+
+    return (f"far row columns {narrow[0]:.3g} (from {column(narrow[1])}) to {wide[0]:.3g} wide "
+            f"(from {column(wide[1])}), its ends {ends}")
 
 
 def _thinnest_column(model: MeshModel, chain: _Chain, position, edge_count: int, reach) -> str:

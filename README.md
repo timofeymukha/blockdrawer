@@ -526,17 +526,38 @@ was 3.6e-5 of the extent):
   `spread=S` widens them along the target line, to S times the chain's
   width on the far row (a wake band that widens: carried at constant width
   from a trailing edge, the wall's clustering ran to the outlet in one
-  `size` strip, checkMesh aspect ratio 6390 on the skill's C-grid example).
+  `size` strip, checkMesh aspect ratio 6390 on the skill's C-grid example);
+  `spread_about=V` widens them about the chain vertex V instead of the
+  chain's middle (V's column stays straight: a wall on one side).
+  `far_ratio=R` gives the far row its own distribution: neighbouring
+  far-row columns within R times each other, the narrow ones widened to
+  the widest's width over R per column between them and the row scaled
+  back between its two ends (which stay where the chain's image puts
+  them, so two carried chains still meet at a corner fill; a column
+  holding a `conform` vertex stays too). The rows between move in
+  proportion to the travel, so every column line runs straight from the
+  chain to the far row and a fan front's or a trailing edge's fine
+  spacing fans out instead of reaching the outer boundary at its own
+  width. Off by default. On the skill's C-grid example, `far_ratio=2` on
+  the top and bottom rows: at a first width of 5e-4, 14,469 cells, max
+  37.7 degrees, aspect 111 (without: 14,393, 38.1, 308); at 1e-4, 38,300
+  cells, 0 faces above 70, max 55.3, skewness 0.69, aspect 376 (without:
+  41,152, 11, 76.2, 0.89, 978). Measured before choosing, at 1e-4: R = 1.5
+  42,532 cells (and 17,472 at 5e-4), R = 1.2 8 faces above 70 and max
+  87.7, a blend of the far row towards even columns half and all the way
+  52,920 and 59,256 cells.
   Vertices are reused by coordinate, and with `conform` (default) an
   existing exterior vertex on a point's path becomes a station; a row
   vertex that would cut an existing edge, a block over an existing block or
   vertex, and a block that would not be strictly convex (a direction into
   the chain's blocks) are refused; a station on the target line is the far
-  row and is ignored. The note gives the far row in the chain's order and
-  the thinnest column - its chain edge, that edge's length and how far it
-  is carried - so a fan's front edge carried to the far field (round-3
-  high-lift: 0.0006 wide carried 15, 3593 cells above checkMesh's aspect
-  limit after `size`) shows before sizing. `add_grid` makes rectangles from station lists and
+  row and is ignored. The note gives the far row in the chain's order with
+  its two ends, the thinnest column - its chain edge, that
+  edge's length and how far it is carried - so a fan's front edge carried
+  to the far field (round-3 high-lift: 0.0006 wide carried 15, 3593 cells
+  above checkMesh's aspect limit after `size`) shows before sizing, and
+  the far row's narrowest and widest column with the coordinates of its
+  two end vertices. `add_grid` makes rectangles from station lists and
   `add_band to_box` sends spokes along the wall normals to a box; this
   carries a given chain along one direction. A trailing edge left open and
   its two spokes carried downstream is a C-grid's wake band:

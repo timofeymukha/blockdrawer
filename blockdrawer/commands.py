@@ -1509,7 +1509,8 @@ def _run_add_rows(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
         model, edges=args["edges"], bbox=args["bbox"], direction=args["direction"],
         to_x=args["to_x"], to_y=args["to_y"], distance=args["distance"], rows=args["rows"],
         growth=args["growth"], stations=args["stations"], conform=args["conform"],
-        between=args["between"], spread=args["spread"], prefix=args["id"],
+        between=args["between"], spread=args["spread"], spread_about=args["spread_about"],
+        far_ratio=args["far_ratio"], prefix=args["id"],
     ).to_data()
 
 
@@ -1649,7 +1650,12 @@ _register(CommandSpec(
         "(x values with to_x, y values with to_y, distances with distance; "
         "each row on one such line) or rows rows whose heights along each "
         "point's path grow by growth; spread=S widens the far row to S times "
-        "the chain's width across the carry. Vertices are reused by "
+        "the chain's width across the carry (about the chain's middle, or "
+        "spread_about=V a chain vertex); far_ratio=R gives the far row its "
+        "own distribution: neighbouring far-row columns within R times each "
+        "other, its two ends kept, the column lines straight. The note gives "
+        "the thinnest column and the far row's narrowest and widest column "
+        "and end vertices. Vertices are reused by "
         "coordinate; with conform (default) an existing exterior vertex on a "
         "point's path becomes a station. A wake band from a trailing edge "
         "left open (add_ring ... fan=false) to an outlet: add_rows "
@@ -1672,6 +1678,11 @@ _register(CommandSpec(
         Parameter("spread", "float", "the far row's width across the carry over the chain's "
                   "(each point's offset from the chain's middle grows with its travel; 1: none)",
                   required=False, default=1.0),
+        Parameter("spread_about", "vertex", "spread about this chain vertex instead of the chain's middle "
+                  "(its column stays straight: a wall on one side)", required=False, default=None),
+        Parameter("far_ratio", "float", "the far row's own distribution: neighbouring far-row columns "
+                  "within this ratio of each other, the narrow ones widened and the row scaled back between "
+                  "its ends (0: the chain's image)", required=False, default=0.0),
         _BETWEEN,
         _ID,
     ),
