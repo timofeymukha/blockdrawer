@@ -678,7 +678,7 @@ def size_model(
         # is the first field's (the budget's base), this is the last one's.
         result.field_cells_after_splits = state.get("field_cells")
         made = [item["edge"] for item in splits[splits_before:]]
-        result.note = " ".join(filter(None, [result.note, (
+        result.note = "; ".join(filter(None, [result.note, (
             f"continuity splits of {', '.join(made[:4])}{' and more' if len(made) > 4 else ''} took the "
             f"cells from {spent_cells:,} after spending to {result.total_cells:,}; the field solved again "
             f"on the split blocks has {state.get('field_cells', 0):,} cells against {field_cells:,} "
@@ -695,12 +695,12 @@ def size_model(
             if refused_strips else ""
         )
         if off and cause:
-            result.note = " ".join(filter(None, [result.note, (
+            result.note = "; ".join(filter(None, [result.note, (
                 f"{cause}: first widths more than 10 percent off the one asked on {'; '.join(off)}"
             )]))
     field_faces = result.verification.get("field", {}).get("severe_faces", 0)
     if field_faces:
-        result.note = " ".join(filter(None, [result.note, (
+        result.note = "; ".join(filter(None, [result.note, (
             f"the field's own state has {field_faces} face(s) above 70 degrees "
             "(verification.field) that spending does not remove; polish and check "
             "first, then see failures.md for the blocks check names"
@@ -710,7 +710,7 @@ def size_model(
         cells_above = sum(item[2] for item in high)
         named = ", ".join(f"{block} ({ratio:.0f}, {count} cells)" for block, ratio, count in high[:5])
         more = f" and {len(high) - 5} more block(s)" if len(high) > 5 else ""
-        result.note = " ".join(filter(None, [result.note, (
+        result.note = "; ".join(filter(None, [result.note, (
             f"{cells_above} cell(s) above checkMesh's aspect ratio limit of {ASPECT_LIMIT:g} "
             f"left in {named}{more} (verification.result): checkMesh fails; no repair move "
             "lowered them - grade the thin side of each block coarser at the end where its cells "

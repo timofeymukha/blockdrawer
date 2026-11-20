@@ -858,6 +858,23 @@ class SizeNoteTests(unittest.TestCase):
         self.assertIn("the field pass was dropped", result.note)
         self.assertIn("first widths more than 10 percent off the one asked on wall", result.note)
 
+    def test_the_note_separates_its_sentences(self) -> None:
+        from unittest import mock
+
+        from blockdrawer import size as size_module
+
+        def dropped(working, state, options):
+            state = dict(state)
+            verification = dict(state.get("verification") or {})
+            verification["field"] = {**(verification.get("field") or {}), "severe_faces": 3}
+            state["verification"] = verification
+            return state, {"strips": 1, "own": 0, "part": 0, "shared": 1, "refused_by_jumps": 0,
+                           "refused_by_grid": 0, "dropped": "worse than the spent state"}
+
+        with mock.patch.object(size_module, "_field_pass", side_effect=dropped):
+            result = size_model(band(), SizeOptions(0.001, 0.1, growth=1.2))
+        self.assertRegex(result.note, r"first widths more than 10 percent off .*%\); the field's own state has 3")
+
     def test_the_digest_carries_them_flat(self) -> None:
         batch = apply_commands(o_grid(), ["size 0.01 0.4 growth=1.2 budget=40000"])
         (note,) = batch_digest(batch.model, batch)["notes"]
