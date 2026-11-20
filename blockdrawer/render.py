@@ -41,7 +41,10 @@ HIGHLIGHT_COLOR = "#e8590c"
 VERTEX_COLOR = "#1971c2"
 VERTEX_LABEL_COLOR = "#243b53"
 BLOCK_LABEL_COLOR = "#102a43"
-CONTROL_POINT_COLOR = "#7048a8"
+# A neutral dark grey: the patch palette (MeshModel.BOUNDARY_COLORS) has
+# purples close to the GUI's control-point purple, and a control point read
+# as an outlet-coloured mark twice in the benchmark renders.
+CONTROL_POINT_COLOR = "#495057"
 CURVE_COLOR = "#2b8a3e"
 PREVIEW_COLOR = "#b8c4ce"
 SPACING_LINK_COLOR = "#0b7285"

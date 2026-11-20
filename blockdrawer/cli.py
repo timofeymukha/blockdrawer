@@ -81,9 +81,33 @@ class CliError(Exception):
     """A user-facing failure with a clean message."""
 
 
+# Options taking a box of four numbers, which may also be given as one
+# comma-separated argument (``-1,-1,2,2``, as the commands' ``bbox=``).
+_BOX_OPTIONS = ("--bbox",)
+
+
+def _split_boxes(argv: Sequence[str]) -> list[str]:
+    """``--bbox A,B,C,D`` (or ``--bbox=A,B,C,D``) as four arguments."""
+    out: list[str] = []
+    items = list(argv)
+    index = 0
+    while index < len(items):
+        item = items[index]
+        option, joined, value = item.partition("=")
+        if option in _BOX_OPTIONS and joined and "," in value:
+            out.extend([option, *value.replace(",", " ").split()])
+        elif item in _BOX_OPTIONS and index + 1 < len(items) and "," in items[index + 1]:
+            out.extend([item, *items[index + 1].replace(",", " ").split()])
+            index += 1
+        else:
+            out.append(item)
+        index += 1
+    return out
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(_split_boxes(sys.argv[1:] if argv is None else argv))
     handler = getattr(args, "handler", None)
     if handler is None:
         parser.print_help()
@@ -155,9 +179,11 @@ def build_parser() -> argparse.ArgumentParser:
     describe.add_argument("session", type=Path)
     describe.add_argument("--json", action="store_true", help="print JSON")
     describe.add_argument(
-        "--section", action="append", choices=(*SECTIONS, *SECTION_ALIASES), metavar="SECTION",
+        "--section", action="append", choices=(*SECTIONS, *QUERY_SECTIONS, *SECTION_ALIASES),
+        metavar="SECTION",
         help="limit output to a section (repeatable): " + ", ".join(SECTIONS)
-        + " (" + ", ".join(f"{alias} = {name}" for alias, name in SECTION_ALIASES.items()) + ")",
+        + " (" + ", ".join(f"{alias} = {name}" for alias, name in SECTION_ALIASES.items()) + "); "
+        "component and unassigned_chains with the query that makes them",
     )
     describe.add_argument(
         "--only", nargs="+", metavar="ID",
@@ -167,7 +193,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     describe.add_argument(
         "--bbox", type=float, nargs=4, metavar=("XMIN", "YMIN", "XMAX", "YMAX"),
-        help="restrict to the blocks overlapping this box and the vertices inside it",
+        help="restrict to the blocks overlapping this box and the vertices inside it "
+        "(also XMIN,YMIN,XMAX,YMAX in one argument, as the commands' bbox= takes it)",
     )
     describe.add_argument(
         "--component", metavar="EDGE",
@@ -257,6 +284,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     render.add_argument("--title", help="legend title")
     render.add_argument("--no-grid", action="store_true")
+    render.add_argument(
+        "--no-labels", action="store_true",
+        help="hide vertex IDs, block IDs and edge cell counts (the three flags below in one)",
+    )
     render.add_argument("--no-vertex-ids", action="store_true")
     render.add_argument("--no-block-ids", action="store_true")
     render.add_argument("--no-edge-cells", action="store_true")
@@ -395,7 +426,10 @@ def _cmd_describe(args: argparse.Namespace) -> int:
         component=args.component,
         unassigned=args.unassigned,
     )
-    sections = resolve_sections(args.section)
+    try:
+        sections = resolve_sections(args.section, component=args.component, unassigned=args.unassigned)
+    except ValueError as exc:
+        raise CliError(str(exc)) from exc
     text = format_description(data, sections=sections)
     if sections:
         data = {
@@ -451,9 +485,9 @@ def _cmd_render(args: argparse.Namespace) -> int:
         height=args.height,
         bounds=tuple(args.bounds) if args.bounds else None,
         show_grid=not args.no_grid,
-        show_vertex_ids=not args.no_vertex_ids,
-        show_block_ids=not args.no_block_ids,
-        show_edge_cells=not args.no_edge_cells,
+        show_vertex_ids=not (args.no_vertex_ids or args.no_labels),
+        show_block_ids=not (args.no_block_ids or args.no_labels),
+        show_edge_cells=not (args.no_edge_cells or args.no_labels),
         show_edge_nodes=not args.no_nodes,
         show_control_points=not args.no_control_points,
         show_curves=not args.no_curves,

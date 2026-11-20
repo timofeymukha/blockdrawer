@@ -320,6 +320,40 @@ class CliTests(unittest.TestCase):
         )
         self.assertIn("Exterior edges without a patch: 8 in 1 chain(s)", out)
 
+    def test_describe_box_in_one_argument_and_query_sections(self) -> None:
+        run_cli("apply", str(self.session), "add_block v1-v2", "add_block v4-v5", "--in-place")
+        for box in (["1.2,0.2,1.4,0.4"], ["--bbox=1.2,0.2,1.4,0.4"]):
+            argv = ["describe", str(self.session)] + (box if box[0].startswith("--") else ["--bbox", *box])
+            code, out, _ = run_cli(*argv)
+            self.assertEqual(code, 0)
+            self.assertIn("b1:", out)
+            self.assertNotIn("b0:", out)
+        code, out, _ = run_cli("describe", str(self.session), "--bbox", "-1,-1,0.5,0.5", "--json")
+        self.assertEqual([block["id"] for block in json.loads(out)["blocks"]], ["b0"])
+        code, out, _ = run_cli("describe", str(self.session), "--component", "v1-v2", "--section", "component")
+        self.assertEqual(code, 0)
+        self.assertTrue(out.lstrip().startswith("Count component of v1-v2"))
+        self.assertNotIn("Blocks (", out)
+        code, _, err = run_cli("describe", str(self.session), "--section", "component")
+        self.assertEqual(code, 1)
+        self.assertIn("--component EDGE", err)
+        code, out, _ = run_cli("describe", str(self.session), "--unassigned", "--section", "unassigned")
+        self.assertIn("Exterior edges without a patch", out)
+        self.assertNotIn("Topology:", out)
+
+    def test_render_without_labels_and_control_points_outside_the_patch_palette(self) -> None:
+        from blockdrawer.model import MeshModel
+        from blockdrawer.render import CONTROL_POINT_COLOR
+
+        self.assertNotIn(CONTROL_POINT_COLOR, MeshModel.BOUNDARY_COLORS)
+        run_cli("apply", str(self.session), "add_block v1-v2", "--in-place")
+        output = self.root / "plain.svg"
+        code, _, _ = run_cli("render", str(self.session), "-o", str(output), "--no-labels")
+        self.assertEqual(code, 0)
+        svg = output.read_text(encoding="utf-8")
+        for label in (">b1<", ">v4<", ">10<"):
+            self.assertNotIn(label, svg)
+
     def test_quality_interior_and_warning_cap(self) -> None:
         run_cli(
             "apply", str(self.session), "add_block v1-v2",
@@ -329,11 +363,15 @@ class CliTests(unittest.TestCase):
         code, out, _ = run_cli("quality", str(self.session), "--max-warnings", "1")
         self.assertEqual(code, 0)
         self.assertIn("Verdict: valid and exports; untangled (real counts)", out)
+        self.assertRegex(out, r"max skewness [0-9.]+ in b[01];")
+        self.assertIn("corner screen (first cells at block corners, not checkMesh's measures)", out)
+        self.assertIn("max corner-cell aspect ratio", out)
         self.assertIn("Warnings, the 1 worst of 3:", out)
         code, out, _ = run_cli("quality", str(self.session), "--all-warnings")
         self.assertIn("Warnings:", out)
         code, out, _ = run_cli("quality", str(self.session), "--json", "--no-interior")
         data = json.loads(out)
+        self.assertIsNone(data["verdict"]["worst_skew_block"])
         self.assertFalse(data["verdict"]["sampled"])
         self.assertNotIn("interior", data["blocks"][0])
         code, out, _ = run_cli("quality", str(self.session), "--json", "--max-warnings", "2")

@@ -34,27 +34,41 @@ SECTIONS = (
 )
 # Sections a query adds; they are listed only when asked for.
 QUERY_SECTIONS = ("component", "unassigned_chains")
-# Other names accepted for a section: the commands call boundaries patches.
-SECTION_ALIASES = {"patches": "boundaries"}
+# Other names accepted for a section: the commands call boundaries patches,
+# and the unassigned chains are asked for by --unassigned.
+SECTION_ALIASES = {"patches": "boundaries", "unassigned": "unassigned_chains"}
+# The query that produces each query section, for the refusal without it.
+_QUERY_FLAGS = {"component": "component=EDGE (--component EDGE)",
+                "unassigned_chains": "unassigned=true (--unassigned)"}
 
 
-def resolve_sections(names) -> tuple[str, ...] | None:
+def resolve_sections(names, *, component: Any = None, unassigned: bool = False) -> tuple[str, ...] | None:
     """The sections ``names`` asks for, aliases resolved and repeats
-    dropped; ``None`` for none. An unknown name raises ``ValueError``."""
+    dropped; ``None`` for none. A query section (``component``,
+    ``unassigned_chains``) is accepted with the query that produces it
+    (``component``, ``unassigned``), and alone shows only that section. An
+    unknown name, or a query section without its query, raises
+    ``ValueError``."""
     if not names:
         return None
     resolved: list[str] = []
     unknown = []
     for name in names:
         section = SECTION_ALIASES.get(name, name)
-        if section not in SECTIONS:
+        if section not in SECTIONS and section not in QUERY_SECTIONS:
             unknown.append(name)
         elif section not in resolved:
             resolved.append(section)
     if unknown:
         raise ValueError(
-            f"Unknown section(s) {', '.join(unknown)}; choose from {', '.join(SECTIONS)} "
+            f"Unknown section(s) {', '.join(unknown)}; choose from {', '.join((*SECTIONS, *QUERY_SECTIONS))} "
             f"({', '.join(f'{alias} = {name}' for alias, name in SECTION_ALIASES.items())})"
+        )
+    given = {"component": component is not None, "unassigned_chains": bool(unassigned)}
+    missing = [section for section in resolved if section in QUERY_SECTIONS and not given[section]]
+    if missing:
+        raise ValueError(
+            "; ".join(f"the {section} section comes from the query {_QUERY_FLAGS[section]}" for section in missing)
         )
     return tuple(resolved)
 

@@ -191,6 +191,7 @@ class QualityReport:
             "folded_cells": None,
             # checkMesh's face skewness; it fails a mesh above 4.
             "max_skewness": None,
+            "worst_skew_block": None,
             # checkMesh's cell aspect ratio; it fails a mesh above 1000.
             "max_aspect_ratio": None,
             "worst_aspect_block": None,
@@ -208,6 +209,7 @@ class QualityReport:
                 "severe_faces": summary["severe_faces"],
                 "folded_cells": summary["folded_cells"],
                 "max_skewness": summary["max_skewness"],
+                "worst_skew_block": summary["worst_skew_block"],
                 "max_aspect_ratio": summary["max_aspect_ratio"],
                 "worst_aspect_block": summary["worst_aspect_block"],
                 "high_aspect_cells": summary["high_aspect_cells"],
@@ -441,6 +443,7 @@ def format_quality(
             + (f" at ({_num(worst_face[0])}, {_num(worst_face[1])})" if worst_face else "")
             + f"; {verdict['severe_faces']} face(s) above "
             f"{_num(verdict['severe_threshold'])}°; max skewness {_num(verdict['max_skewness'])}"
+            f" in {verdict['worst_skew_block']}"
             + (" (checkMesh fails above 4)" if verdict["max_skewness"] > 4.0 else "")
             + f"; max aspect ratio {_num(verdict['max_aspect_ratio'])} in {verdict['worst_aspect_block']}"
             + (
@@ -459,15 +462,20 @@ def format_quality(
             "Verdict: corner screen only (interior not sampled); checkMesh decides"
         )
     if report.blocks:
+        # The corner screen measures the first cells at the block corners,
+        # not checkMesh's quantities: labelled so that its aspect ratio
+        # (1105 beside a verdict of 893 on a round-3 trial) is not read as a
+        # checkMesh failure.
         lines.append(
-            f"  corner angles {_num(summary['min_angle'])}° .. "
+            f"  corner screen (first cells at block corners, not checkMesh's measures): "
+            f"angles {_num(summary['min_angle'])}° .. "
             f"{_num(summary['max_angle'])}°, max non-orthogonality "
             f"{_num(summary['max_non_orthogonality'])}°, max equiangle skewness "
             f"{_num(summary['max_equiangle_skewness'])}"
         )
         lines.append(
-            f"  cell sizes {_num(summary['min_cell_size'])} .. "
-            f"{_num(summary['max_cell_size'])}, max cell aspect ratio "
+            f"  corner screen: cell sizes {_num(summary['min_cell_size'])} .. "
+            f"{_num(summary['max_cell_size'])}, max corner-cell aspect ratio "
             f"{_num(summary['max_cell_aspect_ratio'])}, max cell growth ratio "
             f"{_num(summary['max_cell_growth_ratio'])}, max size jump across "
             f"internal edges {_num(summary['max_interface_size_ratio'])}"

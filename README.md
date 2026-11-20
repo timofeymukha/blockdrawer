@@ -460,12 +460,13 @@ blockdrawer-cli new case.json
 blockdrawer-cli new layout.json --box -5 0 0 1   # first block where the layout wants it
 blockdrawer-cli describe case.json                 # blocks, edges, vertices, patches, curves, links
 blockdrawer-cli describe case.json --json --section edges --only b1
-blockdrawer-cli describe case.json --bbox 0.6 -0.1 0.8 0.05   # just the blocks in a region
+blockdrawer-cli describe case.json --bbox 0.6 -0.1 0.8 0.05   # just the blocks in a region (or 0.6,-0.1,0.8,0.05)
 blockdrawer-cli describe case.json --component v0-v1           # edges sharing v0-v1's cell count
 blockdrawer-cli describe case.json --unassigned --section summary   # exterior edges with no patch
 blockdrawer-cli quality case.json                  # verdict, interior sampling, corner screen, warnings
 blockdrawer-cli render case.json -o case.png --preview --highlight b1 v0-v1
 blockdrawer-cli render case.json -o zoom.svg --zoom v4 --margin 0.5
+blockdrawer-cli render case.json -o plain.png --no-labels --no-control-points   # lines and patches only
 blockdrawer-cli export case.json --case /path/to/openfoam/case
 blockdrawer-cli check case.json                    # runs blockMesh and checkMesh
 blockdrawer-cli commands                           # lists every editing command
@@ -732,7 +733,10 @@ blockdrawer-cli apply case.json --in-place \
 (IDs space- or comma-separated; one that names nothing is an error; a named
 edge lists all its control points), `--bbox`, `--component` and
 `--unassigned` narrow it to the part of a large topology being worked on;
-`--section` picks sections (`patches` is accepted for `boundaries`).
+`--section` picks sections (`patches` is accepted for `boundaries`;
+`component` and `unassigned` show only what `--component` and
+`--unassigned` add). `--bbox` takes four numbers or one `a,b,c,d`, as the
+commands' `bbox=` does.
 `quality` starts with a verdict: the session validates and exports, no
 cell folds, the worst non-orthogonality and where it is, and how many faces
 exceed 70 degrees. Those numbers come from every block interior sampled at
@@ -741,7 +745,7 @@ its real cell counts and grading (`--interior-cells`, default 256 a side;
 measured as `checkMesh` measures it - between the two cell centres and the
 face normal; on the 30P30N sessions and three engine outputs the sampled
 maximum and severe-face count equalled checkMesh's. The verdict also gives
-the maximum face skewness, measured as checkMesh measures it (it fails a
+the maximum face skewness and its block, measured as checkMesh measures it (it fails a
 mesh above 4); sampled and checkMesh values agreed to two decimals on the
 engine, 30P30N and sized sessions. Faces on a `cyclic` pair are measured as
 the coupled faces checkMesh sees, against the partner cell across the pair
@@ -760,7 +764,9 @@ checkMesh did. The measure is Cartesian: a thin cell at 45 degrees reads 1.
 screen reports per-block corner angles measured from the first mesh cell,
 non-orthogonality, equiangle skewness, corner cell aspect ratios, cell-to-cell
 growth, and the cell size jump across every internal edge, with warnings at
-adjustable thresholds; the text lists the 20 worst warnings (folded cells,
+adjustable thresholds (its text lines say "corner screen": its corner-cell
+aspect ratio is not checkMesh's, and 1105 printed beside a verdict of 893
+was read as a failure); the text lists the 20 worst warnings (folded cells,
 then angles by their distance from 90 degrees, then size defects by how far
 past their limit; `--max-warnings N`, `--all-warnings`). A spline edge with
 a segment running backwards along its chord is warned of in any session
@@ -778,7 +784,10 @@ at the wall left out by the rule are counted. These remain
 screening measures; `checkMesh` is the authority. `render` draws the topology with vertex IDs, block IDs, cell
 counts, patch colors, reference curves, and spacing links to SVG (standard
 library) or PNG (requires Pillow, `pip install blockdrawer[png]`); `--zoom`
-frames named entities and `--highlight` emphasizes them. Without `--height`
+frames named entities and `--highlight` emphasizes them; `--no-labels`
+hides the vertex IDs, block IDs and cell counts, `--no-control-points` the
+curved edges' control points (drawn in grey, outside the patch colors).
+Without `--height`
 the canvas follows the shown region's aspect ratio, between a quarter and
 twice the width, so a long channel comes out as a wide strip.
 

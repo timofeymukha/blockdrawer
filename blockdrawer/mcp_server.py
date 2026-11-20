@@ -158,7 +158,9 @@ def describe_session(
     """Describe blocks, edges, vertices, patches, curves, and spacing links.
 
     ``sections`` limits the output to some of: summary, settings, blocks,
-    edges, vertices, boundaries (or patches), curves, spacing_links. ``only`` restricts the
+    edges, vertices, boundaries (or patches), curves, spacing_links, and
+    the query sections component (with ``component``) and
+    unassigned_chains (or unassigned, with ``unassigned``). ``only`` restricts the
     lists to the given block, edge, vertex, patch, or curve IDs (an item may
     be comma-separated; an ID that names nothing is an error; a named edge
     lists all its control points). ``bbox`` [xmin, ymin, xmax, ymax]
@@ -176,7 +178,7 @@ def describe_session(
         model, only=only, bbox=bbox, component=component, unassigned=unassigned
     )
     try:
-        wanted = resolve_sections(sections)
+        wanted = resolve_sections(sections, component=component, unassigned=unassigned)
     except ValueError as exc:
         raise ToolFailure(str(exc)) from exc
     if as_text:
@@ -354,6 +356,7 @@ def render_session(
     show_nodes: bool = True,
     show_curves: bool = True,
     show_legend: bool = True,
+    show_control_points: bool = True,
     return_image: bool = True,
 ) -> list:
     """Draw the topology and return the picture (PNG) plus its view bounds.
@@ -386,6 +389,7 @@ def render_session(
         show_block_ids=show_labels,
         show_edge_cells=show_labels,
         show_edge_nodes=show_nodes,
+        show_control_points=show_control_points,
         show_curves=show_curves,
         show_legend=show_legend,
         show_preview=preview,

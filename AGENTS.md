@@ -157,8 +157,12 @@ them in the canvas widgets.
 - `blockdrawer/describe.py`: complete JSON description of a model plus a compact
   text rendering. Entities carry the same IDs the command registry accepts.
   Sections are named in `SECTIONS`; `resolve_sections` also takes the
-  aliases of `SECTION_ALIASES` (`patches` for `boundaries`), for the CLI's
-  `--section` and the MCP `sections` alike.
+  aliases of `SECTION_ALIASES` (`patches` for `boundaries`, `unassigned`
+  for `unassigned_chains`) and the query sections `QUERY_SECTIONS`
+  (`component`, `unassigned_chains`) given with the query that makes them
+  (refused naming it otherwise; alone they show only that section), for
+  the CLI's `--section` and the MCP `sections` alike. The CLI's `--bbox`
+  also takes `XMIN,YMIN,XMAX,YMAX` in one argument (`cli._split_boxes`).
   `query_description()` restricts it to the union of `only` IDs (space- or
   comma-separated, `resolve_only`; an ID naming nothing is an error), the blocks
   overlapping a `bbox` (sampled curved edges included) and the vertices in
@@ -178,8 +182,11 @@ them in the canvas widgets.
   `blockdrawer.sampling`, the summary an `interior` block, and `verdict()`
   the numbers a hand-built session is judged by: valid (validates and
   exports), untangled, real counts (no block coarsened), worst sampled
-  non-orthogonality with block and location, severe faces, skewness and
-  the cell aspect ratio with its block and the cells above 1000. Folded
+  non-orthogonality with block and location, severe faces, skewness with
+  its block (`worst_skew_block`) and the cell aspect ratio with its block
+  and the cells above 1000; the text labels the corner screen's lines as
+  the corner screen's (its corner-cell aspect ratio printed beside the
+  verdict's was read as a checkMesh failure). Folded
   cells, interior non-orthogonality above the threshold and cells above
   checkMesh's aspect limit become warnings naming the block; a spline
   edge with a segment running backwards (`model.spline_hooks`, any
@@ -689,7 +696,10 @@ them in the canvas widgets.
   (452,791 cells, 68.83 degrees after the polish); do not develop it.
 - `blockdrawer/render.py`: headless SVG/PNG rendering through one layout routine
   and two painters. Labels (vertex IDs, block IDs, cell counts, patch legend)
-  are on by default; bounds, zoom-to-entity, and highlights select a region.
+  are on by default (`--no-labels` turns the first three off, as the MCP
+  `show_labels=false`); bounds, zoom-to-entity, and highlights select a
+  region. Control points are drawn in a neutral grey outside the patch
+  palette (`CONTROL_POINT_COLOR`).
 - `blockdrawer/checkmesh.py`: writes a minimal case, runs `blockMesh` and
   `checkMesh` through the `BLOCKMESH_COMMAND` prefix convention, and parses the
   logs into counts, geometry statistics, `***` problem lines, single-star
