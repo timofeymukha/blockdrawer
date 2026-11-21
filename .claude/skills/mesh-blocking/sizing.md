@@ -69,8 +69,8 @@ $$
   corner or across a channel one block thick (high-lift: 22 above 5 at a
   budget that was not binding): `failures.md`.
 - Judge the jumps after the polish (`smooth`), which moves vertices and so
-  changes them: NACA 4412 C-grid 4 above 5 after `size`, none after the
-  polish. The polish keeps a jump below 5 below 5 (`size_ceiling`; three
+  changes them: round 2's NACA 4412 C-grid 4 above 5 after `size`, none
+  after the polish (round 4's engine session had none above 2.5 after `size`). The polish keeps a jump below 5 below 5 (`size_ceiling`; three
   cylinders once went 4.73 -> 5.20); one already above 5 may grow a tenth.
 - The first width is a bound, not a value: a spoke shares its count with
   its component, and where `grading=field` cannot give it its own series

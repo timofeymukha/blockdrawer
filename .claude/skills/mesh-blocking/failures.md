@@ -55,6 +55,8 @@ shows why.
 | `add_fill` refused: "a triangle (pentagon) is filled as 3 (5) blocks round a centre" | side k's edges must be the sum of spokes k-1 and k+1: the side counts sum to an odd number, or one side is as long as the rest | add or remove a station on a side; or fill four sides with a corner in between |
 | `add_fill` refused: a fill block "would not be strictly convex" | stations on opposite sides do not face each other, or a side bends further than one transfinite map follows | move or add stations; fill the region in parts (a side corner in between) |
 | `add_fill` refused: "bound no region" or "ambiguous" | the corners are not in order round the region, or a side runs two ways between its corners | reorder the corners; name that side's vertices with `side1=...` |
+| `add_fill`'s note: "NOT the only reading" | another side choice also bounds a region (round 4: a walk round the elbow's hole where a straight side was meant); the fill took the one with the most existing sides | the side the note names (`sideK=...` as printed) when the other was meant; a chain through a wall vertex left open is followed along its one edge without a patch (the slat cove's front) |
+| `add_ring` refused: "the outward normal points at ANGLE degrees at N places" | a thin body, square corners or a cambered blade has that normal more than once | `near=X,Y` (one point per angle) or the station itself by `points=X,Y` |
 | `add_band` refused: "would fold ... concave corner" | a mitre at a concave corner moves the offset end past a short edge beside it | the height the refusal names, or merge the short edge (`combine_blocks`, a station moved) and band again |
 | A fan at a trailing edge (`add_ring`, `add_band`) | the body-normal lines collapse into a downstream fan: Mesh OK, but a poor wake | a wake band: `add_ring ... fan=false` (or `open_at=X,Y`), then `add_rows` its two spokes to the outlet (`examples/naca0012_cgrid.txt`); external flow: also the engine's C-grid (`engine.md`) |
 | A core spoke crossing a band front in a narrow gap | the gap holds too many layers | engine `--span-gaps`, or move the ring |
@@ -63,7 +65,7 @@ shows why.
 | A band that thins to nothing on a thin body | the annular producer's inscribed-disk cap | the engine's C-grid producer |
 | A gate slid off a sharp vertex | the sharp vertex must be a block corner | pin it and re-spread the gates (engine `candidates`/`apply --move`), or `split_edge` |
 | `quality`/`size` aspect ratio above 1000 ("High aspect ratio cells found" in checkMesh) in a strip running from a wall to an outlet | wall spacing carried along a strip far from the wall | `size` releases such strips itself (a blunt plate's wake: 1846 before, 585 now); where its note still names blocks, a `start_width` by hand on the named block's thin side at its outlet end (`set_edge_grading`), then `quality` |
-| `size refused: the sized mesh folds ... the spline edge(s) EDGE (segment k of n, ... control point i) run backwards`; the same in `smooth mode=shape`'s count-free fold refusal; `quality`'s warning `spline edge EDGE ... runs backwards` | a spline whose short end segment sits beside a long one loops back (Catmull-Rom); cells graded into the loop fold (round-2 high-lift ring edges, 0.0014 beside 0.0165). The operators no longer write such splines; an engine session or a hand edit can | `remove_control_point EDGE i` on the edge and its band front (or `set_edge_type EDGE line`), then `size` again |
+| `size refused: the sized mesh folds ... the spline edge(s) EDGE (segment k of n, ... control point i) run backwards`; the same in `smooth mode=shape`'s count-free fold refusal; `quality`'s warning `spline edge EDGE ... runs backwards` | a spline whose short end segment sits beside a long one loops back (Catmull-Rom); cells graded into the loop fold (round-2 high-lift ring edges, 0.0014 beside 0.0165). The operators no longer write such splines, nor a band front turning back to reach a mitred or tilted end spoke (round 4: the splitter's concave junctions, a high-lift band beside `end=`); an engine session or a hand edit can | `remove_control_point EDGE i` on the edge and its band front (or `set_edge_type EDGE line`), then `size` again |
 | checkMesh aspect ratio in the tens of thousands on a pseudo-2D case | `patch` z faces: the span counts | `set_export_settings z_min_patch_type=empty z_max_patch_type=empty` |
 | Negative volumes beside a mitred station in a script-built layout | spline interior points from the plain normal while the end stations carry the mitre | build interior points from the local normal and correct them linearly onto both end stations (the operators already do) |
 
@@ -80,7 +82,10 @@ edge by more than that.
 ## What the tools do not check
 
 Every block is checked strictly convex when it is made and by `validate`,
-and two blocks on the same side of a shared edge are refused; edges crossing
-elsewhere and blocks overlapping without sharing an edge are not checked
-before `check` (`add_fill` alone refuses a block over an existing block's
-centre or an existing vertex). Render every corner, gap and bridge, and run `check`.
+and two blocks on the same side of a shared edge are refused. Blocks lying
+over one another without sharing an edge (a grid over a band) are refused by
+the operator that would make them (`add_grid` leaves such a cell out and
+names it), and `validate`, `quality` (verdict and warnings) and `check` name
+them; what that check does not see is two thin blocks crossing near their
+ends with no corner, edge sample or interior point of either inside the
+other. Render every corner, gap and bridge, and run `check`.
