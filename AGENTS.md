@@ -166,8 +166,11 @@ them in the canvas widgets.
   `add_vertex` and `move_vertex` (`_POSITION`) positions relative to
   existing vertices: polar `r`/`theta` about `center` or the vertex
   `about`, else each coordinate from exactly one of the number, `at`
-  (both), `x_of`/`y_of`, or (moving) the vertex's own; `dx`/`dy` added
-  last; a coordinate given twice or missing is refused by name.
+  (both), `between=A,B` with `fraction` (default 0.5, the straight way from
+  A to B, both), `x_of`/`y_of`, or (moving) the vertex's own; `dx`/`dy`
+  added last; a coordinate given twice or missing is refused by name.
+  The digest counts a block whose ID was taken again by a new block (two
+  corners or fewer kept, by ID and position) as removed and created.
 - `blockdrawer/command_line.py`: shared shell-like tokenization for textual
   commands and OpenFOAM command prefixes. POSIX hosts use normal shell escaping;
   Windows preserves path backslashes while retaining POSIX quote grouping for
@@ -609,6 +612,34 @@ them in the canvas widgets.
   made, naming the edge, the concave corner whose mitre moves the offset
   end `height * tan(turn/2)` along it past its length, and the largest
   height that builds (bisected over the whole band, `_fold_message`).
+  Round 4 (batch 11): the band side of a chain and of a fill side's
+  existing edges is read from the topology - a counter-clockwise block lies
+  left of an edge it runs in its own order (`_block_side`) - not from where
+  its corners' mean falls, which a thin block on a curved edge has across
+  the curve ("blocks on both sides" for one side, "not strictly convex"
+  alone); a chain with blocks on both sides is refused naming the edges of
+  each. A front offset edge leaving an end more than `HOOK_TURN` (45
+  degrees) from the wall edge's own end direction has the points that make
+  it turn dropped from that end (`_offset_interior`): a concave mitre or a
+  tilted end spoke put the end where the offset points do not lead
+  (splitter 107 degrees, high-lift 80 to 122; every other front of the 42
+  builds within 19.4). A spoke at a line/arc tangent joint stays the mitre
+  of the curve's two polyline segments (the stretch's own normal moved
+  vertices on six builds and made u_bend trial 3c reuse its `new --box`
+  corner, failing batch 11's rule); instead a grid or row vertex falling
+  inside an existing edge next to one of its ends names that end and the
+  `move_vertex` that puts it on the line (`_missed_end`, `MISSED_END`).
+  `add_band`'s note says which vertex `start=`/`end=` set (the chain's
+  order, not `between=`'s). A no-height band fold on an edge turning more
+  than 90 degrees names the missing station. Box selection (`bbox=` of
+  `add_band`/`add_rows`, `_select_exterior`) takes an edge whose samples
+  (nine on a curved edge) lie in the box within `_Build.tol`, as well as
+  every edge the exact quarter test took; the note names unassigned
+  exterior edges at the selection's ends it left out, and an empty
+  selection names the edges partly in the box. `add_ring near=X,Y;...`
+  (one per `normals` angle) picks the place nearest each point where the
+  normal occurs more than once; the refusal names the places with their
+  coordinates, `near=` and `points=`.
   `add_band`'s note gives the front (outermost row, or the box ends of the
   spokes) in the wall chain's order with its two ends (`_front_note`): new
   vertex IDs follow creation order, which is not the chain's. An
@@ -752,7 +783,16 @@ them in the canvas widgets.
   `_choose_sides` takes the candidates bounding a region with every
   existing side edge's block outside it and no existing vertex inside,
   most existing sides first, then the counter-clockwise reading (a half
-  annulus), else refuses as ambiguous; with no reading left it refuses
+  annulus), else refuses as ambiguous; the note adds "NOT the only
+  reading" with the other non-crossing readings' sides (`sideK=` as to
+  give them) whose region holds no block's centre, and where a side was
+  read open while a walk from its first corner stopped at a branching
+  vertex. A walk (`_exterior_walks`) goes on through a vertex with more
+  than two exterior edges along the one of them without a patch (a wall
+  vertex at a corner left open: the slat cove's front). Corners by
+  `points=` (positions or IDs, `resolve_points`); the overlap test of a
+  fill block uses its sides as built, curved ones sampled
+  (`_refuse_outline_overlap`), not the quad of its corners; with no reading left it refuses
   naming, per rejected reading, the existing vertices inside or the side
   edges whose block lies inside (at most `MAX_FILL_REASONS`). The note
   names the standalone vertices each open side took, and adds a NOTE when
@@ -817,8 +857,9 @@ them in the canvas widgets.
 - `blockdrawer/render.py`: headless SVG/PNG rendering through one layout routine
   and two painters. Labels (vertex IDs, block IDs, cell counts, patch legend)
   are on by default (`--no-labels` turns the first three off, as the MCP
-  `show_labels=false`); bounds, zoom-to-entity, and highlights select a
-  region. Control points are drawn in a neutral grey outside the patch
+  `show_labels=false`); bounds (`--bounds` or `--bbox`, four numbers or one
+  comma-separated argument; MCP `bounds` or `bbox`), zoom-to-entity, and
+  highlights select a region. Control points are drawn in a neutral grey outside the patch
   palette (`CONTROL_POINT_COLOR`).
 - `blockdrawer/checkmesh.py`: writes a minimal case, runs `blockMesh` and
   `checkMesh` through the `BLOCKMESH_COMMAND` prefix convention, and parses the

@@ -1319,18 +1319,78 @@ def _box_excess(points: Sequence[Point], bbox: Sequence[float]) -> float:
 
 
 def _select_exterior(model: MeshModel, bbox: Sequence[float], unassigned: bool) -> list[EdgeKey]:
+    """The exterior edges lying in the box - every sample of a curved edge
+    too - within the operators' coordinate tolerance, so a box drawn on a
+    front's exact extent or on the line a carried spline lies on takes it."""
     occurrences = model.edge_occurrences()
-    x0, y0, x1, y1 = bbox
+    # The operators' tolerance (a billionth of the drawing) is not enough: a
+    # ring's mitred station lies h (1 / cos(turn / 2) - 1) outside the
+    # offset of the curve (4.3e-6 on round 4's three cylinders, whose box
+    # was the front's nominal circle); BOX_TOLERANCE of the box's diagonal.
+    tol = max(_Build(model, None).tol, BOX_TOLERANCE * math.hypot(bbox[2] - bbox[0], bbox[3] - bbox[1]))
     chosen = []
     for current, items in sorted(occurrences.items()):
         if len(items) != 1:
             continue
         if unassigned and current in model.edge_boundaries:
             continue
-        points = model.edge_points(current, [0.0, 0.25, 0.5, 0.75, 1.0])
-        if all(x0 <= p[0] <= x1 and y0 <= p[1] <= y1 for p in points):
+        # The points defining the edge - its ends and a curved edge's
+        # interpolation points - within the tolerance: a spline between
+        # points on a circle bulges past it (4.3e-6 on round 4's three
+        # cylinders, whose box was the front's circle) and one carried onto
+        # a line keeps its points on it. As before, also an edge whose ends
+        # and quarter points lie in the box exactly.
+        a, b = model.vertices[current[0]], model.vertices[current[1]]
+        defining = [(a.x, a.y), (b.x, b.y), *model.edge_control_points(current)] \
+            if current in model.edge_geometry else [(a.x, a.y), (b.x, b.y)]
+        quarters = model.edge_points(current, (0.0, 0.25, 0.5, 0.75, 1.0))
+        if _box_excess(defining, bbox) <= tol or _box_excess(quarters, bbox) <= 0.0:
             chosen.append(current)
     return chosen
+
+
+def _near_box_text(model: MeshModel, bbox: Sequence[float]) -> str:
+    """For a box that selects nothing: the unassigned exterior edges with a
+    sample in it, closest to lying in it first."""
+    found = []
+    for current, items in model.edge_occurrences().items():
+        if len(items) != 1 or current in model.edge_boundaries:
+            continue
+        points = model.edge_points(current, BBOX_FRACTIONS)
+        if any(_box_excess([p], bbox) <= 0.0 for p in points):
+            found.append((_box_excess(points, bbox), current))
+    found.sort()
+    if not found:
+        return ""
+    return ("; partly in it: " + ", ".join(f"{a}-{b} (leaves it by {excess:.3g})" for excess, (a, b) in found[:4])
+            + (f" and {len(found) - 4} more" if len(found) > 4 else ""))
+
+
+def _left_out_note(model: MeshModel, chosen: Sequence[EdgeKey], bbox: Sequence[float]) -> str:
+    """The unassigned exterior edges at the ends of a box selection that the
+    box left out, with how far each leaves it: where a chain stops short of
+    what was meant."""
+    if not bbox or not chosen:
+        return ""
+    occurrences = model.edge_occurrences()
+    degree: dict[str, int] = {}
+    for current in chosen:
+        for vertex in current:
+            degree[vertex] = degree.get(vertex, 0) + 1
+    ends = {vertex for vertex, value in degree.items() if value == 1}
+    taken = set(chosen)
+    found = []
+    for current, items in sorted(occurrences.items()):
+        if len(items) != 1 or current in taken or current in model.edge_boundaries:
+            continue
+        if not ends.intersection(current):
+            continue
+        excess = _box_excess(model.edge_points(current, BBOX_FRACTIONS), bbox)
+        found.append(f"{current[0]}-{current[1]} (leaves the box by {excess:.3g})")
+    if not found:
+        return ""
+    return ("the box left out " + ", ".join(found[:4]) + (f" and {len(found) - 4} more" if len(found) > 4 else "")
+            + " at the selection's ends: widen the box or give edges= to take it")
 
 
 def _corner_choice(fan: bool, open_at: Sequence[Point], box: bool) -> None:
@@ -1424,7 +1484,10 @@ def add_band(
     def work(working: MeshModel) -> ConstructResult:
         chosen = _select_chain(working, edges, bbox, between)
         if not chosen:
-            raise TopologyError("no exterior edge selected")
+            raise TopologyError("no exterior edge selected"
+                                + (" (none without a patch lies in the box" + _near_box_text(working, bbox) + ")"
+                                   if bbox else ""))
+        left_out = _left_out_note(working, chosen, bbox) if bbox else ""
         chain = _model_chain(working, chosen)
         if any(end_spokes):
             if chain.closed:
@@ -1454,7 +1517,7 @@ def add_band(
             raise
         result = build.result("add_band")
         result.note = "; ".join(part for part in (_front_note(chain, front, bool(to_box)), spokes,
-                                                  _opened_note(build)) if part)
+                                                  _opened_note(build), left_out) if part)
         return result
 
     return _atomic(model, work)
@@ -1558,7 +1621,10 @@ def add_rows(
     def work(working: MeshModel) -> ConstructResult:
         chosen = _select_chain(working, edges, bbox, between)
         if not chosen:
-            raise TopologyError("no exterior edge selected")
+            raise TopologyError("no exterior edge selected"
+                                + (" (none without a patch lies in the box" + _near_box_text(working, bbox) + ")"
+                                   if bbox else ""))
+        left_out = _left_out_note(working, chosen, bbox) if bbox else ""
         chain = _model_chain(working, chosen)
         build = _Build(working, prefix)
         position = {v: (working.vertices[v].x, working.vertices[v].y) for v in chain.vertices}
@@ -1767,6 +1833,8 @@ def add_rows(
         if ignored:
             parts.append(f"station(s) on the target ignored: {', '.join(f'{v:g}' for v in ignored)}")
         parts.append(_thinnest_column(working, chain, position, edge_count, reach))
+        if left_out:
+            parts.append(left_out)
         if not chain.closed:
             parts.append(_far_row_note(working, listed, far))
         result.note = "; ".join(parts)
@@ -1857,6 +1925,7 @@ def add_ring(
     count: int = 0,
     fractions: Sequence[float] = (),
     normals: Sequence[float] = (),
+    near: Sequence[Point] = (),
     points: Sequence[Point] = (),
     corner: float = math.degrees(CORNER_ANGLE),
     tips: bool = False,
@@ -1880,7 +1949,8 @@ def add_ring(
     it): stations at every curve vertex turning more than ``corner``
     degrees, the arc-length ``fractions``, the point where the outward
     normal has each of the ``normals`` angles (refused unless there is
-    exactly one), with ``tips`` the peak of every rounded convex corner
+    exactly one, or ``near`` - one point per angle - picks the place
+    nearest its point), with ``tips`` the peak of every rounded convex corner
     (`_tip_stations`), and ``count`` edges spread by arc length between
     them; ``points`` puts a station at the curve point nearest each point
     (refused where that is not unique).
@@ -1925,6 +1995,9 @@ def add_ring(
                 )
     elif normals or tips:
         raise TopologyError("normals and tips need a closed curve; on an open curve give fractions, xs or ys")
+    if near and len(near) != len(normals):
+        raise TopologyError(f"near takes one point per normals angle: {len(normals)} angle(s), "
+                            f"{len(near)} point(s)")
     _corner_choice(fan, open_at, False)
     end_spokes = _end_directions(start, end)
     corner_angle = math.radians(corner)
@@ -1967,8 +2040,9 @@ def add_ring(
             notes.append(f"{len(corners)} corner(s) above {corner:g} degrees")
         if fractions:
             explicit.update((f % 1.0) * total for f in fractions)
-        for angle in normals:
-            explicit.add(_normal_station(loop, lengths, turning, orientation, corner_angle, angle))
+        for index, angle in enumerate(normals):
+            explicit.add(_normal_station(loop, lengths, turning, orientation, corner_angle, angle,
+                                         near[index] if near else None))
         if normals:
             notes.append(f"{len(normals)} station(s) by normal")
         if points:
@@ -2387,12 +2461,14 @@ def _tip_stations(loop, lengths, turning, orientation, corner_angle) -> list[flo
     return stations
 
 
-def _normal_station(loop, lengths, turning, orientation, corner_angle, angle: float) -> float:
+def _normal_station(loop, lengths, turning, orientation, corner_angle, angle: float,
+                    near: Point | None = None) -> float:
     """The arc length where the loop's outward normal points at ``angle``
     degrees (counter-clockwise from +x); refused unless there is exactly
-    one such point.  A smooth vertex's normal bisects its two segments' and
-    varies linearly between vertices; at a corner sharper than the corner
-    threshold every normal between its two segments' is at the corner."""
+    one such point, or ``near`` picks the one closest to it.  A smooth
+    vertex's normal bisects its two segments' and varies linearly between
+    vertices; at a corner sharper than the corner threshold every normal
+    between its two segments' is at the corner."""
     n = len(loop)
     total = lengths[-1]
 
@@ -2428,14 +2504,23 @@ def _normal_station(loop, lengths, turning, orientation, corner_angle, angle: fl
     for hit in sorted(hits):
         if all(_cyclic_gap(hit, other, total) > 1.0e-9 * total for other in distinct):
             distinct.append(hit)
+    if near is not None and len(distinct) > 1 and not flat:
+        return min(distinct, key=lambda h: math.dist(_polyline_at(list(loop) + [loop[0]], lengths, h), near))
     if len(distinct) != 1:
-        where = ", ".join(f"{h / total:.4g}" for h in distinct[:6])
+        closed = list(loop) + [loop[0]]
+        where = ", ".join(
+            f"{h / total:.4g} at ({_fmt(_polyline_at(closed, lengths, h)[0])}, "
+            f"{_fmt(_polyline_at(closed, lengths, h)[1])})" for h in distinct[:6]
+        )
         raise TopologyError(
             f"the outward normal points at {angle:g} degrees "
             + ("along a straight stretch" if flat else
                f"at {len(distinct)} places (fractions {where}{'...' if len(distinct) > 6 else ''})"
                if distinct else "nowhere")
-            + " on the curve: a normal station needs exactly one; give fractions there"
+            + " on the curve: a normal station needs exactly one; "
+            + ("give near=X,Y (one point per normal: the place nearest it is taken), the station "
+               "itself by points=X,Y, or fractions" if len(distinct) > 1 and not flat
+               else "give the station by points=X,Y or fractions")
         )
     return distinct[0]
 

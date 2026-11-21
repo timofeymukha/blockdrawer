@@ -84,11 +84,12 @@ class CliError(Exception):
 
 # Options taking a box of four numbers, which may also be given as one
 # comma-separated argument (``-1,-1,2,2``, as the commands' ``bbox=``).
-_BOX_OPTIONS = ("--bbox",)
+_BOX_OPTIONS = ("--bbox", "--bounds")
 
 
 def _split_boxes(argv: Sequence[str]) -> list[str]:
-    """``--bbox A,B,C,D`` (or ``--bbox=A,B,C,D``) as four arguments."""
+    """``--bbox A,B,C,D`` (or ``--bbox=A,B,C,D``, and ``--bounds`` alike) as
+    four arguments."""
     out: list[str] = []
     items = list(argv)
     index = 0
@@ -264,8 +265,10 @@ def build_parser() -> argparse.ArgumentParser:
         "region, between a quarter and twice the width)",
     )
     render.add_argument(
-        "--bounds", type=float, nargs=4, metavar=("XMIN", "YMIN", "XMAX", "YMAX"),
-        help="world region to show (default: everything)",
+        "--bounds", "--bbox", dest="bounds", type=float, nargs=4,
+        metavar=("XMIN", "YMIN", "XMAX", "YMAX"),
+        help="world region to show (default: everything); --bbox is the same option, as "
+        "describe takes it, and both take XMIN,YMIN,XMAX,YMAX in one argument",
     )
     render.add_argument(
         "--zoom", nargs="+", metavar="ID",

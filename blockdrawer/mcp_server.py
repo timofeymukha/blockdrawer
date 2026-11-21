@@ -354,6 +354,7 @@ def render_session(
     margin: float = 0.3,
     highlight: list[str] | None = None,
     bounds: list[float] | None = None,
+    bbox: list[float] | None = None,
     preview: bool = False,
     coarsening: int = 1,
     title: str | None = None,
@@ -369,7 +370,8 @@ def render_session(
     Vertex IDs, block IDs, edge cell counts, patch colors, reference curves,
     and spacing links are drawn. ``zoom`` frames the named blocks, edges
     (a-b), or vertices with a relative ``margin``; ``bounds`` gives an explicit
-    [xmin, ymin, xmax, ymax] region; ``highlight`` emphasizes entities;
+    [xmin, ymin, xmax, ymax] region (``bbox``, as describe_session takes it,
+    is the same); ``highlight`` emphasizes entities;
     ``preview`` adds interior mesh lines. Without ``height`` the canvas
     follows the shown region's aspect ratio (between a quarter and twice
     the width), so a long channel is a wide strip. When ``output`` ends in
@@ -381,6 +383,9 @@ def render_session(
         raise ToolFailure("width and height must be at least 50 pixels")
     if coarsening < 1:
         raise ToolFailure("coarsening must be a positive integer")
+    if bounds and bbox:
+        raise ToolFailure("give bounds or bbox (the same region), not both")
+    bounds = bounds or bbox
     if zoom and bounds:
         raise ToolFailure("zoom and bounds are mutually exclusive")
     if bounds is not None and len(bounds) != 4:

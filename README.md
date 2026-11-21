@@ -466,6 +466,7 @@ blockdrawer-cli describe case.json --unassigned --section summary   # exterior e
 blockdrawer-cli quality case.json                  # verdict, interior sampling, corner screen, warnings
 blockdrawer-cli render case.json -o case.png --preview --highlight b1 v0-v1
 blockdrawer-cli render case.json -o zoom.svg --zoom v4 --margin 0.5
+blockdrawer-cli render case.json -o part.png --bbox 0.6,-0.1,0.8,0.05   # a region (--bounds alike)
 blockdrawer-cli render case.json -o plain.png --no-labels --no-control-points   # lines and patches only
 blockdrawer-cli export case.json --case /path/to/openfoam/case
 blockdrawer-cli check case.json                    # runs blockMesh and checkMesh
@@ -704,6 +705,38 @@ takes the same forms, a coordinate not given staying as it is
 17-digit coordinates of existing vertices or polar points to 1e-9 for
 this. Other commands still take numbers (`add_grid` stations, `points=`
 of `add_block_from_vertices`, which names vertices by ID anyway).
+`add_vertex between=A,B fraction=0.25` is the point a quarter of the
+straight way from A to B (default the midpoint; two round-4 junction
+trials typed a midpoint to make a five-sided fill's count even), and
+`add_fill points=X,Y;X,Y;V;...` gives the corners by position (or ID),
+so a corner list survives a re-layout that renumbers.
+
+What the operators check and say after round 4 (batch 11, reproduced on
+the trials' builds): blocks lying over one another without sharing an edge
+are found by `overlap.overlapping_blocks` (a corner, edge sample or
+interior point of one inside the other); `validate` refuses them, `quality`
+ranks them with the folded cells among its warnings and makes the verdict invalid, `check`
+prints them beside checkMesh's verdict, every operator refuses to make
+one, and `add_grid` leaves out a cell over an existing block whose centre
+lies outside it, naming the blocks (the elbow's polar grid over the vane's
+band: 50 blocks and a validated session before, 8 cells left out now). A
+chain's band side and a fill side's blocks are read from the block's own
+traversal, not its corners' mean (a thin block on a curved edge: "blocks on
+both sides", "would lie over", now built). A band front leaving its end
+more than 45 degrees from the wall's own direction loses the points that
+turn it (the splitter's concave mitres and the high-lift band beside a
+tilted `end=`: 20 and 1354 cells folding on the count-free map before, 0
+after). A fill side walks on through a wall vertex left open along its
+one edge without a patch, and the note says "NOT the only reading" with
+the other side choices. `add_ring near=` picks one of several places where
+a normal occurs; `render --bbox` is `--bounds`, both in the comma form;
+`bbox=` chain selection takes edges lying on the box's sides within the
+operators' tolerance and names the edges at its ends it left out. A grid or
+row vertex falling inside an existing edge beside one of its ends names
+that end and the `move_vertex` putting it on the line: the U-bend front
+0.0013 off a line/arc joint, which a spoke on the straight stretch's own
+normal would have removed but which moved vertices on six round-3/4 builds
+and made one fail to replay, so the spoke stays the mitre.
 
 Measured (`review_operators/` beside the trial data): the 27-block backward
 step in 8 commands (`add_grid` with one skip box and six `set_boundary_by`;

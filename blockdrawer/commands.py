@@ -646,9 +646,11 @@ def resolve_position(model: MeshModel, args: dict[str, Any], own: str | None = N
     Polar: ``r`` and ``theta`` (degrees counter-clockwise from +x) about
     ``center`` (x,y) or the vertex ``about``. Otherwise each coordinate from
     exactly one of: the number (``x``/``y``), the vertex ``at`` (both), the
-    vertex ``x_of`` (its x) / ``y_of`` (its y), or - moving a vertex - the
-    vertex's own. ``dx``/``dy`` are added last, so ``at=V dx=0.1`` is an
-    offset from V and ``move_vertex V dy=0.1`` a move by 0.1."""
+    point ``fraction`` (default a half) of the straight way from vertex A to
+    vertex B (``between=A,B``, both), the vertex ``x_of`` (its x) / ``y_of``
+    (its y), or - moving a vertex - the vertex's own. ``dx``/``dy`` are
+    added last, so ``at=V dx=0.1`` is an offset from V and ``move_vertex V
+    dy=0.1`` a move by 0.1."""
     def get(name: str) -> Any:
         return args.get(name)
 
@@ -657,8 +659,15 @@ def resolve_position(model: MeshModel, args: dict[str, Any], own: str | None = N
         return vertex.x, vertex.y
 
     polar = [name for name in ("r", "theta", "center", "about") if get(name) not in (None, ())]
+    between = get("between") or ()
+    if between and len(between) != 2:
+        raise CommandError("between takes two vertices A,B")
+    if get("fraction") is not None and not between:
+        raise CommandError("fraction applies with between=A,B")
     if polar:
         clash = [name for name in ("x", "y", "at", "x_of", "y_of") if get(name) is not None]
+        if between:
+            clash.append("between")
         if clash:
             raise CommandError(f"a polar point (r, theta about center or about) takes no {', '.join(clash)}")
         if get("r") is None or get("theta") is None:
@@ -675,13 +684,19 @@ def resolve_position(model: MeshModel, args: dict[str, Any], own: str | None = N
         angle = math.radians(get("theta"))
         x, y = cx + get("r") * math.cos(angle), cy + get("r") * math.sin(angle)
     else:
+        if between and get("at") is not None:
+            raise CommandError("give at=V or between=A,B, not both")
         base = point(get("at")) if get("at") is not None else None
+        if between:
+            fraction = 0.5 if get("fraction") is None else get("fraction")
+            (ax, ay), (bx, by) = point(between[0]), point(between[1])
+            base = (ax + fraction * (bx - ax), ay + fraction * (by - ay))
         own_point = point(own) if own is not None else None
         values = []
         for axis, name, of in ((0, "x", "x_of"), (1, "y", "y_of")):
             sources = [source for source in (name, of) if get(source) is not None]
             if base is not None:
-                sources.append("at")
+                sources.append("between" if between else "at")
             if len(sources) > 1:
                 raise CommandError(f"{name} is given twice ({', '.join(sources)}): give one of them")
             if not sources:
@@ -1156,6 +1171,10 @@ _POSITION = (
     Parameter("theta", "float", "polar: degrees counter-clockwise from +x", required=False, default=None),
     Parameter("center", "numbers", "polar: centre x,y", required=False, default=()),
     Parameter("about", "vertex", "polar: centre at this vertex", required=False, default=None),
+    Parameter("between", "vertices", "the point fraction of the straight way from vertex A to vertex B "
+              "(A,B; both coordinates)", required=False, default=()),
+    Parameter("fraction", "float", "with between: from A (0) to B (1), default 0.5",
+              required=False, default=None),
 )
 _register(CommandSpec(
     "move_vertex",
@@ -1185,8 +1204,9 @@ _register(CommandSpec(
     (
         "Create a standalone vertex for later use by add_block_from_vertices "
         "or as a station: at x,y, or relative to existing vertices - at=V "
-        "dx=.. dy=.. (an offset), x_of=V y_of=W (level with them), r=.. "
-        "theta=.. about=V or center=X,Y (a polar point)."
+        "dx=.. dy=.. (an offset), x_of=V y_of=W (level with them), "
+        "between=A,B fraction=F (on the straight way from A to B, default "
+        "the midpoint), r=.. theta=.. about=V or center=X,Y (a polar point)."
     ),
     (
         Parameter("x", "float", "x coordinate", required=False, default=None),
@@ -1581,7 +1601,8 @@ def _run_add_ring(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
 
     return add_ring(
         model, args["curve"], args["height"], count=args["count"],
-        fractions=args["fractions"], normals=args["normals"], points=args["points"], corner=args["corner"],
+        fractions=args["fractions"], normals=args["normals"], near=args["near"], points=args["points"],
+        corner=args["corner"],
         tips=args["tips"], rows=args["rows"], growth=args["growth"], side=args["side"],
         between=args["between"], xs=args["xs"], ys=args["ys"], start=args["start"], end=args["end"],
         fan=args["fan"], open_at=args["open_at"], prefix=args["id"],
@@ -1599,10 +1620,16 @@ def _run_add_stations(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
 
 
 def _run_add_fill(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
-    from .construct import add_fill
+    from .construct import add_fill, resolve_points
 
+    corners = list(args["corners"])
+    if args["points"]:
+        if corners:
+            raise TopologyError("give the corners by ID or by points=, not both (points= takes IDs too: "
+                                "x,y or an ID per corner, ';' between, in order round the region)")
+        corners = resolve_points(model, args["points"])
     return add_fill(
-        model, args["corners"],
+        model, corners,
         sides=tuple(args[f"side{k}"] for k in range(1, 6)),
         curves=tuple(args[f"curve{k}"] for k in range(1, 6)),
         prefix=args["id"],
@@ -1757,7 +1784,8 @@ _register(CommandSpec(
         "curve at its corners (vertices turning more than corner degrees), "
         "at the given arc-length fractions from its first point, where the "
         "outward normal points at each of the normals angles (degrees "
-        "counter-clockwise from +x; exactly one such point is required), "
+        "counter-clockwise from +x; exactly one such point is required, or "
+        "near=X,Y;... - one point per angle - takes the place nearest it), "
         "at the curve point nearest each of points (x,y or vertex IDs), "
         "with tips=true at the peak of each rounded convex corner (a nose "
         "turning 45 degrees within a hundredth of the perimeter either "
@@ -1786,6 +1814,9 @@ _register(CommandSpec(
         Parameter("fractions", "numbers", "arc-length fractions of extra stations",
                   required=False, default=()),
         Parameter("normals", "numbers", "outward-normal angles (degrees) of extra stations",
+                  required=False, default=()),
+        Parameter("near", "locations", "one point per normals angle (x,y or a vertex ID, ';' between): "
+                  "where the normal has that angle at several places, the one nearest it",
                   required=False, default=()),
         _POINTS,
         Parameter("corner", "float", "a vertex turning more than this many degrees is a station",
@@ -1843,7 +1874,7 @@ _register(CommandSpec(
     "add_fill",
     (
         "Fill a four-sided region with blocks: corners A,B,C,D in order round "
-        "it (either way; counter-clockwise where both ways bound a region, as "
+        "it (or points=X,Y;X,Y;... naming the vertices there, IDs allowed; either way; counter-clockwise where both ways bound a region, as "
         "in a half annulus), side k from corner k to corner k+1. A side is the "
         "vertex list given for it (sideK=A,...,B); else the chain of exterior "
         "edges joining its corners with their blocks outside the region (a "
@@ -1861,7 +1892,11 @@ _register(CommandSpec(
         "number; refused with the spoke counts the sides give otherwise)."
     ),
     (
-        Parameter("corners", "vertices", "three, four or five corner vertices in order round the region"),
+        Parameter("corners", "vertices", "three, four or five corner vertices in order round the region",
+                  required=False, default=()),
+        Parameter("points", "locations", "the corners by position instead: x,y (the vertex there, within "
+                  "a billionth of the drawing) or a vertex ID per corner, ';' between, in order",
+                  required=False, default=()),
         *(Parameter(f"side{k}", "vertices",
                     f"side {k}'s stations from corner {k} to corner {k + 1} (or 1; either order)",
                     required=False, default=()) for k in range(1, 6)),
