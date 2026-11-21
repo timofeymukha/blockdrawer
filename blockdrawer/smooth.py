@@ -47,11 +47,13 @@ that factor. The result reports the shortest and longest edge over its
 input length in both modes, and in shape mode the largest pair-ratio change
 and spread growth.
 
-The result is verified at full resolution (:func:`sample_model`) and
+The result is verified at 256 cells a side (:func:`sample_model`) and
 applied only when the model stays untangled, its severe-face count does not
 rise and its maximum non-orthogonality does not rise; otherwise the
 displacements are scaled back by halves and the first scaled result that
-passes is applied, or nothing is.
+passes is applied, or nothing is. What the result reports - ``before``,
+``after``, the reason's maximum and faces above 70, shape mode's real-count
+verdicts - is measured at the real counts (``REPORT_CELLS``), every cell.
 """
 
 from __future__ import annotations
@@ -78,6 +80,12 @@ from .slide import SLIDE_TOLERANCE
 INF = math.inf
 # Resolution of the full verification, as the quality report's default.
 VERIFY_CELLS = 256
+# Resolution of what the result reports: every real cell. At 256 a side a
+# face on an edge shared with a coarsened block read 62.19 degrees where the
+# real counts give 69.56 (NACA 4412, round 5; checkMesh 69.56). The check
+# itself stays at VERIFY_CELLS: judged at the real counts, size and the
+# polish gained two jumps above 5 on a corpus NACA 4412 (batch 12, README).
+REPORT_CELLS = None
 # A trial block corner may not come closer to 0 or 180 degrees than 20
 # (this sine) unless the original corner already was: a new 178-degree block
 # corner is a first cell the corner screen rightly flags.
@@ -1842,6 +1850,9 @@ def _smooth_once(
 
     before = judge(model)
     real_before = _verdict(sample_model(model, options.verify_cells)) if shape else None
+    # What the result reports: the real counts (REPORT_CELLS).
+    reported_before = before if shape else _verdict(sample_model(model, REPORT_CELLS))
+    reported_real_before = _verdict(sample_model(model, REPORT_CELLS)) if shape else None
 
     def result(applied, reason, after=None, positions=None, scale=0.0, sweeps=0, rounds=0,
                working=None):
@@ -1874,10 +1885,10 @@ def _smooth_once(
         if holds.notes:
             reason += "; " + "; ".join(holds.notes)
         return SmoothResult(
-            applied, reason, before, after or before, len(free), len(positions),
+            applied, reason, reported_before, after or reported_before, len(free), len(positions),
             displacement, sum(len(items) for items in spokes.values()), band,
             edges_change, scale, sweeps, rounds, tuple(hold), positions,
-            options.mode, real_before, real_after if applied else real_before,
+            options.mode, reported_real_before, reported_real_after if applied else reported_real_before,
             len(chains), slid_count if applied else 0, max_slide if applied else 0.0,
             boundary[0] if applied else 0.0, boundary[1] if applied else 0.0,
             *ratios, len(lines), line_fixed, *pair, *spread, aspect_blocks=tuple(aspect_blocks),
@@ -1885,6 +1896,7 @@ def _smooth_once(
         )
 
     real_after: dict[str, Any] | None = None
+    reported_real_after: dict[str, Any] | None = None
     aspect_blocks: list[str] = []
     slid_count = 0
     max_slide = 0.0
@@ -2001,16 +2013,20 @@ def _smooth_once(
         if not gained:
             break
         model.move_vertices(scaled, carry_curves=True, edge_geometry=recut)
+        if shape:
+            reported_real_after = _verdict(sample_model(model, REPORT_CELLS))
+        else:
+            after = _verdict(sample_model(model, REPORT_CELLS))
         reason = (
             f"smoothed {len(scaled) - len(slid_at)} of {len(free)} free vertices"
             + (f", slid {len(slid_at)} of {len(chains)} boundary vertices along their boundary "
                f"(re-cut edges within {boundary[0]:.3g} of the input boundary)" if chains else "")
             + (f" at {scale:g} of the optimised displacement" if scale < 1.0 else "")
-            + f": max non-orthogonality {before['max_non_orthogonality']:.2f} -> "
+            + f": max non-orthogonality {reported_before['max_non_orthogonality']:.2f} -> "
             f"{after['max_non_orthogonality']:.2f} degrees, average "
-            f"{before['average_non_orthogonality']:.2f} -> {after['average_non_orthogonality']:.2f}, "
-            f"faces above {SEVERE_NON_ORTHOGONALITY:g} degrees {before['severe_faces']} -> "
-            f"{after['severe_faces']}"
+            f"{reported_before['average_non_orthogonality']:.2f} -> {after['average_non_orthogonality']:.2f}, "
+            f"faces above {SEVERE_NON_ORTHOGONALITY:g} degrees {reported_before['severe_faces']} -> "
+            f"{after['severe_faces']}" + ("" if shape else " (real counts)")
         )
         if aspect_refusals:
             reason += "; " + _aspect_text(aspect_refusals, before) + f", so applied at {scale:g}"
@@ -2018,9 +2034,10 @@ def _smooth_once(
             reason = (
                 "shape " + reason + " on the count-free block map; the stored counts and "
                 "grading now give max non-orthogonality "
-                f"{real_before['max_non_orthogonality']:.2f} -> {real_after['max_non_orthogonality']:.2f}, "
-                f"{real_before['severe_faces']} -> {real_after['severe_faces']} faces above "
-                f"{SEVERE_NON_ORTHOGONALITY:g} degrees, {real_after['folded_cells']} folded cells: they "
+                f"{reported_real_before['max_non_orthogonality']:.2f} -> "
+                f"{reported_real_after['max_non_orthogonality']:.2f}, "
+                f"{reported_real_before['severe_faces']} -> {reported_real_after['severe_faces']} faces above "
+                f"{SEVERE_NON_ORTHOGONALITY:g} degrees, {reported_real_after['folded_cells']} folded cells: they "
                 "were chosen for the old shape - run size next"
             )
         reason += (

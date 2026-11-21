@@ -301,7 +301,14 @@ them in the canvas widgets.
   interior sampled at the real cell counts (up to 64 a side, through
   `blockdrawer.sampling`), since the
   corner screen alone passed a merge that folded between the corners and a
-  coarser sampling passed a fold of one real cell. A move must raise the
+  coarser sampling passed a fold of one real cell. The reason gives
+  checkMesh's face non-orthogonality at the real counts over the
+  neighbourhood and every block sharing an edge with it (`_faces`: worst
+  face, faces above 70) before and after, and says when the faces got
+  worse (`RepairScore.faces_hold`): on angles at 64 a side a NACA 4412 move
+  took a block from one face above 70 to seven, 82.7 degrees (round 5).
+  Judging the faces too refused the 12 candidates that improved the angles
+  there; it is not in (batch 12: item 1's guards failed their rule, README). A move must raise the
   worst cell by half a degree without adding severe cells, or keep it and
   remove a tenth of the *severe* sampled cells (a corner within 20 degrees
   of 0 or 180, checkMesh's 70 degrees of non-orthogonality on a sheared
@@ -343,7 +350,11 @@ them in the canvas widgets.
   higher maximum and - the polish only - not crossing checkMesh's aspect
   ratio limit 1000 nor gaining cells above it (`sampling.aspect_worse`,
   shared with `size`; measured as the sample measures it, the export
-  settings' depth included), else scaled back by halves; when the full
+  settings' depth included), else scaled back by halves (what the result
+  reports - `before`, `after`, the reason's maximum and faces above 70,
+  shape mode's real-count verdicts - is sampled at the real counts,
+  `REPORT_CELLS` None: at 256 a NACA 4412 polish reported 62.19 where
+  checkMesh read 69.56); when the full
   displacement crossed the limit, `smooth_model` runs the optimisation
   once more with the free vertices of the blocks it took past the limit
   held and applies whichever result has fewer faces above 70, then the
@@ -525,7 +536,13 @@ them in the canvas widgets.
   otherwise the components and strips through each offending block (then
   its neighbours, then all) go back to the reference values until it holds
   (`undone_moves`, deterministic). The result's `verification` gives both
-  verdicts. `size_model` refuses a result above skewness 4 from an input
+  verdicts, measured at the real counts (`REPORT_CELLS` None, `_verify_real`;
+  `cells_per_side_judged` is the decisions' 256): at 256 with only the
+  blocks above 65 degrees there at real counts a NACA 4412 sizing reported
+  63.7 degrees and no face above 70 where it had 70.8 and one (round 5).
+  Judging at the real counts too (guards, verification, polish) was
+  measured on the 78 inputs and failed its rule (a corpus NACA 4412 gained
+  two jumps above 5; README), so the decisions stay at 256. `size_model` refuses a result above skewness 4 from an input
   below.
   `_continuity_splits` then splits strips the spent state leaves coarse
   against finer neighbours at both ends (`_stranded`), solves and spends

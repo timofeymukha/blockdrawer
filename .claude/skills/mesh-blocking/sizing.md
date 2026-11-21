@@ -159,8 +159,11 @@ $$
 ## Reading `verification`
 
 `verification.field` is the field's state after its own repairs,
-`verification.result` what `size` returns; both at 256 cells a side, and at
-real counts for every block with a face above 65 degrees. Each move is
+`verification.result` what `size` returns; both measured at the real
+counts, every cell (`cells_per_side` None). The moves are judged at 256
+cells a side, and at real counts for every block with a face above 65
+degrees there (`cells_per_side_judged`): a face on an edge shared with a
+block coarsened at 256 can pass that judge and show here. Each move is
 checked as it is made, and spending is undone where the result would hold
 more faces above 70, a worst face more than 0.5 degrees higher, a fold,
 skewness past 4 or cells past aspect ratio 1000. A field state that folds

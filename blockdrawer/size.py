@@ -55,7 +55,7 @@ the geometry's units and knows no construction roles.
    cells. The spent state is verified against the
    repaired field state at 256 cells a side (real counts where faces are
    steep) and spending is undone where it added faces; both verdicts are
-   reported. Strips the spent state leaves coarse between finer neighbours
+   reported, measured at the real counts (every cell). Strips the spent state leaves coarse between finer neighbours
    at both ends are split and the budget is spent again when that lowers
    the jumps.
 
@@ -689,7 +689,7 @@ def size_model(
     result.jump_cost = _jump_cost(state, options)
     result.moves = moves
     result.guard = guard
-    result.verification = state.get("verification", {})
+    result.verification = _reported(working, state.get("verification", {}))
     result.budget_binding = state.get("budget_binding")
     result.field_grading = field_grading
     result.raised = _raised(moves)
@@ -981,13 +981,13 @@ def _size_by_distance(model, options, blocks, bbox) -> SizeResult:
             f"size refused: the sized mesh's sampled face skewness {skewness:.3g} exceeds "
             f"checkMesh's limit of {SKEWNESS_LIMIT:g} where the input's was {skew_floor:.3g}"
         )
-    brief = _brief(_verify(working, _neighbours(working))[1])
+    brief = _brief(_verify_real(working))
     result = _report(working, cells_before, old.components, old.splits, old.refused, old.budget_factor, old.note,
                      options)
     result.budget = options.budget
     result.field_cells = result.total_cells
     result.verification = {
-        "cells_per_side": VERIFY_CELLS, "field": brief, "result": dict(brief), "undone_moves": 0,
+        "cells_per_side": REPORT_CELLS, "field": brief, "result": dict(brief), "undone_moves": 0,
         "method": "distance",
     }
     _replace(model, working)
@@ -1957,7 +1957,8 @@ def _continuity_splits(working, field_, state, moves, guard, options, budget, bl
                 )
             del splits[made:]
             break
-        trial["verification"] = {**trial["verification"], "field": promised}
+        trial["verification"] = {**trial["verification"], "field": promised,
+                                 "field_real": state["verification"].get("field_real")}
         state, moves, guard = trial, trial_moves, trial_guard
     return state, moves, guard
 
@@ -2026,6 +2027,59 @@ def _verify(model: MeshModel, neighbours: dict[str, set[str]]) -> tuple[dict[str
         "real_count_blocks": len(hot),
     }
     return blocks, summary
+
+
+# What size reports as its verification: every real cell (None). The guards
+# and the verification that undoes moves judge at VERIFY_CELLS (256 a side,
+# real counts for blocks above HOT_ANGLE there): at 256 a NACA 4412 face on an
+# edge shared with a coarsened block read 63.7 degrees where it was 70.8, so
+# the report said no face above 70 where there was one (round 5); judged at
+# the real counts, the corpus NACA 4412 gained two jumps above 5 after the
+# polish (batch 12, README), so the decisions stay where they were.
+REPORT_CELLS = None
+
+
+def _verify_real(model: MeshModel) -> dict:
+    """The verdict at the real counts (``REPORT_CELLS``): faces above 70,
+    folds, the worst face, skewness, aspect ratio, as ``_verify``'s summary."""
+    from .sampling import sample_model
+
+    sample = sample_model(model, REPORT_CELLS, planar=True)
+    blocks = sample.blocks
+    return {
+        "severe_faces": sum(item.severe_faces for item in blocks),
+        "folded_cells": sum(item.folded_cells for item in blocks),
+        "max_non_orthogonality": max((item.max_non_orthogonality for item in blocks), default=0.0),
+        "max_skewness": max((item.max_skewness for item in blocks), default=0.0),
+        "max_aspect_ratio": max((item.max_aspect_ratio for item in blocks), default=0.0),
+        "worst_aspect_block": max(blocks, key=lambda item: item.max_aspect_ratio).block_id if blocks else None,
+        "high_aspect_cells": sum(item.high_aspect_cells for item in blocks),
+        "high_aspect_blocks": [
+            [item.block_id, item.max_aspect_ratio, item.high_aspect_cells]
+            for item in sorted(blocks, key=lambda item: (-item.max_aspect_ratio, item.block_id))
+            if item.max_aspect_ratio > ASPECT_LIMIT
+        ],
+        "folded_blocks": [
+            [item.block_id, item.folded_cells]
+            for item in sorted(blocks, key=lambda item: (-item.folded_cells, item.block_id))
+            if item.folded_cells
+        ],
+    }
+
+
+def _reported(model: MeshModel, verification: dict) -> dict:
+    """``size``'s reported verification: the field's state and the result at
+    the real counts (the moves were judged at ``cells_per_side_judged``)."""
+    if not verification:
+        return {}
+    field = verification.get("field_real") or verification.get("field")
+    return {
+        "cells_per_side": REPORT_CELLS,
+        "cells_per_side_judged": verification.get("cells_per_side"),
+        "field": field,
+        "result": _brief(_verify_real(model)),
+        "undone_moves": verification.get("undone_moves", 0),
+    }
 
 
 def _floors(model: MeshModel) -> tuple[float, int]:
@@ -2609,6 +2663,8 @@ def _spend(model: MeshModel, state: dict, options: SizeOptions, budget: int, ske
     reference_logs = list(logs)
     repaired = len(moves)
     reference = _verify(trial, neighbours)
+    # What the result reports for the field's state: its real counts.
+    reference_real = _brief(_verify_real(trial))
     guard_ceiling[0] = reference[1]["max_non_orthogonality"] + VERIFY_TOLERANCE
     for _iteration in range(20000):
         best = None
@@ -2807,6 +2863,7 @@ def _spend(model: MeshModel, state: dict, options: SizeOptions, budget: int, ske
         "field": _brief(field_summary),
         "result": _brief(final),
         "undone_moves": undone,
+        "field_real": reference_real,
     }
     new_ratios = dict(ratios)
     for index, orientation in enumerate(strips):

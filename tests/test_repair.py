@@ -147,6 +147,25 @@ class RepairBlockTests(unittest.TestCase):
         # A gain on the worst cell paid for in severe cells is no gain.
         self.assertFalse(RepairScore(14.0, 150.0, 14.0, severe=101).improves(before))
 
+    def test_faces_hold_compares_the_faces_at_the_real_counts(self) -> None:
+        before = RepairScore(12.0, 150.0, 12.0, severe=10, max_face=62.0, severe_faces=1)
+        self.assertTrue(RepairScore(14.0, 150.0, 14.0, 10, 62.4, 1).faces_hold(before))
+        self.assertFalse(RepairScore(14.0, 150.0, 14.0, 10, 62.6, 1).faces_hold(before))
+        self.assertFalse(RepairScore(14.0, 150.0, 14.0, 10, 50.0, 2).faces_hold(before))
+
+    def test_the_result_reports_the_faces_at_the_real_counts(self) -> None:
+        from blockdrawer.sampling import sample_model
+
+        model, _middle = two_by_two((1.45, 1.4))
+        model.set_edge_cells(edge_key(*model.blocks[0].directed_edge(0)), 300)
+        real = sample_model(model, None).summary()["max_non_orthogonality"]
+        result = repair_block(model, worst_block(model))
+        self.assertIn("at the real counts", result.reason)
+        # Every block is in the neighbourhood: the whole model's real reading.
+        self.assertAlmostEqual(result.before.max_face, real)
+        if result.applied:
+            self.assertIsNotNone(result.after.max_face)
+
     def test_a_move_that_opens_a_wedge_by_adding_severe_cells_is_not_applied(self) -> None:
         # Two wedges at a fixed boundary apex A share the edge A-B with a
         # free vertex B: W turns 15 degrees, N 21 degrees and has ten times

@@ -936,7 +936,11 @@ regrading an edge to the series of its opposite edge - and applies the one
 that most improves the block and its neighbours, judged on the corner
 screen and the sampled transfinite interior by the worst cell and by the
 count of severely sheared cells (neither may get worse for a gain in the
-other); it reports when no move helps - a sound
+other); its reason gives checkMesh's worst face and faces above 70 at the
+real counts over the neighbourhood, shared edges included, before and
+after, and says when they got worse (judged on angles at 64 cells a side,
+a move on a NACA 4412 block took it from one face above 70 to seven, 82.7
+degrees, round 5). It reports when no move helps - a sound
 neighbourhood (no severe cell, every angle at least 45 degrees from
 degenerate) is "nothing to repair", since it judges angles only and size
 jumps and aspect ratios belong to the quality report, and anything else means
@@ -1578,6 +1582,39 @@ The sessions that changed (checkMesh after the polish):
 reaches strip's average where the strips buy nothing and keeps the first
 width. The splitter plate (14.2) and the cascades (27 to 29) are unchanged:
 their averages come from the blocks' shape, not from this pass.
+
+**What size and the polish report** (batch 12, after benchmark round 5). On
+a NACA 4412 engine session `size` verified "0 faces above 70, max 63.68"
+and the polish "63.68 -> 62.19" where the real counts had one face at 70.77
+after `size` and checkMesh read 69.56 after the polish: the face lies on an
+edge whose neighbour block the 256-a-side sampling coarsens across it, so
+the neighbour's merged cell put its centre too far from the face. Over the
+78 inputs of the benchmark (58 of batch 10, 20 of round 5) under the
+default chain, the sized and polished sessions' reported maxima and faces
+above 70 against the real counts (`sample_model` uncoarsened): only 10 of
+the 78 coarsen a block at 256, and one reading was off - the corpus NACA
+4412 after `size`, 64.98 degrees and no face above 70 reported for 71.02 and
+one (several blocks beside coarsened neighbours read 7 to 12 degrees low,
+all on a shared edge, none the session's maximum elsewhere). Judging at the
+real counts too - the per-move guard, the verification that undoes moves,
+`repair_shape`, the field pass's guard and the polish's check - left 68 of
+the 78 sessions unchanged and failed the rule fixed for it: the corpus NACA
+4412 gained two jumps above 5 after the polish (0 -> 2, sum 138 -> 140; its
+maximum fell 45.12 -> 39.26, average 7.32 -> 8.24, cells +1.9 percent),
+every other term held. So the decisions stay at 256 a side and what is
+reported is the real counts: `size`'s `verification` (field and result,
+`cells_per_side` None, `cells_per_side_judged` 256) and the polish's
+`before`, `after` and reason (`REPORT_CELLS`), which changes no session (the
+10 coarsening sessions rerun: identical counts, gradings and checkMesh).
+`repair_block` reports checkMesh's faces at the real counts before and
+after and says when they got worse (on the polished NACA session its move
+took b247 from 69.6 degrees and no face above 70 to 82.7 and seven, and
+says so); judging the faces too refused the 12 candidates that improved
+the angles there, but it is left out with the rest. Time,
+`size` plus the polish on the three longest inputs: high-lift round 5
+958 -> 970 s, round 2 706 -> 718 s, round 3 591 -> 601 s (two to five more
+uncoarsened samples a call; judging at the real counts took a coarsening
+session's `size` from 190 to 228 s).
 
 `method=distance` keeps item 3's sizing reachable (`size_distance.py`, as
 of commit 9a84f29): counts from the wall distance alone, wall-normal edges

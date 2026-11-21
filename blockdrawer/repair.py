@@ -11,8 +11,11 @@ mesh cell so curved edges and grading count, plus the block interiors
 sampled at the real cell counts: a move must raise the worst cell by half a
 degree without adding severely sheared cells, or keep it and cut their
 number by a tenth - the measure a grading move acts on, since a wedge's
-apex angle is what it is however the cells are distributed. ``checkMesh`` remains the authority
-on the result.
+apex angle is what it is however the cells are distributed. The result
+reports checkMesh's face non-orthogonality before and after, measured at
+the real counts over the neighbourhood and the blocks beside it (shared
+edges included): the worst face and the faces above 70 degrees.
+``checkMesh`` remains the authority on the result.
 
 Vertices on a boundary edge never move: a wall vertex must stay on the
 geometry and a far-field vertex on the domain. Everything is UI-free and
@@ -28,7 +31,7 @@ from typing import Any
 from .domain import EdgeKey, TopologyError, edge_key
 from .model import MeshModel
 from .quality import QualityThresholds, block_quality
-from .sampling import SEVERE_ANGLE, block_grid, cell_angles
+from .sampling import SEVERE_ANGLE, block_grid, cell_angles, sample_model
 from .session import from_data, to_data
 
 MOVES = ("move", "combine", "split", "grade")
@@ -39,7 +42,10 @@ MOVES = ("move", "combine", "split", "grade")
 # corners is seen: the corner screen alone passed a merge across a curved
 # cove edge that checkMesh read as 180 degrees of non-orthogonality, and a
 # sampling of eight cells a side passed a vertex move that folded one real
-# cell of a 54-cell edge beside a sliver corner.
+# cell of a 54-cell edge beside a sliver corner. A move judged on the cells'
+# angles at 64 a side (interior 42.8 -> 47.5) took a NACA 4412 block from one
+# face above 70 degrees to seven, its worst face to 82.7 (round 5): the
+# result reports the faces at the real counts (``_faces``) so that is seen.
 INTERIOR_CELLS = 64
 # The neighbourhood a repair is judged on: every block with a vertex inside
 # the target's neighbourhood box, padded by this fraction - recomputed on
@@ -81,6 +87,11 @@ class RepairScore:
     max_angle: float
     interior: float
     severe: int = 0
+    # checkMesh's face non-orthogonality at the real counts over the
+    # neighbourhood and the blocks beside it: the worst face and the faces
+    # above 70 degrees (None: not measured).
+    max_face: float | None = None
+    severe_faces: int | None = None
 
     @property
     def worst(self) -> float:
@@ -105,6 +116,15 @@ class RepairScore:
 
     def key(self) -> tuple[float, int, float, float]:
         return (math.floor(self.worst / MIN_GAIN), -self.severe, self.worst, self.min_angle)
+
+    def faces_hold(self, before: "RepairScore") -> bool:
+        """No more faces above 70 degrees and a worst face at most
+        ``MIN_GAIN`` higher than ``before``'s, at the real counts."""
+        return (self.severe_faces <= before.severe_faces
+                and self.max_face <= before.max_face + MIN_GAIN)
+
+    def faces_text(self) -> str:
+        return f"worst face {self.max_face:.1f} degrees, {self.severe_faces} above 70"
 
 
 @dataclass(frozen=True)
@@ -179,6 +199,25 @@ def _score(model: MeshModel, box: tuple[float, float, float, float], limits: Qua
     return RepairScore(min(angles_min), max(angles_max), interior, severe)
 
 
+def _faces(model: MeshModel, box: tuple[float, float, float, float], score: RepairScore) -> RepairScore:
+    """``score`` with checkMesh's face measure at the real counts over the
+    blocks in ``box`` and every block sharing an edge with one of them (so
+    the faces on the neighbourhood's own edges are measured from both
+    sides)."""
+    inside = set(_blocks_in(model, box))
+    users: dict[EdgeKey, list[str]] = {}
+    for block in model.blocks:
+        for index in range(4):
+            users.setdefault(edge_key(*block.directed_edge(index)), []).append(block.id)
+    subset = set(inside)
+    for ids in users.values():
+        if inside.intersection(ids):
+            subset.update(ids)
+    summary = sample_model(model, None, blocks=subset, planar=True).summary()
+    return RepairScore(score.min_angle, score.max_angle, score.interior, score.severe,
+                       summary.get("max_non_orthogonality", 0.0), summary.get("severe_faces", 0))
+
+
 def _copy(model: MeshModel) -> MeshModel:
     return from_data(to_data(model))
 
@@ -250,7 +289,7 @@ def repair_block(
         raise TopologyError(f"Unknown repair move(s) {unknown}; choose from {list(MOVES)}")
     box = _neighbourhood_box(model, block_id)
     neighbourhood = _blocks_in(model, box)
-    before = _score(model, box, limits)
+    before = _faces(model, box, _score(model, box, limits))
     target = next(block for block in model.blocks if block.id == block_id)
 
     best: tuple[tuple, str, dict[str, Any], RepairScore] | None = None
@@ -350,7 +389,8 @@ def repair_block(
             reason = (
                 f"nothing to repair around {block_id}: no severe cells and every "
                 f"corner and sampled cell between {before.min_angle:.1f} and "
-                f"{before.max_angle:.1f} degrees ({considered} candidates tried); "
+                f"{before.max_angle:.1f} degrees ({considered} candidates tried; "
+                f"{before.faces_text()} at the real counts); "
                 "repair_block judges angles only - a cell-size jump or an aspect "
                 "ratio is the quality report's, fixed with split_edge and "
                 "set_edge_grading"
@@ -361,8 +401,9 @@ def repair_block(
                 f"without adding severe cells, or removes a tenth of its {before.severe} severe "
                 "cells without lowering the worst one "
                 f"(corners {before.min_angle:.1f} to {before.max_angle:.1f} degrees, interior "
-                f"{before.interior:.1f}; {considered} candidates): the defect is in the "
-                "topology round it, not in a vertex or a grading"
+                f"{before.interior:.1f}, {before.faces_text()} at the real counts; "
+                f"{considered} candidates): the defect is in the topology round it, not in a "
+                "vertex or a grading"
             )
         return RepairResult(
             block_id, None, {}, before, before, considered, neighbourhood,
@@ -379,6 +420,7 @@ def repair_block(
     else:
         model.split_edge(tuple(arguments["edge"]), arguments["fraction"])
     model.validate()
+    after = _faces(model, box, after)
     return RepairResult(
         block_id, operation, arguments, before, after, considered, neighbourhood,
         reason=(
@@ -386,6 +428,9 @@ def repair_block(
             f"{before.min_angle:.1f}..{before.max_angle:.1f} (interior {before.interior:.1f}, "
             f"{before.severe} severe cells) to "
             f"{after.min_angle:.1f}..{after.max_angle:.1f} (interior {after.interior:.1f}, "
-            f"{after.severe} severe cells) degrees"
+            f"{after.severe} severe cells) degrees; at the real counts {before.faces_text()} -> "
+            f"{after.faces_text()}"
+            + ("" if after.faces_hold(before) else
+               " - the faces got worse (repair_block judges cell angles): check, or undo it")
         ),
     )

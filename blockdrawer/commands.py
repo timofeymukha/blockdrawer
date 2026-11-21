@@ -1285,8 +1285,11 @@ _register(CommandSpec(
         "vertices (curved edges carried along), combining it across an internal "
         "edge, splitting one of its edges, or regrading an edge to the series "
         "of its opposite edge - judged on the block and its neighbours by the "
-        "worst cell and the count of severely sheared sampled cells; boundary "
-        "vertices never move, and nothing changes when no move helps."
+        "worst cell and the count of severely sheared sampled cells; the "
+        "reason gives checkMesh's worst face and faces above 70 degrees at the "
+        "real counts before and after (shared edges included) and says when "
+        "they got worse; boundary vertices never move, and nothing changes "
+        "when no move helps."
     ),
     (
         Parameter("block", "str", "block ID"),
@@ -1483,7 +1486,7 @@ _register(CommandSpec(
         "256 a side (real counts for blocks with faces above 65 degrees) "
         "against the field's repaired state - no more faces above 70 degrees, "
         "worst face at most 0.5 degrees higher - and spending is undone where "
-        "it breaks that; both verdicts are reported. The faces above 70 the "
+        "it breaks that; both verdicts are reported, measured at the real counts. The faces above 70 the "
         "field state itself has are not removed. A result above skewness 4 "
         "from an input below is refused. Strips the spent budget leaves coarse between finer "
         "neighbours at both ends are split and the budget spent again when "

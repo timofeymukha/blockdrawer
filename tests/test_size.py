@@ -332,7 +332,9 @@ class ContinuityTests(unittest.TestCase):
     def test_the_result_reports_its_verified_faces(self) -> None:
         result = size_model(fan(), SizeOptions(first_width=0.01, core_size=0.2, split=False))
         verification = result.to_data()["verification"]
-        self.assertEqual(verification["cells_per_side"], 256)
+        # None: reported at the real counts, every cell; judged at 256.
+        self.assertIsNone(verification["cells_per_side"])
+        self.assertEqual(verification["cells_per_side_judged"], 256)
         for state in ("field", "result"):
             self.assertIn("severe_faces", verification[state])
             self.assertIn("max_non_orthogonality", verification[state])
@@ -951,6 +953,8 @@ class SizeNoteTests(unittest.TestCase):
             state = dict(state)
             verification = dict(state.get("verification") or {})
             verification["field"] = {**(verification.get("field") or {}), "severe_faces": 3}
+            # The reported field verdict is the real-count one.
+            verification["field_real"] = {**(verification.get("field_real") or {}), "severe_faces": 3}
             state["verification"] = verification
             return state, {"strips": 1, "own": 0, "part": 0, "shared": 1, "refused_by_jumps": 0,
                            "refused_by_grid": 0, "dropped": "worse than the spent state"}
@@ -968,3 +972,37 @@ class SizeNoteTests(unittest.TestCase):
         for value in note.values():
             self.assertTrue(isinstance(value, (int, float, str, bool)) or (
                 isinstance(value, list) and all(not isinstance(item, (list, dict)) for item in value)), value)
+
+
+class RealCountReportTests(unittest.TestCase):
+    def test_the_reported_verification_is_the_real_counts(self) -> None:
+        """At 256 a side a face on an edge shared with a coarsened block read
+        63.7 degrees where the real counts give 70.8 (NACA 4412, round 5):
+        size reports its verification, and smooth its before and after, at
+        the real counts; their checks stay at 256 a side."""
+        import blockdrawer.size as size
+        import blockdrawer.smooth as smooth
+        from blockdrawer.sampling import sample_model
+
+        self.assertEqual(smooth.VERIFY_CELLS, 256)
+        self.assertIsNone(size.REPORT_CELLS)
+        self.assertIsNone(smooth.REPORT_CELLS)
+        model = _blocks(
+            {"a0": (0, 0), "a1": (1, 0), "a2": (1, 1), "a3": (0, 1), "b1": (1.5, -2), "b2": (3, 4)},
+            [("a0", "a1", "a2", "a3"), ("a1", "b1", "b2", "a2")],
+            ["a0-a3"],
+        )
+        model = apply_commands(model, [
+            "set_edge_cells a1-b1 900", "set_edge_grading a1-b1 start_width 0.001",
+            "set_edge_grading a2-b2 start_width 0.001", "set_edge_cells a1-a2 300"]).model
+        self.assertTrue(any(item.coarsened for item in sample_model(model, 256).blocks))
+        real = sample_model(model, None, planar=True).summary()
+        verified = size._verify_real(model)
+        self.assertEqual(verified["max_non_orthogonality"], real["max_non_orthogonality"])
+        self.assertEqual(verified["severe_faces"], real["severe_faces"])
+        reported = size._reported(model, {"cells_per_side": 256, "field": {}, "undone_moves": 0})
+        self.assertIsNone(reported["cells_per_side"])
+        self.assertEqual(reported["result"]["max_non_orthogonality"], real["max_non_orthogonality"])
+        polished = smooth.smooth_model(model)
+        self.assertAlmostEqual(polished.after["max_non_orthogonality"],
+                               sample_model(model, None).summary()["max_non_orthogonality"])
