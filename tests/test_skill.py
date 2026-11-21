@@ -18,6 +18,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SKILL = ROOT / ".claude" / "skills" / "mesh-blocking"
 FILES = ["SKILL.md", "engine.md", "sizing.md", "failures.md", "examples/README.md"]
 LINE_LIMIT = 250
+# SKILL.md's characters (batch 12: 20,055 then, rounded up to the next
+# hundred): text added must displace text.
+CHARACTER_LIMIT = 20100
 
 # Code spans that look like commands but are not: research_cli's `apply`
 # subcommand (BlockDrawer's CLI has an `apply` too) and placeholders.
@@ -131,6 +134,7 @@ class SkillReferenceTests(unittest.TestCase):
     def test_skill_is_short_and_links_its_references(self) -> None:
         text = (SKILL / "SKILL.md").read_text()
         self.assertLessEqual(len(text.splitlines()), LINE_LIMIT)
+        self.assertLessEqual(len(text), CHARACTER_LIMIT)
         for name in ("engine.md", "sizing.md", "failures.md", "examples/README.md"):
             self.assertIn(f"`{name}`", text)
             self.assertTrue((SKILL / name).exists(), name)

@@ -94,8 +94,13 @@ $$
   wall, 4.05e-4 .. 5.23e-4 for 5e-4 and 0.00144 .. 0.00193 for 0.002 (up
   to 28 percent finer). A spoke leaving the wall obliquely (a
   trailing-edge fan, a corner) gets the larger size the field asks along
-  it. For a hard $y^+$ ceiling ask a little coarser, or run `set_first_width
-  W` as the last sizing step: every band spoke of the wall patches (`patch=`
+  it. After the whole chain the first width can be 11 to 18 percent off,
+  not the polish's 5, where `size`'s note says the field pass was dropped
+  (round 5's elbow and annulus: -16 and -18 percent). Where a brief asks an
+  exact width (eight round-5 trials did) or a hard $y^+$ ceiling, run
+  `set_first_width W` as the last step - except on a spoke that runs on as
+  a straight line to the outlet (bluff body over ground, round 5: 51
+  degrees of tilt with `opposite=keep`, nine jumps with `follow`): every band spoke of the wall patches (`patch=`
   to choose) gets the first height W, counts kept, and the result gives
   the first widths and the interface jumps before and after. An edge
   opposite a spoke that is no spoke keeps its grading (`opposite=keep`,
@@ -162,8 +167,10 @@ $$
   first width asked, naming the refused strips by one edge and the guard
   with the spokes they leave off (`field_grading.refused_strips` lists every
   refused strip). The budget: a lower one is how cells come down towards a
-  reference (bluff body over ground, round 4: 240,083 -> 165,684 cells at
-  the same quality with `budget=200000`).
+  reference (bluff body over ground, round 4: 240,083 -> 165,684 cells with
+  `budget=200000`), and it coarsens the field with them, first widths
+  included (Y-junction 5b: 80,062 -> 52,382 cells, one wall's first cell 20
+  percent coarse) - a region's cap only with `cap=` (above).
 
 ## Reading `verification`
 

@@ -29,7 +29,8 @@ them in the canvas widgets.
   `blockdrawer-mcp`; needs `pip install blockdrawer[mcp]`). Keep the MCP tool
   surface and the CLI in step: both must go through `commands.py`.
 - Meshing methodology for agents: `.claude/skills/mesh-blocking/`.
-  `SKILL.md` is the procedure (at most 250 lines, a test keeps it there):
+  `SKILL.md` is the procedure (at most 250 lines and 20,100 characters, a
+  test keeps it there: text added displaces text):
   Steps 1-8 - collect, choose the route from a table of measured outcomes,
   build (operators by hand or the engine), shape, size (`method=distance`
   only as a comparison), polish, judge, deliver - each with its
