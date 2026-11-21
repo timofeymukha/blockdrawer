@@ -179,47 +179,47 @@ it on 3 (triangle +12.3); no step, `keep_lines` or pair 2.5 instead failed (READ
 
 ## Step 5 - Size
 
-`size FIRST CORE growth=G wall_aspect=A` (inputs in `sizing.md`; where the
-brief gives no `wall_aspect`, 25, as all eleven round-2 trials) sets every
-count and grading from the wall distance, matches widths across interfaces
-and spends a cell budget (default 1.5 times the field's own cells, `budget=`)
-on continuity. Read:
+`size FIRST CORE growth=G wall_aspect=A` (inputs in `sizing.md`; where the brief gives no
+`wall_aspect`, 25, as all eleven round-2 trials) sets every count and grading from the wall
+distance, matches widths across interfaces and spends a cell budget (default 1.5 times the
+field's own cells) on continuity. A lower `budget=N` is how cells come down towards a reference
+(bluff body over ground: 240,083 -> 165,684 cells at the same quality with 200000). Read:
 
-- `total_cells`, `budget`, `field_cells`, `budget_binding` (did the budget stop spending).
-- `verification` - faces above 70, worst face, skewness, aspect ratio
-  (checkMesh fails above 1000, blocks named) for the field's state and the
-  result. Spending adds no face above 70 nor cells above aspect 1000.
-- `first_width` - per wall patch the cell height normal to the wall at the
-  spokes, in percent of the one asked, extremes named (`quality` too).
-- `worst_jump` (with the counts above 2.5, 5, 20), `splits`, `refused`,
-  `guard`, `note`. Jumps are judged after the polish, not here: it moves
-  vertices (NACA 4412: 4 above 5 after `size`, none after the polish; it
-  keeps a jump below 5 below 5, `size_ceiling`). `budget_binding=True`
-  with jumps above 5 is worth one run with a larger budget (three
-  cylinders: 12 -> 6 above 5); one that stays is the shape's (Step 4) or
-  the topology's. Beside a fan or an open corner, or across a channel one
-  block thick, the budget is not the tool (high-lift: 22 above 5 at a budget
-  that was not binding): split the strip or change the blocks (`failures.md`).
+- `total_cells`, `budget`, `field_cells`, `budget_binding` (did the budget stop spending);
+  `verification` - faces above 70, worst face, skewness, aspect ratio (checkMesh fails above
+  1000, blocks named) of the field's state and the result; spending adds neither.
+- `first_width` - per wall patch the height normal to the wall at the spokes against the one
+  asked; `note` names strips kept on one ratio and `raised` raises through spokes (Step 6).
+- `worst_jump` (counts above 2.5, 5, 20), `splits`, `refused`, `guard`. Judge jumps
+  after the polish, which moves vertices (NACA 4412: 4 above 5 after `size`, none
+  after; it keeps a jump below 5 below 5). `budget_binding=True` with jumps above 5:
+  one run with a larger budget (three cylinders: 12 -> 6); one that stays is the
+  shape's (Step 4) or the topology's - beside a fan, an open corner or across a
+  channel one block thick the budget is not the tool (high-lift: 22 above 5): `failures.md`.
 
-Go on when `verification.result` has no face above 70. Faces above 70 in
-`verification.field` may go in the polish (Step 6; they did on three
-cylinders): polish and `check` first. Where `check` still finds them, locate
-the block (`check` maps the set) and use `failures.md` (also for `size
-refused`). `method=distance` is a comparison, not a retry (`sizing.md`).
+An average several times the reference's or the block angles': the `quality` verdict names the
+blocks that make it (`average_blocks`); `size` no longer shears thin blocks for nothing (U-bend
+11.7 -> 3.3), so it is their shape (Step 4, `failures.md`); `grading=strip` on a copy compares.
+
+Go on when `verification.result` has no face above 70. Faces above 70 in `verification.field`
+may go in the polish (Step 6; they did on three cylinders): polish and `check` first.
+Where `check` still finds them, locate the block (`check` maps the set) and use `failures.md`
+(also for `size refused`). `method=distance` is a comparison, not a retry (`sizing.md`).
 
 ## Step 6 - Polish
 
-`smooth` - the real-count polish: interior vertices move to lower the face
-non-orthogonality checkMesh measures, never raising a block's worst face,
-wall-band spokes within 5 percent of their length, edges within 50 percent, no
-size jump past 2.5 created; applied only when the sampled check at 256 cells a
-side is no worse and checkMesh's aspect limit 1000 is not crossed (`reason`
-says when it bound). `hold=V1,V2`, `hold_box=X0,Y0,X1,Y1` or `hold_line=A,B` keep
-vertices placed on purpose (`hold_along=line`, `x`, `y`: along it only); `blocks=`/`bbox=`
-limit it. Read `reason`. `slide=true` slides boundary vertices too; keep it when `check` agrees.
-The spokes' 5 percent is `band_tolerance`: the first width moves up to 5 percent
-with it. Where the brief wants it exact, `size FIRST CORE keep_counts=true` after the
-polish regrades the spokes; `check` after it (39 sessions: 7 maxima +1..32 degrees).
+`smooth` - the real-count polish: interior vertices move to lower the face non-orthogonality
+checkMesh measures, never raising a block's worst face, wall-band spokes within 5 percent of
+their length, edges within 50 percent, no size jump past 2.5 created; applied only when the
+sampled check at 256 cells a side is no worse and checkMesh's aspect limit 1000 is not crossed
+(`reason` says when it bound). `hold=V1,V2`, `hold_box=X0,Y0,X1,Y1` or `hold_line=A,B` keep vertices
+placed on purpose (`hold_along=line`, `x`, `y`: along it only); `blocks=`/`bbox=` limit it. Read
+`reason`. `slide=true` slides boundary vertices too; keep it when `check` agrees.
+The spokes' 5 percent is `band_tolerance`: the first width moves up to 5 percent with it.
+Where the brief wants it exact, `set_first_width FIRST` after the polish grades the band spokes
+alone (counts kept) and reports the jumps. `size ... keep_counts=true` regrades every strip: under
+`grading=strip` the first width got worse in three trials (U-bend -27 -> -50 percent), under
+`field` the average (cylinder in a channel 3.26 -> 4.07).
 
 ## Step 7 - Judge
 

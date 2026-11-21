@@ -133,7 +133,12 @@ $$
   widths exact on most walls (mean worst miss 14.4 -> 12.5 percent) but
   raised seven maxima by 1 to 32 degrees (a triangle's 37.7 -> 69.9), added
   faces above 70 on both high-lifts and took the jumps above 2.5 from 303
-  to 364: `check` after it, keep it only where the brief needs the width.
+  to 364. It does what the grading mode does: under `grading=strip` it
+  regrades the spokes with their strips' one ratio, and three round-4
+  trials ended with the first width worse (U-bend 4b -27 -> -50 percent);
+  under `field` it gives them their own series again and cost average
+  (cylinder in a channel 3.26 -> 4.07). For the first width alone use
+  `set_first_width`; `check` after either.
 - The note names what moved the result: `raised` lists the three
   components spending raised the most cells into ("EDGE FROM->TO +CELLS"),
   each followed by "through band spokes of PATCH (LOW%..HIGH%)" when the
@@ -147,7 +152,9 @@ $$
   dropped field pass or a refused strip leaves more than 10 percent off the
   first width asked, naming the refused strips by one edge and the guard
   with the spokes they leave off (`field_grading.refused_strips` lists every
-  refused strip).
+  refused strip). The budget: a lower one is how cells come down towards a
+  reference (bluff body over ground, round 4: 240,083 -> 165,684 cells at
+  the same quality with `budget=200000`).
 
 ## Reading `verification`
 
