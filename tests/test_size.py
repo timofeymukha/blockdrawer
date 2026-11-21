@@ -1,3 +1,4 @@
+import math
 import unittest
 
 from blockdrawer.commands import apply_commands, batch_digest, format_digest, format_results
@@ -631,6 +632,54 @@ class FieldGradingTests(unittest.TestCase):
             self.assertEqual(model.edge_cells[match.first], model.edge_cells[match.second], match)
             self.assertAlmostEqual(first, second, places=12, msg=str(match))
         block_mesh_dict(model)
+
+    def test_thin_blocks_are_not_sheared_for_nothing(self) -> None:
+        # Round 4's U-bend (trial 4, after the shape step; reference curves
+        # left out): its 5-long band and core blocks along the straight
+        # passes, 0.1 to 0.5 thick. Graded each by the field, the long sides
+        # of a band block took different series and every cell between them
+        # tilted (checkMesh average 11.7); they buy no first height (the
+        # spokes are the short sides) and no jump, so they keep one series.
+        from pathlib import Path
+        from unittest import mock
+
+        from blockdrawer import size as size_module
+        from blockdrawer.quality import wall_first_widths
+        from blockdrawer.sampling import sample_model
+        from blockdrawer.session import load_session
+
+        path = Path(__file__).parent / "data" / "u_bend_round4_shaped.json"
+        line = "size 0.002 0.08 growth=1.15 wall_aspect=25"
+
+        def sized(rise):
+            model = load_session(path)
+            with mock.patch.object(size_module, "FIELD_MEAN_RISE", rise):
+                result = apply_commands(model, [line])
+            return result.model, result.results[0].result
+
+        def logs(model):
+            # The divider's wall edge and the band front above it, read the same way.
+            return [math.log(model.edge_total_expansion(edge_key(*pair))) * (1 if pair[0] < pair[1] else -1)
+                    for pair in (("d_0", "d_1"), ("d_8", "d_7"))]
+
+        sheared, old = sized(None)
+        kept, new = sized(size_module.FIELD_MEAN_RISE)
+        wall, front = logs(sheared)
+        self.assertGreater(abs(wall - front), 0.05)
+        wall, front = logs(kept)
+        self.assertAlmostEqual(wall, front, places=9)
+        self.assertEqual(old["field_grading"]["refused_by_shear"], 0)
+        self.assertEqual(new["field_grading"]["refused_by_shear"], 2)
+        self.assertEqual(new["total_cells"], old["total_cells"])
+        before = sample_model(sheared, 256).summary()["average_non_orthogonality"]
+        after = sample_model(kept, 256).summary()["average_non_orthogonality"]
+        self.assertGreater(before, 10.0)
+        self.assertLess(after, 4.0)
+        # The wall spokes still get the first width asked.
+        for band in wall_first_widths(kept):
+            if band["spokes"]:
+                low, high = band["first_width"]
+                self.assertLess(max(abs(low / 0.002 - 1), abs(high / 0.002 - 1)), 0.01, band)
 
     def test_field_grading_is_deterministic_and_a_command_option(self) -> None:
         first, second = column(), column()

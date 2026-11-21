@@ -567,27 +567,14 @@ SPOKE_CONE = 45.0
 _TANGENT_FRACTION = 1.0e-4
 
 
-def wall_first_widths(
-    model: MeshModel, asked: dict[str, float] | None = None
-) -> list[dict[str, Any]]:
-    """Per wall patch: the first cell height normal to the wall at its spokes.
-
-    At every vertex of a wall patch each edge that is on no wall patch is a
-    candidate spoke. It is a band spoke of the wall edge at that vertex whose
-    inward normal (towards the edge's block, at the vertex, curved edges by
-    their end tangent) is closest to the spoke's leaving direction, when that
-    angle is at most :data:`SPOKE_CONE`; the spoke is reported under that
-    wall edge's patch. Its first width is the height of its first mesh node
-    above the wall edge's tangent line at the vertex: the first cell height
-    normal to the wall, not the width along the edge. An edge with both ends
-    on a wall is measured from each end.
-
-    Each entry gives ``patch``, ``spokes``, ``cells`` (fewest and most on
-    the spokes), ``first_width`` (smallest and largest height),
-    ``first_width_edges`` (the spokes with those two heights), ``other_edges``
-    (non-wall edges at the patch's vertices that are no spoke by the cone
-    rule) and, when ``asked`` names the patch, ``asked``.
-    """
+def band_spokes(
+    model: MeshModel,
+) -> tuple[list[tuple[EdgeKey, str, str, tuple[float, float]]], dict[str, int]]:
+    """The band spokes of every wall patch, as :func:`wall_first_widths`
+    reads them: ``(edge, wall vertex, patch, inward unit normal)`` for each
+    end of an edge on no wall patch at a wall vertex within
+    :data:`SPOKE_CONE` of the inward normal of a wall edge there (the
+    closest), and per patch the edge ends at its vertices outside the cone."""
     walls = {name for name, boundary in model.boundaries.items() if boundary.kind == "wall"}
     occurrences = model.edge_occurrences()
     # Every wall vertex: its wall edges as (patch, tangent, inward normal).
@@ -603,7 +590,7 @@ def wall_first_widths(
             # start and against it from its end.
             normal = (-ty, tx) if vertex == directed[0] else (ty, -tx)
             normals.setdefault(vertex, []).append((name, (tx, ty), normal))
-    spokes: dict[str, list[tuple[float, str, int]]] = {}
+    found: list[tuple[EdgeKey, str, str, tuple[float, float]]] = []
     others: dict[str, int] = {}
     for current in model.edges():
         if model.edge_boundaries.get(current) in walls:
@@ -624,12 +611,46 @@ def wall_first_widths(
                 for patch in {item[0] for item in normals[vertex]}:
                     others[patch] = others.get(patch, 0) + 1
                 continue
-            cells = model.edge_cells[current]
-            index = 1 if vertex == current[0] else cells - 1
-            px, py = model.edge_point(current, model.edge_node_fraction(current, index))
-            origin = model.vertices[vertex]
-            height = (px - origin.x) * normal[0] + (py - origin.y) * normal[1]
-            spokes.setdefault(name, []).append((height, edge_text(current), cells))
+            found.append((current, vertex, name, normal))
+    return found, others
+
+
+def spoke_height(model: MeshModel, current: EdgeKey, vertex: str, normal: tuple[float, float]) -> float:
+    """The height of a spoke's first mesh node from ``vertex`` above the
+    wall's tangent line there (``normal`` the wall's inward unit normal)."""
+    cells = model.edge_cells[current]
+    index = 1 if vertex == current[0] else cells - 1
+    px, py = model.edge_point(current, model.edge_node_fraction(current, index))
+    origin = model.vertices[vertex]
+    return (px - origin.x) * normal[0] + (py - origin.y) * normal[1]
+
+
+def wall_first_widths(
+    model: MeshModel, asked: dict[str, float] | None = None
+) -> list[dict[str, Any]]:
+    """Per wall patch: the first cell height normal to the wall at its spokes.
+
+    At every vertex of a wall patch each edge that is on no wall patch is a
+    candidate spoke. It is a band spoke of the wall edge at that vertex whose
+    inward normal (towards the edge's block, at the vertex, curved edges by
+    their end tangent) is closest to the spoke's leaving direction, when that
+    angle is at most :data:`SPOKE_CONE`; the spoke is reported under that
+    wall edge's patch (:func:`band_spokes`). Its first width is the height of
+    its first mesh node above the wall edge's tangent line at the vertex: the
+    first cell height normal to the wall, not the width along the edge. An
+    edge with both ends on a wall is measured from each end.
+
+    Each entry gives ``patch``, ``spokes``, ``cells`` (fewest and most on
+    the spokes), ``first_width`` (smallest and largest height),
+    ``first_width_edges`` (the spokes with those two heights), ``other_edges``
+    (non-wall edges at the patch's vertices that are no spoke by the cone
+    rule) and, when ``asked`` names the patch, ``asked``.
+    """
+    found, others = band_spokes(model)
+    spokes: dict[str, list[tuple[float, str, int]]] = {}
+    for current, vertex, name, normal in found:
+        height = spoke_height(model, current, vertex, normal)
+        spokes.setdefault(name, []).append((height, edge_text(current), model.edge_cells[current]))
     result = []
     for name in sorted(set(spokes) | set(others)):
         items = spokes.get(name, [])

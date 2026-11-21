@@ -1476,6 +1476,62 @@ moves them by up to 5 percent (band spokes within 5 percent of their
 length). The pass added 1 to 40 seconds to `size` on these sessions (40
 on the high-lift's 241).
 
+**The shear guard** (batch 10, after benchmark round 4). The pass took each
+strip whose sampled grid kept its worst face below the neighbourhood's
+worst, so a strip along thin blocks - a U-bend's 5-long band and core
+blocks, 0.1 to 0.5 thick - took its own series on both long sides and
+tilted every cell between them by up to 29 degrees where the
+neighbourhood's worst face was 40 elsewhere: checkMesh average 11.7 where
+one ratio per strip gives 3.3. Such a strip buys no first width (the spokes
+are the short sides) and no jump. Now a strip's move that raises the
+session's average non-orthogonality by more than a degree
+(`FIELD_MEAN_RISE`: the rise of its blocks' and their neighbours' sampled
+average times their share of the session's faces) is taken only when it
+brings a band spoke's first height nearer the one asked, an interface jump
+at its ends within 2.5, or the worst face there down; otherwise it keeps
+one series (`field_grading.refused_by_shear`). A limit on the neighbourhood's own average (one
+degree) was measured first and failed: a NACA 4412 wake strip's quarter
+step raised its 20 blocks' average by 1.6 degrees (0.51 of the session's),
+and refusing it left the polished maximum at 62.2 degrees for 45.1. Rule
+fixed beforehand, on 58 inputs (the 20-session corpus, the construction
+part of the 19 round-3 and the 19 round-4 hand builds, each through shape
+step, its own `size` line and the polish) against the code before: no
+session gains a checkMesh failure, a face above 70, a cell above aspect
+1000, skewness across 3.5 or 5 percent of cells; no maximum 5 degrees
+higher, at most three 2 higher and no more 2 higher than 2 lower; no jump
+above 5 where there was none and their sum not higher, jumps above 2.5 up
+2 percent at most; no average 1 degree higher and the mean of the 58 down
+by a degree; no wall patch's worst first-height deviation 5 points worse
+and their mean not higher; and on the round-4 sessions that reported the
+shear the average at most half way to `grading=strip`'s, first widths
+within 10 percent. Every term held: 45 sessions size to the same state;
+the mean average 10.23 -> 9.14; no maximum moved by 2 degrees (largest
+rise 1.53, the Y-junction 3c); jumps above 2.5 and 5 summed 458 and 94 on
+both sides; mean worst first-height deviation 22.07 -> 22.00 percent.
+The sessions that changed (checkMesh after the polish):
+
+| session | max | average | jumps >2.5 / >5 | worst first-height deviation, % |
+|---|---|---|---|---|
+| r2_y_junction | 39.99 -> 39.99 | 13.97 -> 13.07 | 0/0 -> 0/0 | 5.1 -> 5.1 |
+| r2_u_bend | 42.29 -> 42.29 | 8.82 -> 6.91 | 0/0 -> 0/0 | 5.0 -> 5.0 |
+| r2_bluff_ground | 45.39 -> 45.39 | 8.17 -> 7.12 | 12/0 -> 12/0 | 29.4 -> 29.4 |
+| r3_u_bend_trial3 | 37.64 -> 37.64 | 15.84 -> 2.96 | 0/0 -> 0/0 | 5.0 -> 5.0 |
+| r3_y_junction_trial3b | 29.14 -> 29.14 | 15.23 -> 11.61 | 0/0 -> 0/0 | 6.3 -> 6.3 |
+| r3_y_junction_trial3c | 32.39 -> 33.92 | 17.28 -> 10.50 | 2/0 -> 2/0 | 53.1 -> 49.5 |
+| r4_elbow_vane_trial4 | 28.50 -> 28.55 | 6.13 -> 5.31 | 0/0 -> 0/0 | 5.1 -> 5.1 |
+| r4_u_bend_trial4 | 38.39 -> 38.39 | 11.67 -> 3.33 | 0/0 -> 0/0 | 5.0 -> 5.0 |
+| r4_u_bend_trial4b | 32.91 -> 32.91 | 12.03 -> 3.31 | 0/0 -> 0/0 | 5.0 -> 5.0 |
+| r4_u_bend_trial4c | 35.09 -> 35.09 | 11.96 -> 2.13 | 0/0 -> 0/0 | 5.0 -> 5.0 |
+| r4_y_junction_trial4 | 32.04 -> 32.12 | 12.68 -> 9.51 | 0/0 -> 0/0 | 5.1 -> 5.0 |
+| r4_y_junction_trial4b | 30.46 -> 30.21 | 14.06 -> 10.11 | 2/0 -> 2/0 | 5.0 -> 5.0 |
+| r4_y_junction_trial4c | 24.92 -> 24.92 | 12.97 -> 11.79 | 0/0 -> 0/0 | 5.7 -> 5.5 |
+
+`grading=strip` on the shear sessions gives 3.31, 1.77, 2.09 (U-bends) and
+9.89 (Y-junction 4b) with first widths 18 to 29 percent fine, so the guard
+reaches strip's average where the strips buy nothing and keeps the first
+width. The splitter plate (14.2) and the cascades (27 to 29) are unchanged:
+their averages come from the blocks' shape, not from this pass.
+
 `method=distance` keeps item 3's sizing reachable (`size_distance.py`, as
 of commit 9a84f29): counts from the wall distance alone, wall-normal edges
 graded, tangential ones uniform, no budget spending, `interface_growth`

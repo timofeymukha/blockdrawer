@@ -69,8 +69,10 @@ With ``grading=field`` (the default; ``grading=strip`` leaves it out) a
 last pass gives each strip member its own series at the final count
 (``_FieldGrading``): a wall spoke starts at the first width asked, an edge
 far from walls relaxes to what the field wants there, within the shear,
-interface-jump and sampled-grid limits of ``_FieldGrading.settle``; counts
-are not changed.
+interface-jump and sampled-grid limits of ``_FieldGrading.settle``; a strip
+that would raise the session's average non-orthogonality by more than
+``FIELD_MEAN_RISE`` and buy no first width, jump or worst face keeps one
+series (the long sides of thin blocks); counts are not changed.
 
 Counts and gradings are written directly: spacing links are kept and the
 ones left out of sync are reported. Everything is deterministic and applied
@@ -155,6 +157,24 @@ JUMP_LIMIT = 2.5
 FIELD_MODES = (1.0, 0.5, 0.25)
 # Rounds of lowering bounds to the partners' widths (_FieldGrading.tighten).
 TIGHTEN_ROUNDS = 20
+# grading=field shears no block for nothing (``_FieldGrading.settle``): a
+# strip's move that raises the session's average face non-orthogonality
+# (checkMesh's measure, sampled: the rise over its blocks and their
+# neighbours times their share of the session's faces) by more than this
+# many degrees is taken only when it buys something - a band spoke's first
+# height nearer the one asked by FIELD_GAIN of it, fewer interface jumps
+# above JUMP_LIMIT at its members' ends, or a worst face there lower by more
+# than VERIFY_TOLERANCE. A U-bend's band and core blocks, 5 long and 0.1 to
+# 0.5 thick, bought none of these and raised the session's average by 4.2
+# degrees a strip (checkMesh 11.7 where one ratio per strip gives 3.3).
+# Measured on the moves the pass took before this guard: a NACA 4412 wake
+# strip's quarter step raised its 20 blocks' average by 1.6 degrees and the
+# session's by 0.51; a limit on the blocks' own average refused it and the
+# polished maximum ended at 62.2 degrees for 45.1, so the limit is on the
+# session's average, at the benchmark's own per-session tolerance of a
+# degree. None leaves the guard out.
+FIELD_MEAN_RISE = 1.0
+FIELD_GAIN = 0.01
 
 
 # checkMesh's aspect ratio limit as size keeps it (shared with smooth's polish).
@@ -687,11 +707,12 @@ def size_model(
         )]))
     if field_grading is not None:
         off = _off_walls(result.bands, 0.10)
-        refused_strips = field_grading["refused_by_jumps"] + field_grading["refused_by_grid"]
+        refused_strips = (field_grading["refused_by_jumps"] + field_grading["refused_by_grid"]
+                          + field_grading.get("refused_by_shear", 0))
         cause = (
             "the field pass was dropped (the verification found it worse than the spent state)"
             if field_grading.get("dropped")
-            else f"{refused_strips} strip(s) kept their shared ratio (refused by the jump or grid guard)"
+            else f"{refused_strips} strip(s) kept their shared ratio (refused by the jump, grid or shear guard)"
             if refused_strips else ""
         )
         if off and cause:
@@ -742,6 +763,7 @@ def _field_pass(working: MeshModel, state: dict, options: SizeOptions) -> tuple[
         "shared": sum(1 for mode in grader.mode if mode == 0.0),
         "refused_by_jumps": grader.refused["jump"],
         "refused_by_grid": grader.refused["grid"],
+        "refused_by_shear": grader.refused["shear"],
     }
     spent = state.get("verification", {}).get("result")
     if spent is None:
@@ -1283,9 +1305,18 @@ class _FieldGrading:
         neighbours, sampled at ``GUARD_CELLS`` a side, gain no fold, no face
         above 70 degrees, no skewness past 4, and keep their worst face below
         ``SHEAR_ANGLE`` and the shared state's worst face, or at most
-        ``VERIFY_TOLERANCE`` above what it was; else it keeps the shared
-        ratio. A refused strip is tried once more together with the refused
-        strips it meets across an interface.
+        ``VERIFY_TOLERANCE`` above what it was, and - the shear guard - that
+        raise the session's average face non-orthogonality (their average's
+        rise times their share of the session's faces) by at most
+        ``FIELD_MEAN_RISE`` unless the move brings a band spoke's first
+        height nearer the one asked, an interface jump at its members' ends
+        within ``JUMP_LIMIT`` or the worst face there down; else it keeps the
+        shared ratio. The
+        worst-face guard alone let a strip along a U-bend's thin blocks tilt
+        every cell by up to 29 degrees (its neighbourhood's worst face was
+        40 elsewhere): checkMesh average 11.7 where one ratio gave 3.3. A
+        refused strip is tried once more together with the refused strips it
+        meets across an interface.
         """
         from .sampling import sample_model
 
@@ -1293,7 +1324,7 @@ class _FieldGrading:
         for current, value in counts.items():
             trial.edge_cells[current] = value
         self.mode = [0.0] * len(self.strips)
-        self.refused = {"jump": 0, "grid": 0}
+        self.refused = {"jump": 0, "grid": 0, "shear": 0}
 
         ratios: dict[EdgeKey, float] = {}
 
@@ -1339,7 +1370,49 @@ class _FieldGrading:
             summary = sample_model(trial, GUARD_CELLS, blocks=blocks, planar=True).summary()
             return (summary.get("folded_cells", 0), summary.get("severe_faces", 0),
                     summary.get("max_skewness", 0.0), summary.get("max_non_orthogonality", 0.0),
-                    summary.get("max_aspect_ratio", 0.0), summary.get("high_aspect_cells", 0))
+                    summary.get("max_aspect_ratio", 0.0), summary.get("high_aspect_cells", 0),
+                    summary.get("average_non_orthogonality", 0.0), summary.get("faces", 0))
+
+        # Each wall spoke end among the members: (vertex, cosine of its
+        # angle to the wall's normal, the first width asked for its patch).
+        spoke_ends: dict[EdgeKey, list[tuple[str, float, float]]] = {}
+        if FIELD_MEAN_RISE is not None:
+            from .quality import _tangent, band_spokes
+
+            overrides = dict(self.options.patch_first_widths)
+            for current, vertex, name, normal in band_spokes(model)[0]:
+                tx, ty = _tangent(model, current, vertex)
+                spoke_ends.setdefault(current, []).append(
+                    (vertex, max(0.0, tx * normal[0] + ty * normal[1]),
+                     overrides.get(name, self.options.first_width)))
+
+        def first_off(members) -> float:
+            """The worst relative miss of the first height asked at the
+            members' band spoke ends (the along-edge width times the cosine
+            of the spoke's angle to the wall's normal)."""
+            worst = 0.0
+            for member in members:
+                for vertex, cosine, wanted in spoke_ends.get(member, ()):
+                    worst = max(worst, abs(width((member, vertex)) * cosine / wanted - 1.0))
+            return worst
+
+        def over_limit(members) -> int:
+            return sum(1 for value in jumps(members).values() if value > JUMP_LIMIT * (1.0 + 1.0e-9))
+
+        def sheared(before, after, members, off_before, over_before) -> bool:
+            """Whether the move shears the blocks for nothing: the session's
+            average face non-orthogonality up by more than ``FIELD_MEAN_RISE``
+            (the rise of the blocks' and their neighbours' average, times
+            their share of the session's faces) with no spoke's first height
+            nearer the one asked, no interface jump brought within
+            ``JUMP_LIMIT`` and no worst face lowered."""
+            if FIELD_MEAN_RISE is None:
+                return False
+            if (after[6] - before[6]) * after[7] / session_faces <= FIELD_MEAN_RISE:
+                return False
+            return not (first_off(members) < off_before - FIELD_GAIN
+                        or over_limit(members) < over_before
+                        or after[3] < before[3] - VERIFY_TOLERANCE)
 
         def finest(strip: int) -> float:
             return min(min(self.bounds[(member, member[0])], self.bounds[(member, member[1])])
@@ -1347,8 +1420,10 @@ class _FieldGrading:
 
         # No block may be sheared past the worst face the shared state
         # already has (a pure H-grid stays at 0 degrees), nor past SHEAR_ANGLE.
-        ceiling = min(SHEAR_ANGLE, sample_model(trial, GUARD_CELLS, planar=True).summary().get(
-            "max_non_orthogonality", 0.0))
+        whole = sample_model(trial, GUARD_CELLS, planar=True).summary()
+        ceiling = min(SHEAR_ANGLE, whole.get("max_non_orthogonality", 0.0))
+        # The faces of the whole session, for a move's share of its average.
+        session_faces = max(1, whole.get("faces", 0))
         order = sorted(
             (strip for strip, orientation in enumerate(self.strips)
              if all(member in scope for member in orientation)
@@ -1382,6 +1457,7 @@ class _FieldGrading:
                 self.mode[strip] = 0.0
             before = verdict(local)
             jumps_before = max(jumps(members).values(), default=1.0)
+            off_before, over_before = first_off(members), over_limit(members)
             reason = "jump"
             for mode in FIELD_MODES:
                 for strip in group:
@@ -1397,7 +1473,9 @@ class _FieldGrading:
                         and not (after[2] > SKEWNESS_LIMIT >= before[2])
                         and not _aspect_worse(before[4], before[5], after[4], after[5])
                         and after[3] <= max(ceiling, before[3] + VERIFY_TOLERANCE)):
-                    return None
+                    if not sheared(before, after, members, off_before, over_before):
+                        return None
+                    reason = "shear"
             for strip in group:
                 self.mode[strip] = 0.0
                 write(strip)

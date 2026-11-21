@@ -204,9 +204,11 @@ them in the canvas widgets.
   warning carries a rank (folded first, then angle defects by degrees from
   90, then size defects by ratio to their limit); `ranked_warnings(N)` and
   `max_warnings` list the worst N, and `worst_blocks` ranks by folded cells
-  then sampled non-orthogonality when sampled. `wall_first_widths` (the
+  then sampled non-orthogonality when sampled.
+  `wall_first_widths` (the
   report's `first_widths`, also `size`'s `bands`) gives per wall patch the
-  first cell height normal to the wall at its band spokes: at a wall
+  first cell height normal to the wall at its band spokes (`band_spokes`,
+  shared with `size`'s field pass): at a wall
   vertex an edge on no wall patch is a spoke of the wall edge there whose
   inward normal (end tangent of curved edges) it is closest to, when within
   `SPOKE_CONE` (45 degrees, inclusive, so a right-angled corner's bisector
@@ -522,14 +524,27 @@ them in the canvas widgets.
   worst touched interface jump stays within the spent one or `JUMP_LIMIT`
   (2.5) and the sampled guard at 256 a side finds no new fold, face above
   70, skewness past 4, nor a worst face above min(`SHEAR_ANGLE`, the spent
-  state's worst) that was not there; refused strips are retried with their
+  state's worst) that was not there, and - the shear guard (batch 10) -
+  whose move raises the session's average non-orthogonality by at most
+  `FIELD_MEAN_RISE` (1 degree: the sampled average's rise over the strip's
+  blocks and their neighbours times their share of the session's faces)
+  unless it buys a band spoke's first height nearer the one asked
+  (`FIELD_GAIN`), fewer interface jumps above `JUMP_LIMIT` at its members'
+  ends or a lower worst face there (refused: "shear"); the worst-face guard
+  alone let a U-bend's thin blocks tilt 29 degrees (average 11.7 for 3.3).
+  Refused strips are retried with their
   refused interface partners; the pass is verified like spending and
   dropped whole if worse. Counts never change. Made the default by a rule
   fixed beforehand (no session gains a face above 70, a jump above 5 or a
   checkMesh failure; corpus jumps above 2.5 do not rise; no maximum +2
   degrees; cells +5 percent; no wall patch's worst first-height deviation
   +5 points and the mean falls): every term held, jumps above 2.5 257 ->
-  177, mean worst deviation 20.4 -> 12.7 percent.
+  177, mean worst deviation 20.4 -> 12.7 percent. The shear guard became
+  the default by batch 10's rule on 58 inputs (README, "The shear guard"):
+  every term held, the mean of the 58 averages 10.23 -> 9.14 with 45
+  sessions unchanged; a guard on the neighbourhood's own average failed it
+  (NACA 4412's polished maximum 45.1 -> 62.2, a jump above 5 gained on
+  three cylinders). `field_grading` gives `refused_by_shear`.
 - `blockdrawer/construct.py`: construction operators behind the registry
   commands `add_grid`, `add_band`, `add_rows`, `add_ring`, `add_stations`,
   `add_fill` and `set_boundary_by`, derived

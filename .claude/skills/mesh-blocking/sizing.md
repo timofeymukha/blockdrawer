@@ -100,17 +100,19 @@ $$
   first height 20 -> 13 percent off on average, NACA 4412 68.6 -> 45.1
   degrees, no session worse by the rule. The high-lift flap stays 84
   percent fine: its spokes' count is tied to the far-field fills.
-  It shears long thin blocks: each strip passes its guard alone, and with
-  both pairs of sides of the same blocks graded apart the cells between
-  them tilt. A U-bend's 5 x 0.15 band blocks: checkMesh average 15.8
-  degrees for 2.6 with `grading=strip` at the same maximum (37.6 / 38.0),
-  where `strip` leaves the first width up to 19 percent fine. The rule
-  that made it the default had no term on the average; a version that
-  kept the strips buying neither a first width nor a jump on their shared
-  ratio gave 2.8 there and failed the rule elsewhere (39 sessions: three
-  maxima +2.1 degrees, a cascade's skewness 2.84 -> 3.66), so it is not
-  in. When the average is several times what the block angles explain,
-  run `size ... grading=strip` on a copy and keep what the brief prefers.
+  A strip's move that would raise the session's average
+  non-orthogonality by more than a degree and buys no spoke's first height,
+  no jump within 2.5 and no lower worst face keeps one series (batch 10):
+  the long sides of thin blocks - a U-bend's 5-long band and core blocks -
+  took their own series on both sides and tilted every cell between them
+  (checkMesh average 11.7 for 3.3 with one ratio; now 3.3 with the first
+  widths unchanged). On 58 benchmark inputs 13 sessions changed, the mean
+  average fell 10.23 -> 9.14, no maximum rose 2 degrees and no jump count
+  rose (README, "The shear guard"). `field_grading` counts the strips kept
+  so (`refused_by_shear`).
+  Where an average is still several times what the block angles explain,
+  it is usually the blocks' shape (the splitter plate 14.2, a cascade
+  28.8, unchanged here); `grading=strip` on a copy remains the comparison.
 - `keep_counts=true` keeps every count, recomputes the gradings and
   regrades strips for continuity without raising a count (after moving
   vertices or setting a count by hand). As a step after the polish on 39
