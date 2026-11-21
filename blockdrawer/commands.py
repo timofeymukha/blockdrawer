@@ -1295,11 +1295,12 @@ _register(CommandSpec(
         "vertices (curved edges carried along), combining it across an internal "
         "edge, splitting one of its edges, or regrading an edge to the series "
         "of its opposite edge - judged on the block and its neighbours by the "
-        "worst cell and the count of severely sheared sampled cells; the "
-        "reason gives checkMesh's worst face and faces above 70 degrees at the "
-        "real counts before and after (shared edges included) and says when "
-        "they got worse; boundary vertices never move, and nothing changes "
-        "when no move helps."
+        "worst cell and the count of severely sheared sampled cells, and "
+        "taken only when checkMesh's faces at the real counts (shared edges "
+        "included) gain none above 70 degrees and the worst face rises by at "
+        "most half a degree; the reason gives the faces before and after, or "
+        "the best candidate refused for them; boundary vertices never move, "
+        "and nothing changes when no move helps."
     ),
     (
         Parameter("block", "str", "block ID"),

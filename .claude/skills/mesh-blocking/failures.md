@@ -23,7 +23,9 @@ shows why.
    edge's series, judges each on the block and its neighbours by the corner
    screen and the sampled interior at real counts, and applies the best (a
    worst cell half a degree better with no more severely sheared cells, or
-   a tenth of them removed with the worst cell kept). Stop when it reports a structural defect or "nothing to
+   a tenth of them removed with the worst cell kept), never one that adds a
+   face above 70 or raises the worst face (real counts; "nothing applied"
+   names the best refused). Stop when it reports a structural defect or "nothing to
    repair" (no severe cell, every angle at least 45 degrees from
    degenerate); the remaining defects are then size jumps or aspect ratios,
    which it does not judge.

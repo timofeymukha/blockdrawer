@@ -307,14 +307,15 @@ them in the canvas widgets.
   interior sampled at the real cell counts (up to 64 a side, through
   `blockdrawer.sampling`), since the
   corner screen alone passed a merge that folded between the corners and a
-  coarser sampling passed a fold of one real cell. The reason gives
-  checkMesh's face non-orthogonality at the real counts over the
-  neighbourhood and every block sharing an edge with it (`_faces`: worst
-  face, faces above 70) before and after, and says when the faces got
-  worse (`RepairScore.faces_hold`): on angles at 64 a side a NACA 4412 move
-  took a block from one face above 70 to seven, 82.7 degrees (round 5).
-  Judging the faces too refused the 12 candidates that improved the angles
-  there; it is not in (batch 12: item 1's guards failed their rule, README). A move must raise the
+  coarser sampling passed a fold of one real cell. A candidate that would
+  be chosen is also judged by checkMesh's face non-orthogonality at the
+  real counts over the neighbourhood and every block sharing an edge with
+  it (`_faces`, `RepairScore.faces_hold`): it is taken only when it gains no
+  face above 70 and its worst face rises by at most `MIN_GAIN` (0.5
+  degrees); the reason gives the faces before and after, and with nothing
+  applied the best candidate refused for its faces with its numbers. On
+  angles alone at 64 a side a NACA 4412 move took a block from one face
+  above 70 to seven, 82.7 degrees (round 5); no default chain calls it. A move must raise the
   worst cell by half a degree without adding severe cells, or keep it and
   remove a tenth of the *severe* sampled cells (a corner within 20 degrees
   of 0 or 180, checkMesh's 70 degrees of non-orthogonality on a sheared

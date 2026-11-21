@@ -940,13 +940,14 @@ regrading an edge to the series of its opposite edge - and applies the one
 that most improves the block and its neighbours, judged on the corner
 screen and the sampled transfinite interior by the worst cell and by the
 count of severely sheared cells (neither may get worse for a gain in the
-other); its reason gives checkMesh's worst face and faces above 70 at the
-real counts over the neighbourhood, shared edges included, before and
-after, and says when they got worse (judged on angles at 64 cells a side,
-a move on a NACA 4412 block took it from one face above 70 to seven, 82.7
-degrees, round 5). It reports when no move helps - a sound
+other), and by checkMesh's face non-orthogonality at the real counts over
+the neighbourhood, shared edges included: a candidate that adds a face
+above 70 or raises the worst face by more than half a degree is not taken
+(judged on angles alone, a move on a NACA 4412 block took it from one face
+above 70 to seven, 82.7 degrees, round 5); the reason gives the faces
+before and after, or the best refused candidate's. It reports when no move helps - a sound
 neighbourhood (no severe cell, every angle at least 45 degrees from
-degenerate) is "nothing to repair", since it judges angles only and size
+degenerate) is "nothing to repair", since it judges angles and faces and size
 jumps and aspect ratios belong to the quality report, and anything else means
 the defect is in the surrounding topology. `move_vertex ... carry_curves=true`
 is the same curve-carrying move on its own.
@@ -1630,11 +1631,11 @@ reported is the real counts: `size`'s `verification` (field and result,
 `cells_per_side` None, `cells_per_side_judged` 256) and the polish's
 `before`, `after` and reason (`REPORT_CELLS`), which changes no session (the
 10 coarsening sessions rerun: identical counts, gradings and checkMesh).
-`repair_block` reports checkMesh's faces at the real counts before and
-after and says when they got worse (on the polished NACA session its move
-took b247 from 69.6 degrees and no face above 70 to 82.7 and seven, and
-says so); judging the faces too refused the 12 candidates that improved
-the angles there, but it is left out with the rest. Time,
+`repair_block`, which no default chain calls, now takes a candidate only
+when the faces at the real counts gain none above 70 and the worst rises
+by at most half a degree (on the polished NACA session its move took b247
+from 69.6 degrees and no face above 70 to 82.7 and seven; now nothing is
+applied and the reason gives that best refused candidate). Time,
 `size` plus the polish on the three longest inputs: high-lift round 5
 958 -> 970 s, round 2 706 -> 718 s, round 3 591 -> 601 s (two to five more
 uncoarsened samples a call; judging at the real counts took a coarsening

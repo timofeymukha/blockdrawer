@@ -147,6 +147,41 @@ class RepairBlockTests(unittest.TestCase):
         # A gain on the worst cell paid for in severe cells is no gain.
         self.assertFalse(RepairScore(14.0, 150.0, 14.0, severe=101).improves(before))
 
+    def test_a_candidate_that_makes_the_faces_worse_is_not_applied(self) -> None:
+        # The sliver of the test above, with every candidate's faces at the
+        # real counts read a face above 70 more and a degree worse than
+        # before (it has one, 70.3 degrees): the move
+        # that opens it is refused and nothing changes.
+        from unittest import mock
+
+        from blockdrawer import repair as repair_module
+        from blockdrawer.session import to_data
+
+        model, _middle = two_by_two(centre=(1.55, 1.42))
+        block = worst_block(model)
+        original = to_data(model)
+        real = repair_module._faces
+        calls = []
+
+        def worse(working, box, score):
+            measured = real(working, box, score)
+            calls.append(measured)
+            if len(calls) == 1:
+                return measured
+            return RepairScore(measured.min_angle, measured.max_angle, measured.interior, measured.severe,
+                               calls[0].max_face + 1.0, calls[0].severe_faces + 1)
+
+        with mock.patch.object(repair_module, "_faces", worse):
+            result = repair_block(model, block)
+        self.assertFalse(result.applied)
+        self.assertEqual(to_data(model), original)
+        self.assertIn("nothing applied", result.reason)
+        self.assertRegex(result.reason, r"faces worst face 70.3 degrees, 1 above 70 -> worst face 71.3 degrees, 2 above 70")
+        # Unpatched, the same repair is applied and keeps the faces.
+        applied = repair_block(model, block)
+        self.assertTrue(applied.applied)
+        self.assertTrue(applied.after.faces_hold(applied.before))
+
     def test_faces_hold_compares_the_faces_at_the_real_counts(self) -> None:
         before = RepairScore(12.0, 150.0, 12.0, severe=10, max_face=62.0, severe_faces=1)
         self.assertTrue(RepairScore(14.0, 150.0, 14.0, 10, 62.4, 1).faces_hold(before))

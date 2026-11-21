@@ -11,11 +11,13 @@ mesh cell so curved edges and grading count, plus the block interiors
 sampled at the real cell counts: a move must raise the worst cell by half a
 degree without adding severely sheared cells, or keep it and cut their
 number by a tenth - the measure a grading move acts on, since a wedge's
-apex angle is what it is however the cells are distributed. The result
-reports checkMesh's face non-orthogonality before and after, measured at
-the real counts over the neighbourhood and the blocks beside it (shared
-edges included): the worst face and the faces above 70 degrees.
-``checkMesh`` remains the authority on the result.
+apex angle is what it is however the cells are distributed. A candidate is
+taken only when checkMesh's face non-orthogonality, measured at the real
+counts over the neighbourhood and the blocks beside it (shared edges
+included), gains no face above 70 degrees and its worst face rises by at
+most ``MIN_GAIN``; the result reports both before and after, and the best
+candidate refused for its faces when nothing is applied. ``checkMesh``
+remains the authority on the result.
 
 Vertices on a boundary edge never move: a wall vertex must stay on the
 geometry and a far-field vertex on the domain. Everything is UI-free and
@@ -44,8 +46,9 @@ MOVES = ("move", "combine", "split", "grade")
 # sampling of eight cells a side passed a vertex move that folded one real
 # cell of a 54-cell edge beside a sliver corner. A move judged on the cells'
 # angles at 64 a side (interior 42.8 -> 47.5) took a NACA 4412 block from one
-# face above 70 degrees to seven, its worst face to 82.7 (round 5): the
-# result reports the faces at the real counts (``_faces``) so that is seen.
+# face above 70 degrees to seven, its worst face to 82.7 (round 5): a
+# candidate is also judged by the faces at the real counts (``_faces``,
+# ``RepairScore.faces_hold``).
 INTERIOR_CELLS = 64
 # The neighbourhood a repair is judged on: every block with a vertex inside
 # the target's neighbourhood box, padded by this fraction - recomputed on
@@ -293,11 +296,14 @@ def repair_block(
     target = next(block for block in model.blocks if block.id == block_id)
 
     best: tuple[tuple, str, dict[str, Any], RepairScore] | None = None
+    # The best candidate refused for its faces at the real counts.
+    refused_best: tuple[tuple, str, dict[str, Any], RepairScore] | None = None
+    faces_refused = 0
     considered = 0
     rejected: list[str] = []
 
     def consider(operation: str, arguments: dict[str, Any], run) -> None:
-        nonlocal best, considered
+        nonlocal best, considered, refused_best, faces_refused
         considered += 1
         working = _copy(model)
         try:
@@ -312,8 +318,18 @@ def repair_block(
             return
         if not score.improves(before):
             return
-        if best is None or score.key() > best[0]:
-            best = (score.key(), operation, arguments, score)
+        if best is not None and score.key() <= best[0]:
+            return
+        # The faces are measured only for a candidate that would be chosen.
+        score = _faces(working, box, score)
+        if not score.faces_hold(before):
+            faces_refused += 1
+            rejected.append(f"{operation} {arguments}: faces at the real counts "
+                            f"{before.faces_text()} -> {score.faces_text()}")
+            if refused_best is None or score.key() > refused_best[0]:
+                refused_best = (score.key(), operation, arguments, score)
+            return
+        best = (score.key(), operation, arguments, score)
 
     if "move" in moves:
         for vertex_id in target.vertices:
@@ -384,6 +400,23 @@ def repair_block(
                     lambda working, k=key, v=canonical: working.set_edge_grading(k, "total_ratio", v),
                 )
 
+    if best is None and refused_best is not None:
+        _key, operation, arguments, refused = refused_best
+        reason = (
+            f"nothing applied around {block_id}: {faces_refused} candidate(s) improved the cells' "
+            f"angles but made checkMesh's faces worse at the real counts (more faces above 70 or "
+            f"the worst face more than {MIN_GAIN:g} degrees higher); the best, {operation} "
+            f"{arguments}, took the corners {before.min_angle:.1f}..{before.max_angle:.1f} "
+            f"(interior {before.interior:.1f}, {before.severe} severe cells) to "
+            f"{refused.min_angle:.1f}..{refused.max_angle:.1f} (interior {refused.interior:.1f}, "
+            f"{refused.severe} severe cells) and the faces {before.faces_text()} -> "
+            f"{refused.faces_text()}: the defect is in the topology or the grading round it"
+        )
+        return RepairResult(
+            block_id, None, {}, before, before, considered, neighbourhood,
+            reason=reason,
+            rejected=tuple(rejected[:8]),
+        )
     if best is None:
         if before.severe == 0 and before.worst >= SOUND_ANGLE:
             reason = (
@@ -391,7 +424,7 @@ def repair_block(
                 f"corner and sampled cell between {before.min_angle:.1f} and "
                 f"{before.max_angle:.1f} degrees ({considered} candidates tried; "
                 f"{before.faces_text()} at the real counts); "
-                "repair_block judges angles only - a cell-size jump or an aspect "
+                "repair_block judges angles and faces only - a cell-size jump or an aspect "
                 "ratio is the quality report's, fixed with split_edge and "
                 "set_edge_grading"
             )
@@ -420,7 +453,6 @@ def repair_block(
     else:
         model.split_edge(tuple(arguments["edge"]), arguments["fraction"])
     model.validate()
-    after = _faces(model, box, after)
     return RepairResult(
         block_id, operation, arguments, before, after, considered, neighbourhood,
         reason=(
@@ -430,7 +462,5 @@ def repair_block(
             f"{after.min_angle:.1f}..{after.max_angle:.1f} (interior {after.interior:.1f}, "
             f"{after.severe} severe cells) degrees; at the real counts {before.faces_text()} -> "
             f"{after.faces_text()}"
-            + ("" if after.faces_hold(before) else
-               " - the faces got worse (repair_block judges cell angles): check, or undo it")
         ),
     )
