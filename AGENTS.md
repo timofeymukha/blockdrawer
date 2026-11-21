@@ -785,7 +785,11 @@ them in the canvas widgets.
   most existing sides first, then the counter-clockwise reading (a half
   annulus), else refuses as ambiguous; the note adds "NOT the only
   reading" with the other non-crossing readings' sides (`sideK=` as to
-  give them) whose region holds no block's centre, and where a side was
+  give them) whose region holds no block's centre and whose path differs
+  from the side taken by more than `SAME_PATH` (a thousandth) of its length
+  (`_same_path`: a single edge or collinear edges against the straight side
+  between them is one reading; 57 of 75 fills of the round-3/4 builds were
+  flagged before this, 3 after), and where a side was
   read open while a walk from its first corner stopped at a branching
   vertex. A walk (`_exterior_walks`) goes on through a vertex with more
   than two exterior edges along the one of them without a patch (a wall

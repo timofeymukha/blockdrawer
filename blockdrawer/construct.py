@@ -3080,9 +3080,15 @@ def add_fill(
                 line += (f" (the exterior chain from {a} stops at {_id_list(stops[k], 3)}, where "
                          "more than one edge without a patch goes on: give the side to follow it)")
             alternatives = []
+            here = _reading_path(working, position, a, b, paths[k], chosen[k])
             for combination in others:
                 choice = combination[k]
                 if str(choice) == str(chosen[k]) or any(str(choice) == str(c) for c in alternatives):
+                    continue
+                # The same path - a single edge or collinear edges against
+                # the straight side between them, stations along one line -
+                # bounds the same region: no other reading.
+                if _same_path(here, _reading_path(working, position, a, b, paths[k], choice)):
                     continue
                 alternatives.append(choice)
             if alternatives:
@@ -3475,6 +3481,30 @@ def _choose_sides(model, occurrences, corners, candidates, paths, position):
         others = [combination for combination in others
                   if not any(_inside(centre, loops[id(combination)]) for centre in centres)]
     return top[0][0], top[0][1], others
+
+
+# Two readings of a fill side are one path when every point of each lies
+# within this fraction of the side's length of the other.
+SAME_PATH = 1.0e-3
+
+
+def _reading_path(model: MeshModel, position, a: str, b: str, path, choice) -> list[Point]:
+    """A fill side's path as a reading takes it: open (straight or along its
+    curve) or through the vertices listed, curved edges sampled."""
+    if isinstance(choice, int):
+        return _open_path(position, a, b, path, choice)
+    return _side_samples(model, choice, position)
+
+
+def _same_path(first: Sequence[Point], second: Sequence[Point]) -> bool:
+    """Whether two polylines between the same corners are one path: each
+    point of either within SAME_PATH of the other's length of the other."""
+    length = max(_polyline_lengths(list(first))[-1], _polyline_lengths(list(second))[-1])
+    tolerance = SAME_PATH * length
+    for points, other in ((first, second), (second, first)):
+        if any(_distance_to(p, other, False) > tolerance for p in points):
+            return False
+    return True
 
 
 def _simple_loop(loop: Sequence[Point]) -> bool:

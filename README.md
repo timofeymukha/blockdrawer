@@ -728,7 +728,8 @@ turn it (the splitter's concave mitres and the high-lift band beside a
 tilted `end=`: 20 and 1354 cells folding on the count-free map before, 0
 after). A fill side walks on through a wall vertex left open along its
 one edge without a patch, and the note says "NOT the only reading" with
-the other side choices. `add_ring near=` picks one of several places where
+the other side choices that take another path (not a single edge or collinear
+edges against the straight side between the same corners). `add_ring near=` picks one of several places where
 a normal occurs; `render --bbox` is `--bounds`, both in the comma form;
 `bbox=` chain selection takes edges lying on the box's sides within the
 operators' tolerance and names the edges at its ends it left out. A grid or

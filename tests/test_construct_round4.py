@@ -116,6 +116,21 @@ class FillSideTests(unittest.TestCase):
         batch = apply_commands(model, [f"add_fill {corners} id=f"])
         self.assertEqual(len(batch.results[0].result["created_blocks"]), 3)
         self.assertEqual(overlapping_blocks(batch.model), [])
+        # The curved front and the straight chord between its ends are two
+        # paths: the note names the other.
+        self.assertIn("NOT the only reading: it also bounds a region open (straight)",
+                      batch.results[0].result["note"])
+
+    def test_one_path_is_one_reading(self) -> None:
+        # A side that is one existing edge, or collinear edges, and the
+        # straight side between the same corners are the same path.
+        model = apply_commands(MeshModel(box=(0, 0, 1, 1)), ["add_grid xs=2,3 ys=0,1"]).model
+        note = apply_commands(model, ["add_fill points=1,0;2,0;2,1;1,1"]).results[0].result["note"]
+        self.assertNotIn("NOT the only reading", note)
+        model = apply_commands(MeshModel(box=(0, 0, 1, 1)), ["add_grid xs=1,2,3 ys=3,4",
+                                                              "add_grid xs=3,4 ys=0,1,2,3"]).model
+        note = apply_commands(model, ["add_fill v2,v13,v8,v4"]).results[0].result["note"]
+        self.assertNotIn("NOT the only reading", note)
 
     def test_the_note_names_another_reading(self) -> None:
         # Corners on two separate blocks: side 2 is either the long chain
