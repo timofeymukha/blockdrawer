@@ -198,6 +198,20 @@ class DigestTests(unittest.TestCase):
         self.assertEqual(digest["created_counts"]["blocks"], len(batch.model.blocks))
         self.assertEqual(digest["removed_counts"]["blocks"], 1)
 
+    def test_moved_corners_keep_a_block(self) -> None:
+        # smooth moves every free vertex: no block is made or removed.
+        model = apply_commands(MeshModel(box=(0, 0, 1, 1)), ["add_grid xs=0,1,2 ys=0,1,2",
+                                                              "move_vertex v2 dx=0.3 dy=0.2"]).model
+        batch = apply_commands(model, ["move_vertex v2 dx=-0.1 dy=0.05"])
+        digest = batch_digest(model, batch)
+        self.assertNotIn("blocks", digest["created_counts"])
+        self.assertNotIn("blocks", digest["removed_counts"])
+        batch = apply_commands(model, ["smooth"])
+        self.assertNotEqual((batch.model.vertices["v2"].x, batch.model.vertices["v2"].y), (1.3, 1.2))
+        digest = batch_digest(model, batch)
+        self.assertNotIn("blocks", digest["created_counts"])
+        self.assertNotIn("blocks", digest["removed_counts"])
+
 
 class CommandLineTests(unittest.TestCase):
     def test_validate_names_blocks_over_one_another(self) -> None:

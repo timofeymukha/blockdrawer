@@ -169,8 +169,10 @@ them in the canvas widgets.
   (both), `between=A,B` with `fraction` (default 0.5, the straight way from
   A to B, both), `x_of`/`y_of`, or (moving) the vertex's own; `dx`/`dy`
   added last; a coordinate given twice or missing is refused by name.
-  The digest counts a block whose ID was taken again by a new block (two
-  corners or fewer kept, by ID and position) as removed and created.
+  The digest counts a block whose ID was taken again by a new block as
+  removed and created: a block is the same while its ID keeps the same
+  corner vertex IDs, wherever they moved (smooth), or keeps two corners in
+  place by ID and position (a split or a merge).
 - `blockdrawer/command_line.py`: shared shell-like tokenization for textual
   commands and OpenFOAM command prefixes. POSIX hosts use normal shell escaping;
   Windows preserves path backslashes while retaining POSIX quote grouping for

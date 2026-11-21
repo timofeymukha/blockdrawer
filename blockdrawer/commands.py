@@ -2637,16 +2637,21 @@ def batch_digest(
         return [identifier for identifier in new if identifier not in known]
 
     # A block ID taken again by a new block (the placeholder b0 removed and
-    # an operator's first block named b0) is a block removed and one made:
-    # a block counts as the same only while it keeps at least two of its
-    # corners (a split or a merge keeps them, a new block does not).
-    # (Corners by ID and position: a vertex ID is taken again too.)
+    # an operator's first block named b0) is a block removed and one made.
+    # A block is the same while its ID keeps the same corner vertex IDs,
+    # wherever they moved (smooth moves every corner), or keeps at least two
+    # of its corners in place (a split or a merge); a vertex ID is taken
+    # again too, so a corner kept in place is one with the same ID and
+    # position.
+    old_ids = {b.id: set(b.vertices) for b in before.blocks}
+    new_ids = {b.id: set(b.vertices) for b in after.blocks}
     old_corners = {b.id: {(v, before.vertices[v].x, before.vertices[v].y) for v in b.vertices}
                    for b in before.blocks}
     new_corners = {b.id: {(v, after.vertices[v].x, after.vertices[v].y) for v in b.vertices}
                    for b in after.blocks}
     remade = {identifier for identifier, corners in new_corners.items()
-              if identifier in old_corners and len(corners & old_corners[identifier]) < 2}
+              if identifier in old_corners and new_ids[identifier] != old_ids[identifier]
+              and len(corners & old_corners[identifier]) < 2}
 
     def blocks_appeared(old: dict, new: dict) -> list[str]:
         return [identifier for identifier in new if identifier not in old or identifier in remade]
