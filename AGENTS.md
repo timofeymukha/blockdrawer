@@ -142,13 +142,23 @@ them in the canvas widgets.
   percent, and the two spokes named), `worst_jump` (quality's interface measure on the sized session,
   with the counts above 2.5/5/20), `jump_cost`, `splits`, `moves`, `guard`,
   `refused`, `raised` (the three components spending raised the most cells
-  into, "EDGE FROM->TO +CELLS", `size._raised`), `field_cells_after_splits`
+  into, "EDGE FROM->TO +CELLS", `size._raised`, followed, where the
+  component holds band spokes, by "through band spokes of PATCH
+  (LOW%..HIGH%)" - their first heights against the one asked,
+  `size._raised_through_spokes`), `field_cells_after_splits`
   (the field solved again on continuity splits' blocks), `note`, empty ones
   left out. `size`'s note says, when it applies, that continuity splits
   changed the cells after spending (so a larger budget can end with fewer
   cells), and which wall patches end more than 10 percent off the first
   width asked when the field pass was dropped or strips kept their shared
-  ratio (`size._off_walls`). Parameter kinds `blocks` (block IDs) and `numbers` (a list of
+  ratio (`size._off_walls`), naming then the refused strips that leave
+  band spokes more than 10 percent off - one member edge each and the
+  guard, with up to `NAMED_SPOKES` spokes and their misses, at most
+  `NAMED_STRIPS` strips (`size._refused_spokes`; the result's
+  `field_grading.refused_strips` lists every refused strip as "EDGE
+  (jump|grid|shear)"). A `set_first_width` note gives the spokes graded,
+  the first widths and the jumps before -> after, and the edges opposite a
+  spoke with the largest tilt left. Parameter kinds `blocks` (block IDs) and `numbers` (a list of
   floats, e.g. a bbox) serve `smooth`; `locations` (`_coerce_locations`:
   `x,y` points or vertex IDs, separated by `;`, each ID its vertex's
   position) serves `add_ring`/`add_stations` `points=` and `smooth`'s
@@ -204,11 +214,12 @@ them in the canvas widgets.
   warning carries a rank (folded first, then angle defects by degrees from
   90, then size defects by ratio to their limit); `ranked_warnings(N)` and
   `max_warnings` list the worst N, and `worst_blocks` ranks by folded cells
-  then sampled non-orthogonality when sampled.
+  then sampled non-orthogonality when sampled. The corner screen's maximum
+  cell growth names its edge (`max_cell_growth_edge`).
   `wall_first_widths` (the
   report's `first_widths`, also `size`'s `bands`) gives per wall patch the
   first cell height normal to the wall at its band spokes (`band_spokes`,
-  shared with `size`'s field pass): at a wall
+  `spoke_height`, shared with `size`'s note and `first_width.py`): at a wall
   vertex an edge on no wall patch is a spoke of the wall edge there whose
   inward normal (end tangent of curved edges) it is closest to, when within
   `SPOKE_CONE` (45 degrees, inclusive, so a right-angled corner's bisector
@@ -544,7 +555,8 @@ them in the canvas widgets.
   every term held, the mean of the 58 averages 10.23 -> 9.14 with 45
   sessions unchanged; a guard on the neighbourhood's own average failed it
   (NACA 4412's polished maximum 45.1 -> 62.2, a jump above 5 gained on
-  three cylinders). `field_grading` gives `refused_by_shear`.
+  three cylinders). `field_grading` gives `refused_by_shear` and
+  `refused_strips` ("EDGE (jump|grid|shear)").
 - `blockdrawer/construct.py`: construction operators behind the registry
   commands `add_grid`, `add_band`, `add_rows`, `add_ring`, `add_stations`,
   `add_fill` and `set_boundary_by`, derived
@@ -757,6 +769,19 @@ them in the canvas widgets.
   same skewness refusal and reports `verification` with field == result.
   Kept because it is the only path to the fine 30P30N's 0 faces above 70
   (452,791 cells, 68.83 degrees after the polish); do not develop it.
+- `blockdrawer/first_width.py`: `set_first_width`, behind the registry
+  command `set_first_width WIDTH [patch=A,B] [opposite=keep|follow]`:
+  every band spoke of the wall patches (`quality.band_spokes`, the ones
+  `first_widths` reads; default every wall patch) is graded so its first
+  node lies WIDTH above the wall's tangent line (a start width along the
+  spoke corrected by the height found, `ITERATIONS`), counts kept. An edge
+  opposite a spoke in a block that is not itself a spoke is `keep` (left;
+  the lines across that block tilt, the largest tilt reported) or `follow`
+  (the spoke's node fractions, the mean log ratio of several). One-cell
+  spokes and spokes with both ends on a wall are left and listed. The
+  result and the digest note (`commands._note`) give the first widths and
+  quality's interface jumps before and after. Written directly like
+  `size` (spacing links not synchronized); one validated edit.
 - `blockdrawer/render.py`: headless SVG/PNG rendering through one layout routine
   and two painters. Labels (vertex IDs, block IDs, cell counts, patch legend)
   are on by default (`--no-labels` turns the first three off, as the MCP

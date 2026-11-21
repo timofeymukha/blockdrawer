@@ -91,6 +91,9 @@ class BlockQuality:
     interior: BlockSample | None = None
     # One (tier, magnitude) rank per warning, for the worst-first listing.
     warning_ranks: tuple[tuple[int, float], ...] = ()
+    # The edge with the largest cell-to-cell ratio, so the growth printed
+    # can be read off that edge (round 4: 1.205 was read as a ring spoke's).
+    max_cell_growth_edge: EdgeKey | None = None
 
 
 @dataclass(frozen=True)
@@ -141,6 +144,12 @@ class QualityReport:
             ),
             "max_cell_growth_ratio": max(
                 block.max_cell_growth_ratio for block in self.blocks
+            ),
+            "max_cell_growth_edge": next(
+                (edge_text(block.max_cell_growth_edge)
+                 for block in sorted(self.blocks, key=lambda item: -item.max_cell_growth_ratio)
+                 if block.max_cell_growth_edge is not None),
+                None,
             ),
             "min_cell_size": min(block.min_cell_size for block in self.blocks),
             "max_cell_size": max(block.max_cell_size for block in self.blocks),
@@ -477,7 +486,9 @@ def format_quality(
             f"  corner screen: cell sizes {_num(summary['min_cell_size'])} .. "
             f"{_num(summary['max_cell_size'])}, max corner-cell aspect ratio "
             f"{_num(summary['max_cell_aspect_ratio'])}, max cell growth ratio "
-            f"{_num(summary['max_cell_growth_ratio'])}, max size jump across "
+            f"{_num(summary['max_cell_growth_ratio'])}"
+            + (f" (on {summary['max_cell_growth_edge']})" if summary.get("max_cell_growth_edge") else "")
+            + f", max size jump across "
             f"internal edges {_num(summary['max_interface_size_ratio'])}"
         )
     if report.first_widths:
@@ -743,11 +754,14 @@ def _block_quality(
     max_aspect = max(corner.aspect_ratio for corner in corners)
 
     growth = 1.0
+    growth_edge: EdgeKey | None = None
     sizes: list[float] = []
     for current in edges:
         values = model.edge_grading_values(current)
         ratio = values.cell_ratio
-        growth = max(growth, ratio, 1.0 / ratio if ratio > 0 else math.inf)
+        edge_growth = max(ratio, 1.0 / ratio if ratio > 0 else math.inf)
+        if edge_growth > growth:
+            growth, growth_edge = edge_growth, current
         sizes.extend((values.start_width, values.end_width))
 
     corner_points = [
@@ -841,6 +855,7 @@ def _block_quality(
         tuple(warnings),
         interior,
         tuple(ranks),
+        growth_edge,
     )
 
 

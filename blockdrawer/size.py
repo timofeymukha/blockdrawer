@@ -705,7 +705,11 @@ def size_model(
             "before them, and the budget was spent again from there: a larger budget can end with "
             "fewer cells than a smaller one"
         )]))
+    spokes = _spoke_misses(working, options)
+    if result.raised:
+        result.raised = _raised_through_spokes(working, moves, spokes)
     if field_grading is not None:
+        members = field_grading.pop("_refused_members", {})
         off = _off_walls(result.bands, 0.10)
         refused_strips = (field_grading["refused_by_jumps"] + field_grading["refused_by_grid"]
                           + field_grading.get("refused_by_shear", 0))
@@ -716,8 +720,15 @@ def size_model(
             if refused_strips else ""
         )
         if off and cause:
+            named = "" if field_grading.get("dropped") else _refused_spokes(members, spokes)
+            if not named and not field_grading.get("dropped"):
+                # The spokes off are in no refused strip: say where else to look.
+                named = "no refused strip holds the spokes off" + (
+                    " (a raise through them: raised)"
+                    if any("through band spokes" in item for item in result.raised) else "")
             result.note = "; ".join(filter(None, [result.note, (
                 f"{cause}: first widths more than 10 percent off the one asked on {'; '.join(off)}"
+                + (f" - {named}" if named else "")
             )]))
     field_faces = result.verification.get("field", {}).get("severe_faces", 0)
     if field_faces:
@@ -764,6 +775,15 @@ def _field_pass(working: MeshModel, state: dict, options: SizeOptions) -> tuple[
         "refused_by_jumps": grader.refused["jump"],
         "refused_by_grid": grader.refused["grid"],
         "refused_by_shear": grader.refused["shear"],
+        # Each strip kept on its shared ratio by a guard: one member edge
+        # (its smallest) and the guard, "EDGE (jump|grid|shear)".
+        "refused_strips": [
+            f"{'-'.join(min(grader.strips[index]))} ({reason})"
+            for index, reason in sorted(getattr(grader, "refused_strips", {}).items(),
+                                        key=lambda item: min(grader.strips[item[0]]))
+        ],
+        "_refused_members": {index: (reason, sorted(grader.strips[index]))
+                             for index, reason in getattr(grader, "refused_strips", {}).items()},
     }
     spent = state.get("verification", {}).get("result")
     if spent is None:
@@ -811,6 +831,78 @@ def _off_walls(bands: list[dict], limit: float) -> list[str]:
             found.append(f"{band['patch']} {low:.3g}..{high:.3g} for {asked:.3g} "
                          f"({100.0 * (low / asked - 1.0):+.0f}%..{100.0 * (high / asked - 1.0):+.0f}%)")
     return found
+
+
+# The note names at most this many strips, and spokes per strip.
+NAMED_STRIPS = 4
+NAMED_SPOKES = 3
+# A spoke is off when its first height leaves the one asked by more than this.
+OFF_FRACTION = 0.10
+
+
+def _spoke_misses(model: MeshModel, options: SizeOptions) -> dict[EdgeKey, tuple[str, float]]:
+    """Every band spoke (:func:`blockdrawer.quality.band_spokes`): its wall
+    patch and its first height's relative miss of the one asked there."""
+    from .quality import band_spokes, spoke_height
+
+    overrides = dict(options.patch_first_widths)
+    found = {}
+    for current, vertex, name, normal in band_spokes(model)[0]:
+        asked = overrides.get(name, options.first_width)
+        miss = spoke_height(model, current, vertex, normal) / asked - 1.0
+        if current not in found or abs(miss) > abs(found[current][1]):
+            found[current] = (name, miss)
+    return found
+
+
+def _refused_spokes(members: dict, spokes: dict[EdgeKey, tuple[str, float]]) -> str:
+    """The strips a guard kept on their shared ratio that leave band spokes
+    more than ``OFF_FRACTION`` off: "strip of EDGE (jump): A-B -22%, ..."."""
+    items = []
+    for index, (reason, edges) in members.items():
+        off = sorted(((miss, edge) for edge in edges
+                      for _name, miss in [spokes.get(edge, ("", 0.0))] if abs(miss) > OFF_FRACTION),
+                     key=lambda item: (-abs(item[0]), item[1]))
+        if off:
+            items.append((-max(abs(miss) for miss, _edge in off), "-".join(min(edges)), reason, off))
+    items.sort()
+    parts = []
+    for _key, edge, reason, off in items[:NAMED_STRIPS]:
+        named = ", ".join(f"{'-'.join(spoke)} {100.0 * miss:+.0f}%" for miss, spoke in off[:NAMED_SPOKES])
+        more = f" and {len(off) - NAMED_SPOKES} more" if len(off) > NAMED_SPOKES else ""
+        parts.append(f"strip of {edge} ({reason}): {named}{more}")
+    if not parts:
+        return ""
+    more = f"; {len(items) - NAMED_STRIPS} more strip(s)" if len(items) > NAMED_STRIPS else ""
+    return "the strips and the spokes they leave off: " + "; ".join(parts) + more
+
+
+def _raised_through_spokes(model: MeshModel, moves: list[dict],
+                           spokes: dict[EdgeKey, tuple[str, float]]) -> list[str]:
+    """``_raised``'s entries, each followed - where the component it raised
+    holds band spokes - by the wall patches and the spokes' first heights
+    against the one asked: a raise through a band's spokes gives every spoke
+    the component's count, and where the field pass cannot grade each from
+    the wall the first width moves with it."""
+    component_of = {}
+    for members in count_components(model):
+        for member in members:
+            component_of[member] = members
+    named = {"-".join(member): member for member in component_of}
+    entries = []
+    for text in _raised(moves):
+        members = component_of.get(named.get(text.split(" ", 1)[0]), [])
+        hit: dict[str, list[float]] = {}
+        for member in members:
+            if member in spokes:
+                name, miss = spokes[member]
+                hit.setdefault(name, []).append(miss)
+        if hit:
+            text += " through band spokes of " + ", ".join(
+                f"{name} ({100.0 * min(values):+.0f}%..{100.0 * max(values):+.0f}%)"
+                for name, values in sorted(hit.items()))
+        entries.append(text)
+    return entries
 
 
 def _brief(summary: dict) -> dict:
@@ -1495,6 +1587,7 @@ class _FieldGrading:
                     refused.pop(other, None)
         for reason in refused.values():
             self.refused[reason] += 1
+        self.refused_strips = dict(refused)
 
     def _solve(self, strip: int, cells: int) -> dict[EdgeKey, float]:
         members = sorted(self.strips[strip])

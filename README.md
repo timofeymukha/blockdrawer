@@ -813,7 +813,8 @@ degrees of it (a wake line leaving a sharp trailing edge and an edge
 running on along the wall's line are not spokes), and its first width is
 the height of its first node above that wall edge's tangent at the vertex;
 the spokes with the smallest and largest heights are named, and the edges
-at the wall left out by the rule are counted. These remain
+at the wall left out by the rule are counted. The corner screen's maximum
+cell growth names its edge. These remain
 screening measures; `checkMesh` is the authority. `render` draws the topology with vertex IDs, block IDs, cell
 counts, patch colors, reference curves, and spacing links to SVG (standard
 library) or PNG (requires Pillow, `pip install blockdrawer[png]`); `--zoom`
@@ -1489,7 +1490,8 @@ session's average non-orthogonality by more than a degree
 average times their share of the session's faces) is taken only when it
 brings a band spoke's first height nearer the one asked, an interface jump
 at its ends within 2.5, or the worst face there down; otherwise it keeps
-one series (`field_grading.refused_by_shear`). A limit on the neighbourhood's own average (one
+one series (`field_grading.refused_by_shear`, and `refused_strips` lists
+every refused strip). A limit on the neighbourhood's own average (one
 degree) was measured first and failed: a NACA 4412 wake strip's quarter
 step raised its 20 blocks' average by 1.6 degrees (0.51 of the session's),
 and refusing it left the polished maximum at 62.2 degrees for 45.1. Rule
@@ -1548,6 +1550,32 @@ worse on both: the NACA 4412 C-grid 88,555 cells with 2,088 faces above 70
 and a worst jump of 19.2, where the default's polish had already cleared
 the faces. Polish and `check` first; keep a `method=distance` mesh only
 when `check` prefers it.
+
+`set_first_width WIDTH [patch=A,B] [opposite=keep|follow]` makes the first
+width a result instead of a step: every band spoke of the wall patches
+(default: all of type `wall`; the spokes `first_widths` reads) is graded so
+its first node lies WIDTH above the wall's tangent line, counts kept. An
+edge opposite a spoke in a block that is not itself a spoke is left
+(`keep`; the lines across that block tilt, and the largest tilt is
+reported) or given the spoke's node fractions (`follow`); one-cell spokes
+and spokes with both ends on a wall are left and listed. The result gives
+the first widths and the interface jumps before and after. Round 4's
+trials wrote 13 `set_edge_grading ... start_width` lines for this on one
+case and `propagate=true` lines on two. Their reproducers, each build
+replayed with the hand lines replaced (checkMesh, first widths, jumps above
+2.5/5):
+
+| build | before the hand lines | as delivered | `set_first_width` (`keep`) | `opposite=follow` |
+|---|---|---|---|---|
+| bluff body over ground, 13 `start_width` lines | body -32..+5%, 42.84 (5.317), 8/0 | body -0.5..0%, 42.84 (5.311), 9/0 | body 0%, 42.84 (5.311), 9/0 | body 0%, 46.54 (5.311), 15/0 |
+| cavity in a channel, 3 `propagate=true` lines | bottom -7%, 0 (0), 0/0 | 0%, 0 (0), 0/0 | 0%, 1.31 (0.08), 0/0 | 0%, 0 (0), 0/0 |
+| U-bend 4c, 1 `propagate=true` line (`patch=divider`) | divider -15..-6%, 38.63 (2.182) | divider -5..+5%, 38.63 (2.183) | divider 0%, 38.63 (2.180) | - |
+| blunt plate, nothing done | plate -22..+2%, 37.13 (3.994), 14/0 | - | plate 0%, 37.13 (3.998), 14/0 | 0%, 37.13 (3.949), 31/8 |
+| airfoil in a tunnel, nothing done | airfoil -22..-10%, 35.28 (3.928), 0/0 | - | airfoil 0%, 35.28 (3.919), 0/0 | 0%, 35.28 (3.892), 2/0 |
+
+`keep` is the default: `follow` matches a pure H-grid's `propagate=true`
+(the cavity) but carries the wall's spacing along wake and far-field strips
+elsewhere.
 
 Known limit - counts are never lowered: spending only adds cells, so a
 count the field sets too high stays. On the coarse 30P30N the 0.0019-long

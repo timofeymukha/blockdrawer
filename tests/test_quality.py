@@ -68,6 +68,11 @@ class BlockQualityTests(unittest.TestCase):
         report = assess_quality(model)
         block = report.blocks[0]
         self.assertGreater(block.max_cell_growth_ratio, 1.6)
+        # The growth printed names its edge, so a reader computes it there.
+        self.assertEqual(block.max_cell_growth_edge, bottom)
+        self.assertEqual(report.summary()["max_cell_growth_edge"], "v0-v1")
+        self.assertIn("max cell growth ratio", format_quality(report))
+        self.assertIn("(on v0-v1)", format_quality(report))
         corners = {corner.vertex: corner for corner in block.corners}
         self.assertLess(corners["v0"].x_width, corners["v0"].y_width)
         self.assertGreater(corners["v1"].x_width, corners["v1"].y_width)

@@ -670,6 +670,7 @@ class FieldGradingTests(unittest.TestCase):
         self.assertAlmostEqual(wall, front, places=9)
         self.assertEqual(old["field_grading"]["refused_by_shear"], 0)
         self.assertEqual(new["field_grading"]["refused_by_shear"], 2)
+        self.assertIn("d_0-d_1 (shear)", new["field_grading"]["refused_strips"])
         self.assertEqual(new["total_cells"], old["total_cells"])
         before = sample_model(sheared, 256).summary()["average_non_orthogonality"]
         after = sample_model(kept, 256).summary()["average_non_orthogonality"]
@@ -906,6 +907,40 @@ class SizeNoteTests(unittest.TestCase):
             result = size_model(band(), SizeOptions(0.001, 0.1, growth=1.2))
         self.assertIn("the field pass was dropped", result.note)
         self.assertIn("first widths more than 10 percent off the one asked on wall", result.note)
+
+    def test_a_refused_strip_is_named_with_the_spokes_it_leaves_off(self) -> None:
+        from unittest import mock
+
+        from blockdrawer import size as size_module
+
+        spokes = sorted(edge_key(a, b) for a, b in (("w0", "t0"), ("w1", "t1"), ("w2", "t2")))
+
+        def refused(working, state, options):
+            # The spent state (one ratio along the strip of spokes), its strip
+            # reported refused by the grid guard.
+            return state, {"strips": 1, "own": 0, "part": 0, "shared": 1, "refused_by_jumps": 0,
+                           "refused_by_grid": 1, "refused_by_shear": 0, "refused_strips": ["t0-w0 (grid)"],
+                           "_refused_members": {0: ("grid", spokes)}}
+
+        with mock.patch.object(size_module, "_field_pass", side_effect=refused):
+            result = size_model(band(), SizeOptions(0.001, 0.1, growth=1.2))
+        self.assertIn("1 strip(s) kept their shared ratio", result.note)
+        self.assertRegex(result.note, r"the strips and the spokes they leave off: strip of t0-w0 \(grid\): "
+                                      r"t\d-w\d [+-]\d+%")
+        self.assertNotIn("_refused_members", result.field_grading)
+
+    def test_a_raise_through_band_spokes_says_so(self) -> None:
+        from blockdrawer.size import _raised_through_spokes, _spoke_misses
+
+        model = band()
+        size_model(model, SizeOptions(0.001, 0.1, growth=1.2, grading="strip"))
+        misses = _spoke_misses(model, SizeOptions(0.001, 0.1))
+        self.assertEqual(sorted(misses), sorted(edge_key(a, b) for a, b in (("w0", "t0"), ("w1", "t1"), ("w2", "t2"))))
+        moves = [{"kind": "raise", "component": 0, "edge": "t1-w1", "from": 10, "to": 13, "cells": 60},
+                 {"kind": "raise", "component": 1, "edge": "t0-t1", "from": 10, "to": 12, "cells": 20}]
+        through, other = _raised_through_spokes(model, moves, misses)
+        self.assertRegex(through, r"^t1-w1 10->13 \+60 through band spokes of wall \([+-]\d+%\.\.[+-]\d+%\)$")
+        self.assertEqual(other, "t0-t1 10->12 +20")
 
     def test_the_note_separates_its_sentences(self) -> None:
         from unittest import mock

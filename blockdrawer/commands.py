@@ -1515,6 +1515,34 @@ _register(CommandSpec(
     ),
     _run_size,
 ))
+def _run_set_first_width(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
+    from .first_width import set_first_width
+
+    patches = [name.strip() for name in (args.get("patch") or "").split(",") if name.strip()]
+    return set_first_width(model, args["width"], patches, args["opposite"])
+
+
+_register(CommandSpec(
+    "set_first_width",
+    (
+        "Grade every band spoke of the wall patches (default: all of type wall) so "
+        "its first cell height normal to the wall is width - the spokes quality's "
+        "first_widths reads - keeping every count. An edge opposite a spoke in a "
+        "block that is not itself a spoke keeps its grading (opposite=keep: the "
+        "lines across that block tilt, reported) or takes the spoke's node "
+        "fractions, and so on along the strip to the next spoke (opposite=follow, "
+        "as set_edge_grading propagate=true sweeps). Reports the first widths and the interface "
+        "jumps before and after; one-cell and two-ended spokes are left and listed."
+    ),
+    (
+        Parameter("width", "float", "first cell height normal to the wall"),
+        Parameter("patch", "optional_str", "wall patch names, comma separated (default: every wall patch)",
+                  required=False, default=None),
+        Parameter("opposite", "choice", "edges opposite a spoke that are no spoke: keep or follow",
+                  required=False, default="keep", choices=("keep", "follow")),
+    ),
+    _run_set_first_width,
+))
 def _run_add_grid(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
     from .construct import add_grid
 
@@ -2474,6 +2502,34 @@ def _note(result: CommandResult) -> dict[str, Any] | None:
         }
     if result.name == "size":
         return {**base, **_size_note(data)}
+    if result.name == "set_first_width":
+        def widths(item: dict[str, Any]) -> str:
+            asked = data["width"]
+            return " | ".join(
+                f"{patch} {low:.3g}..{high:.3g} ({100.0 * (low / asked - 1.0):+.0f}%..{100.0 * (high / asked - 1.0):+.0f}%)"
+                for patch, (low, high) in sorted(item.items())
+            )
+
+        def jumps(item: dict[str, Any]) -> str:
+            return f"worst {item['worst']:.3g}, above 2.5/5: {item['above_2_5']}/{item['above_5']}"
+
+        note = {
+            **base,
+            "spokes": data.get("spokes"),
+            "first_width": f"{widths(data['first_width_before'])} -> {widths(data['first_width_after'])}",
+            "jumps": f"{jumps(data['jumps_before'])} -> {jumps(data['jumps_after'])}",
+            "opposite": (
+                f"{data['opposite_edges']} edge(s) opposite a spoke, {data['opposite']}"
+                + (f" ({data['followed_edges']} edge(s) along their strips)" if data.get("followed_edges") else "")
+                + (f", lines across tilt up to {data['max_tilt']:.3g} deg ({'; '.join(data['worst_tilt'][:3])})"
+                   if data.get("worst_tilt") and data["max_tilt"] > 1.0e-6 else "")
+                if data.get("opposite_edges") else None
+            ),
+            "one_cell": data.get("one_cell") or None,
+            "two_ended": data.get("two_ended") or None,
+            "not_reached": data.get("not_reached") or None,
+        }
+        return {key: value for key, value in note.items() if value is not None}
     if result.name in ("add_grid", "add_band", "add_ring", "add_fill", "add_rows"):
         note = {
             **base,

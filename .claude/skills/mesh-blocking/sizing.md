@@ -85,9 +85,21 @@ $$
   wall, 4.05e-4 .. 5.23e-4 for 5e-4 and 0.00144 .. 0.00193 for 0.002 (up
   to 28 percent finer). A spoke leaving the wall obliquely (a
   trailing-edge fan, a corner) gets the larger size the field asks along
-  it. For a hard $y^+$ ceiling ask a little coarser, or set the spokes'
-  `start_width` by hand (`set_edge_grading`) as the last sizing step: a
-  later `size`, `keep_counts=true` included, regrades them.
+  it. For a hard $y^+$ ceiling ask a little coarser, or run `set_first_width
+  W` as the last sizing step: every band spoke of the wall patches (`patch=`
+  to choose) gets the first height W, counts kept, and the result gives
+  the first widths and the interface jumps before and after. An edge
+  opposite a spoke that is no spoke keeps its grading (`opposite=keep`,
+  the tilt across that block reported) or takes the spoke's
+  (`opposite=follow`). A later `size`, `keep_counts=true` included,
+  regrades the spokes. Round 4's reproducers: a bluff body's 13 hand
+  `start_width` lines are one `set_first_width 5e-4 patch=body` (body
+  -32..+5 -> 0 percent, the same checkMesh, jumps above 2.5 8 -> 9 as
+  with the hand lines); a cavity's three `propagate=true` lines are
+  `set_first_width 0.001 opposite=follow` (checkMesh 0 degrees as by
+  hand; `keep` leaves 1.3); a blunt plate and an airfoil 22 percent fine
+  -> exact with `keep` at the same checkMesh, where `follow` carried the
+  wall's spacing down the wake strips (blunt plate: jumps above 5 0 -> 8).
 - `grading=field` (the default; `grading=strip` leaves it out): after
   spending, each strip member is
   graded at its count by the field where it lies - a wall spoke starts at
@@ -109,7 +121,7 @@ $$
   widths unchanged). On 58 benchmark inputs 13 sessions changed, the mean
   average fell 10.23 -> 9.14, no maximum rose 2 degrees and no jump count
   rose (README, "The shear guard"). `field_grading` counts the strips kept
-  so (`refused_by_shear`).
+  so (`refused_by_shear`) and `refused_strips` lists every refused strip.
   Where an average is still several times what the block angles explain,
   it is usually the blocks' shape (the splitter plate 14.2, a cascade
   28.8, unchanged here); `grading=strip` on a copy remains the comparison.
@@ -123,11 +135,18 @@ $$
   to 364: `check` after it, keep it only where the brief needs the width.
 - The note names what moved the result: `raised` lists the three
   components spending raised the most cells into ("EDGE FROM->TO +CELLS"),
-  and the note says when continuity splits changed the cells after
-  spending (`field_cells_after_splits`: the field solved again on the split
-  blocks, so `total_cells` can end below `field_cells` and a larger budget
-  with fewer cells) and which walls a dropped field pass or a refused strip
-  leaves more than 10 percent off the first width asked.
+  each followed by "through band spokes of PATCH (LOW%..HIGH%)" when the
+  component holds a wall's band spokes - every spoke takes the raised
+  count, and where the field pass cannot grade each from the wall the
+  first width moves with it (a splitter plate's ring spokes 24 -> 63 at the
+  default budget: -64..+292 percent) - and the note says when continuity
+  splits changed the cells after spending (`field_cells_after_splits`: the
+  field solved again on the split blocks, so `total_cells` can end below
+  `field_cells` and a larger budget with fewer cells) and which walls a
+  dropped field pass or a refused strip leaves more than 10 percent off the
+  first width asked, naming the refused strips by one edge and the guard
+  with the spokes they leave off (`field_grading.refused_strips` lists every
+  refused strip).
 
 ## Reading `verification`
 

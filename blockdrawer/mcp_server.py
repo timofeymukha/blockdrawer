@@ -89,9 +89,9 @@ JSON); ask for the part you need rather than the whole session.
    generated batch (one command per line, # comments, JSON objects allowed).
    list_commands documents every command - the construction operators
    (add_grid, add_band, add_ring, add_stations, add_fill, set_boundary_by),
-   smooth, size,
-   repair_block among them. Batches are atomic: nothing is saved when any
-   command fails. The answer counts the commands and lists the IDs created
+   smooth, size, set_first_width (the first cell height on every band
+   spoke of a wall patch), repair_block among them. Batches are atomic:
+   nothing is saved when any command fails. The answer counts the commands and lists the IDs created
    and removed and the results worth reading (operators, repairs,
    smoothing, sizing with its verification, splits, fits); detail=true
    returns every command's result.
