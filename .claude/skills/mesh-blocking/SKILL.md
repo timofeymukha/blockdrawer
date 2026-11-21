@@ -174,8 +174,8 @@ against no step on 10 (y-junction 39.1 -> 32.0), raised it on 3 (triangle +12.3)
 - `min_edge_ratio` 0.1 with `max_pair_change` above 15: `shape_pair_ratio=2.5` was right on
   one round-4 build (triangle: jumps above 2.5 / 5 19 / 3 -> 7 / 0, max 28.0 -> 25.9) and wrong
   on another (three cylinders: 42.6 deg for the default step's 33.3, no jump above 5 either
-  way): size both and keep what `check` prefers. The 19 builds are hand builds; on the
-  engine's NACA 4412 the step cost 47% more cells and four jumps above 5.
+  way): size both and keep what `check` prefers. An engine session needs the step: the engine's
+  NACA 4412 with it 45.1 deg, 205,506 cells (4 jumps above 5 after `size`, none polished); without 69.6.
 - "already fold ... on the count-free block map": a spline running backwards
   (`failures.md`), else move a station, split, or leave the step out.
 
