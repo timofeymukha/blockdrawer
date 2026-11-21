@@ -1640,6 +1640,32 @@ the angles there, but it is left out with the rest. Time,
 uncoarsened samples a call; judging at the real counts took a coarsening
 session's `size` from 190 to 228 s).
 
+**The jump where a fine carried column meets a coarse neighbour** (batch 12,
+measured, no change). Round 5 left one jump above 5 there on three cases
+through their own chains: the splitter plate (shape with
+`shape_pair_ratio=2.5`, `size`, polish: 3 above 5, worst 9.62 at w_27-w_31),
+the blunt plate (default chain: 5.03 at w_19-w_24) and the high-lift
+(`size`, polish: 8.12 at d_472-d_552). On the splitter and the blunt plate
+the wake band's outer column is one strip of 66 (52) members sharing 39
+(33) cells; its far members, 0.9 to 1.3 long, end at the band's outer edge
+0.055 to 0.089 (0.023) wide, while the far-field row above shares its 8
+(12) cells' series with members near the body and is graded at the growth
+limit (1.15, 1.14 per cell) to 0.009 (0.005) there. On the high-lift the
+124-cell column (0.0011, almost uniform) meets an 11-cell neighbour graded
+the wrong way, 0.0092 at the interface and 0.0026 at its far end. The
+wake strip is two-ended, but the blunt plate's cut is refused (it would
+leave a 0.0275 piece where 0.077 cells are wanted). Two general moves were
+tried on the three: regrading the two strips at the costliest interface
+pairs together when no single regrade pays (the cost is convex in a pair's
+log ratio), and a continuity split for an edge whose series misses the
+width wanted at one end only. Neither changed the splitter plate or the
+blunt plate (identical meshes) or the high-lift's jump (64 above 2.5 for
+67, 8.12 kept), so the rule's last term failed on all three and the other
+terms were not run; the default is unchanged and `failures.md` has the
+signature with the two hand remedies, measured: `keep_counts=true` after
+the polish on the blunt plate (3.91, no jump above 5) and the high-lift
+trial's pair of gradings (5.00; either alone 5.74 or 6.36).
+
 `method=distance` keeps item 3's sizing reachable (`size_distance.py`, as
 of commit 9a84f29): counts from the wall distance alone, wall-normal edges
 graded, tangential ones uniform, no budget spending, `interface_growth`
