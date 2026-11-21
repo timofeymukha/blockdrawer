@@ -69,6 +69,7 @@ import math
 from typing import Any, Sequence
 
 from .domain import Block, EdgeGeometry, EdgeKey, TopologyError, Vertex, edge_key
+from . import overlap
 from .model import MeshModel, unhooked_points
 from .preview import _block_mesh_point
 from .sampling import FOLD_CELLS
@@ -92,6 +93,14 @@ TIP_WINDOW = 0.01
 TIP_MERGE = 0.001
 # A mitred spoke is at most this many band heights long.
 MITRE_LIMIT = 3.0
+# A band front's offset edge leaves each end within this angle of the
+# direction the wall edge leaves its own end; points making it turn further
+# are dropped (`_offset_interior`). On the 38 round-3 and round-4 hand builds
+# and the skill's four examples every front but the hooked ones stayed within
+# 19.4 degrees (a bump's joint with a straight wall); the hooked ones - the
+# splitter's concave mitres, the high-lift band beside a tilted end spoke -
+# turned 79.8 to 121.5 degrees.
+HOOK_TURN = math.radians(45.0)
 # Interior points kept per spline edge.
 MAX_SPLINE_POINTS = 40
 # An add_fill refusal lists at most this many rejected readings of its sides.
@@ -108,6 +117,11 @@ MAX_FILL_REASONS = 4
 NEAR_FRACTION = 1.5e-5
 # Notes list at most this many such vertices.
 NEAR_LISTED = 4
+# add_grid leaves out a cell lying over an existing block by more than this
+# fraction of the smaller one's size (a point of one inside the other); the
+# overlap check every operator makes on its new blocks (`_Build.finish`)
+# uses overlap.INSIDE_FRACTION.
+GRID_OVERLAP = 1.0e-3
 
 
 @dataclass
@@ -262,6 +276,25 @@ class _Build:
                 model.edge_geometry[current] = EdgeGeometry(kind, points)
         model._prune_boundary_assignments()
         model.validate()
+        self.refuse_overlaps()
+
+    def refuse_overlaps(self) -> None:
+        """Refuse a new block lying over another block: the rules
+        `validate` checks see one block at a time."""
+        if not self.created_blocks:
+            return
+        model = self.model
+        created = set(self.created_blocks)
+        every = overlap.shapes(model)
+        new = [shape for shape in every if shape.id in created]
+        found = overlap.overlaps_with(model, new, every)
+        if found:
+            raise TopologyError(
+                "the new block(s) would lie over existing ones: "
+                + overlap.overlap_text(found).removeprefix("blocks lie over one another: ")
+                + " - check the stations, the direction or the region (the first block of "
+                "`new --box` counts: start the session with that box away from the geometry)"
+            )
 
     def result(self, operation: str) -> ConstructResult:
         result = ConstructResult(
@@ -469,6 +502,14 @@ def add_grid(
                 (r0, t0), (r1, t1) = cell
                 centre = position(0.5 * (r0 + r1), 0.5 * (t0 + t1))
                 return centre, [position(r0, t0), position(r0, t1), position(r1, t1), position(r1, t0)]
+
+            def outline(cell):
+                (r0, t0), (r1, t1) = cell
+                arc = [k / overlap.SAMPLES for k in range(overlap.SAMPLES + 1)]
+                return [[position(r0, t0 + f * (t1 - t0)) for f in arc],
+                        _straight(position(r0, t1), position(r1, t1)),
+                        [position(r1, t1 - f * (t1 - t0)) for f in arc],
+                        _straight(position(r1, t0), position(r0, t0))]
         else:
             first_axis = sorted(set(xs))
             second_axis = sorted(set(ys))
@@ -482,14 +523,33 @@ def add_grid(
                 (x0, y0), (x1, y1) = cell
                 return (0.5 * (x0 + x1), 0.5 * (y0 + y1)), [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
 
+            def outline(cell):
+                corners = describe(cell)[1]
+                return [_straight(corners[k], corners[(k + 1) % 4]) for k in range(4)]
+
+        existing = overlap.shapes(working)
+        over: dict[str, int] = {}
+
         def kept(cells):
             out, skipped = [], 0
+            over.clear()
             for cell in cells:
                 centre, corners = describe(cell)
                 if any(b[0] <= centre[0] <= b[2] and b[1] <= centre[1] <= b[3] for b in boxes) \
                         or any(_inside(centre, solid) for solid in solids) \
                         or any(_inside(centre, polygon) for polygon in occupied):
                     skipped += 1
+                    continue
+                # A cell over part of an existing block whose centre lies
+                # outside it (a cell across a thin band) is left out too:
+                # built, it would lie over that block.
+                lying = overlap.overlaps_with(working, [overlap.outline_shape("cell", outline(cell))],
+                                              existing, GRID_OVERLAP)
+                if lying:
+                    skipped += 1
+                    for item in lying:
+                        name = item.second if item.first == "cell" else item.first
+                        over[name] = over.get(name, 0) + 1
                     continue
                 out.append(cell)
             return out, skipped
@@ -548,7 +608,7 @@ def add_grid(
                             f"a grid vertex at ({corner[0]:.6g}, {corner[1]:.6g}) would fall inside "
                             f"the existing edge {current[0]}-{current[1]} and leave it non-conformal: "
                             "a station from elsewhere crosses it; split that edge first or "
-                            "build the grid in parts"
+                            "build the grid in parts" + _missed_end(working, current, corner)
                         )
             ids = [build.vertex(point) for point in corners]
             build.block(ids)
@@ -560,11 +620,47 @@ def add_grid(
         build.finish()
         result = build.result("add_grid")
         result.skipped_cells = skipped
+        if over:
+            result.note = (
+                f"cell(s) over existing blocks left out ({_id_list(sorted(over))}): their centres lie "
+                "outside those blocks but they would lie over them; the hole they leave is for a fill "
+                "or a grid conforming to what is there"
+            )
         if not result.blocks:
             raise TopologyError("add_grid created no block: every cell was skipped or exists")
         return result
 
     return _atomic(model, work)
+
+
+# A new vertex falling inside an existing edge this close to one of its ends
+# (fraction of the edge's length) names that end: a vertex meant to be on
+# the new line that missed it (round 4: a band front 0.0013 off a line/arc
+# tangent joint, where the mitre of the curve's two polyline segments put
+# it; four U-bend trials moved it by hand).
+MISSED_END = 0.05
+
+
+def _missed_end(model: MeshModel, edge: EdgeKey, point: Point) -> str:
+    """The refusal's hint when ``point`` lies inside ``edge`` next to one of
+    its ends: that end, how far it is, and the move that puts it on the line."""
+    ends = [model.vertices[v] for v in edge]
+    length = math.dist((ends[0].x, ends[0].y), (ends[1].x, ends[1].y))
+    vertex = min(ends, key=lambda v: math.dist((v.x, v.y), point))
+    gap = math.dist((vertex.x, vertex.y), point)
+    if length <= 0.0 or gap > MISSED_END * length:
+        return ""
+    axis = "x" if abs(vertex.x - point[0]) >= abs(vertex.y - point[1]) else "y"
+    value = point[0] if axis == "x" else point[1]
+    return (
+        f"; its end {vertex.id} at ({vertex.x:.6g}, {vertex.y:.6g}) is only {gap:.3g} from it - if "
+        f"{vertex.id} was meant to be on that line, put it there first: `move_vertex {vertex.id} "
+        f"{axis}={value:.12g} carry_curves=true` (or {axis}_of= a vertex on the line)"
+    )
+
+
+def _straight(a: Point, b: Point) -> list[Point]:
+    return [a, (0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1])), b]
 
 
 def _merge(stations, extra, tol) -> list[float]:
@@ -891,12 +987,26 @@ def _fold_message(chain: _Chain, position, spokes, edge_count: int, count: int, 
             else:
                 high = middle
         largest = low
+    kind, index = folded
+    turned = ""
+    if not largest and kind == "edge":
+        a, b = index, (index + 1) % count
+        path = [position[chain.vertices[a]], *chain.interiors[index], position[chain.vertices[b]]]
+        turn = sum(math.atan2(u[0] * v[1] - u[1] * v[0], u[0] * v[0] + u[1] * v[1])
+                   for u, v in (((p1[0] - p0[0], p1[1] - p0[1]), (p2[0] - p1[0], p2[1] - p1[1]))
+                                for p0, p1, p2 in zip(path, path[1:], path[2:])))
+        if abs(turn) > math.radians(90.0):
+            turned = (
+                f" - the wall edge {chain.vertices[a]}-{chain.vertices[b]} turns "
+                f"{math.degrees(abs(turn)):.0f} degrees between its ends (a cove or a nose between two "
+                "stations): one band block cannot span it, a station on it is missing (points= or "
+                "fractions= on the curve between them)"
+            )
     advice = (
         f"the largest height that builds is {_round_down(largest)}" if largest
         else ("no height builds it: the spokes at its ends already cross at the wall, as when "
-              "an edge path turns back at its end (look at its interpolation points)")
+              "an edge path turns back at its end (look at its interpolation points)" + turned)
     )
-    kind, index = folded
     if kind == "fan":
         vertex = chain.vertices[index]
         return f"the fan at {vertex} would fold at height {height:g}; {advice}"
@@ -968,7 +1078,31 @@ def _offset_interior(path: list[Point], chain: _Chain, distance: float,
     (da, fa), (db, fb) = spoke_a, spoke_b
     start = (path[0][0] + da[0] * fa * distance, path[0][1] + da[1] * fa * distance)
     end = (path[-1][0] + db[0] * fb * distance, path[-1][1] + db[1] * fb * distance)
-    return unhooked_points(start, _monotone_points(start, out, end), end)
+    kept = list(unhooked_points(start, _monotone_points(start, out, end), end))
+    # An end spoke that is not the local normal (a mitre at a concave
+    # corner, a tilted end spoke) puts the offset end where the points
+    # beside it do not lead: the spline then turns back to reach it, and the
+    # block it bounds or the next one carried from it folds. A front leaves
+    # its end the way the wall leaves its own (within HOOK_TURN); the points
+    # that make it turn further are dropped, from that end inwards.
+    wall_start = (path[1][0] - path[0][0], path[1][1] - path[0][1])
+    wall_end = (path[-2][0] - path[-1][0], path[-2][1] - path[-1][1])
+    count = len(kept)
+    while kept and _turn(wall_start, (kept[0][0] - start[0], kept[0][1] - start[1])) > HOOK_TURN:
+        kept.pop(0)
+    dropped = False
+    while kept and _turn(wall_end, (kept[-1][0] - end[0], kept[-1][1] - end[1])) > HOOK_TURN:
+        kept.pop()
+        dropped = True
+    if dropped or len(kept) < count:
+        # A long end segment left beside short ones runs backwards too.
+        kept = list(unhooked_points(start, tuple(kept), end))
+    return tuple(kept)
+
+
+def _turn(a: Point, b: Point) -> float:
+    """The angle between two directions, in radians (0 to pi)."""
+    return abs(math.atan2(a[0] * b[1] - a[1] * b[0], a[0] * b[0] + a[1] * b[1]))
 
 
 def _monotone_points(start: Point, points: Sequence[Point], end: Point) -> tuple[Point, ...]:
@@ -1138,25 +1272,20 @@ def _model_chain(model: MeshModel, edges: Sequence[EdgeKey]) -> _Chain:
         else:
             points = model.edge_control_points(current)
             interiors.append(tuple(points) if first == current[0] else tuple(reversed(points)))
-    # band side: away from the owning blocks
-    occurrence = occurrences[used[0]][0]
-    block = occurrence[0]
-    cx = sum(model.vertices[v].x for v in block.vertices) / 4.0
-    cy = sum(model.vertices[v].y for v in block.vertices) / 4.0
-    a, b = model.vertices[order[0]], model.vertices[order[1] if len(order) > 1 else order[0]]
-    mid = model.edge_point(used[0], 0.5)
-    tx, ty = b.x - a.x, b.y - a.y
-    left = (-ty, tx)
-    side = -1.0 if left[0] * (cx - mid[0]) + left[1] * (cy - mid[1]) > 0.0 else 1.0
-    for k, current in enumerate(used):
-        block = occurrences[current][0][0]
-        bx = sum(model.vertices[v].x for v in block.vertices) / 4.0
-        by = sum(model.vertices[v].y for v in block.vertices) / 4.0
-        p, q = model.vertices[order[k]], model.vertices[order[(k + 1) % len(order)]]
-        lx, ly = -(q.y - p.y), q.x - p.x
-        m = model.edge_point(current, 0.5)
-        if (lx * (bx - m[0]) + ly * (by - m[1])) * side > 0.0:
-            raise TopologyError("the selected chain has blocks on both sides: select one side's edges")
+    # Band side: away from the owning blocks. A block is counter-clockwise,
+    # so it lies left of an edge it runs along in its own order: the side
+    # is read from the topology, not from where the corners' mean falls (a
+    # thin block on a curved edge has it on the other side of the curve).
+    sides = [_block_side(occurrences[current][0], order[k]) for k, current in enumerate(used)]
+    side = sides[0]
+    if any(value != side for value in sides):
+        left = [f"{order[k]}-{order[(k + 1) % len(order)]}" for k, value in enumerate(sides) if value == side]
+        right = [f"{order[k]}-{order[(k + 1) % len(order)]}" for k, value in enumerate(sides) if value != side]
+        raise TopologyError(
+            "the selected chain has blocks on both sides: the blocks of "
+            f"{_id_list(left, 4)} lie on one side, those of {_id_list(right, 4)} on the other - "
+            "select one side's edges"
+        )
     ends_follow: list[Point | None] = [None, None]
     if not closed:
         all_exterior = [e for e, items in occurrences.items() if len(items) == 1 and e not in used]
@@ -1167,6 +1296,26 @@ def _model_chain(model: MeshModel, edges: Sequence[EdgeKey]) -> _Chain:
                 v, o = model.vertices[vertex], model.vertices[other]
                 ends_follow[slot] = (o.x - v.x, o.y - v.y)
     return _Chain(order, interiors, kinds, closed, side, (ends_follow[0], ends_follow[1]))
+
+
+def _block_side(occurrence, first: str) -> float:
+    """The band side of an exterior edge traversed from ``first``: -1
+    (right) when its block runs it the same way, so lies on its left."""
+    _block, _index, directed = occurrence
+    return -1.0 if directed[0] == first else 1.0
+
+
+# A bbox selection's notes sample an edge at these fractions; an edge is in
+# the box when its defining points are, within BOX_TOLERANCE of the box's
+# diagonal (`_select_exterior`).
+BBOX_FRACTIONS = tuple(k / 8.0 for k in range(9))
+BOX_TOLERANCE = 1.0e-5
+
+
+def _box_excess(points: Sequence[Point], bbox: Sequence[float]) -> float:
+    """How far the farthest of ``points`` lies outside the box (0 inside)."""
+    x0, y0, x1, y1 = bbox
+    return max(max(x0 - p[0], p[0] - x1, y0 - p[1], p[1] - y1, 0.0) for p in points)
 
 
 def _select_exterior(model: MeshModel, bbox: Sequence[float], unassigned: bool) -> list[EdgeKey]:
@@ -1284,10 +1433,28 @@ def add_band(
         build = _Build(working, prefix)
         where = {v: (working.vertices[v].x, working.vertices[v].y) for v in chain.vertices}
         opened = _open_indices(chain, where.__getitem__, fan, open_at)
-        front = _band(build, chain, height, rows, growth, tuple(to_box) or None, opened)
-        build.finish()
+        spokes = ""
+        if any(end_spokes):
+            # start= and end= follow the chain's order, which between=A,B
+            # does not set (round 4: start= meant for A tilted B's spoke).
+            given = [f"{name}= ({value[0]:g}, {value[1]:g}) set the spoke at {vertex}"
+                     for name, value, vertex in (("start", end_spokes[0], chain.vertices[0]),
+                                                 ("end", end_spokes[1], chain.vertices[-1]))
+                     if value is not None]
+            spokes = ("; ".join(given) + f" (start= is the chain's first vertex {chain.vertices[0]}, "
+                      f"end= its last {chain.vertices[-1]}"
+                      + (", not between='s order" if between and between[0] != chain.vertices[0] else "")
+                      + ")")
+        try:
+            front = _band(build, chain, height, rows, growth, tuple(to_box) or None, opened)
+            build.finish()
+        except TopologyError as exc:
+            if spokes:
+                raise TopologyError(f"{exc}; {spokes}") from exc
+            raise
         result = build.result("add_band")
-        result.note = "; ".join(part for part in (_front_note(chain, front, bool(to_box)), _opened_note(build)) if part)
+        result.note = "; ".join(part for part in (_front_note(chain, front, bool(to_box)), spokes,
+                                                  _opened_note(build)) if part)
         return result
 
     return _atomic(model, work)
@@ -1554,6 +1721,7 @@ def add_rows(
                                 f"a row vertex at ({point[0]:.6g}, {point[1]:.6g}) would fall inside the "
                                 f"existing edge {current[0]}-{current[1]} and leave it non-conformal: "
                                 "split that edge there first, or give a station there"
+                                + _missed_end(working, current, point)
                             )
                 ids[k, row] = build.vertex(point)
         for row in range(1, len(rows_at) + 1):
@@ -2770,6 +2938,9 @@ def add_fill(
         occurrences = working.edge_occurrences()
         paths = [_CurvePath(working, c) if c else None for c in curves]
         candidates: list[list] = []
+        # Per side, the branching vertices where a walk from its first
+        # corner stopped (for the note when the side is read as open).
+        stops: list[list[str]] = [[] for _ in range(count)]
         for k in range(count):
             a, b = corners[k], corners[(k + 1) % count]
             if sides[k]:
@@ -2788,8 +2959,9 @@ def add_fill(
             else:
                 forbidden = set(corners) - {a, b}
                 ways = (1, -1) if paths[k] is not None and paths[k].closed else (0,)
-                candidates.append([*_exterior_walks(occurrences, a, b, forbidden), *ways])
-        chosen, sign = _choose_sides(working, occurrences, corners, candidates, paths, position)
+                candidates.append([*_exterior_walks(occurrences, a, b, forbidden,
+                                                    set(working.edge_boundaries), stops[k]), *ways])
+        chosen, sign, others = _choose_sides(working, occurrences, corners, candidates, paths, position)
         listed = {v for side in sides for v in side}
         resolved = [
             _resolve_side(working, chosen[k], corners[k], corners[(k + 1) % count], paths[k], position,
@@ -2818,7 +2990,27 @@ def add_fill(
             if side.kind == "stations":
                 text += " " + _id_list([v for v in side.vertices[1:-1] if v is not None])
             curve_text = f" along {paths[k].name}" if paths[k] is not None else ""
-            described.append(f"side{k + 1} {a}..{b}: {len(side.points) - 1} edge(s), {text}{curve_text}")
+            line = f"side{k + 1} {a}..{b}: {len(side.points) - 1} edge(s), {text}{curve_text}"
+            if side.kind in ("stations", "matched", "open") and stops[k]:
+                line += (f" (the exterior chain from {a} stops at {_id_list(stops[k], 3)}, where "
+                         "more than one edge without a patch goes on: give the side to follow it)")
+            alternatives = []
+            for combination in others:
+                choice = combination[k]
+                if str(choice) == str(chosen[k]) or any(str(choice) == str(c) for c in alternatives):
+                    continue
+                alternatives.append(choice)
+            if alternatives:
+                shown = []
+                for choice in alternatives[:2]:
+                    if isinstance(choice, int):
+                        shown.append(f"open ({'straight' if paths[k] is None else 'along ' + paths[k].name}"
+                                     f"): side{k + 1}={a},{b}")
+                    else:
+                        shown.append(f"the chain {_id_list(list(choice), 6)} ({len(choice) - 1} edge(s)): "
+                                     f"side{k + 1}=" + ",".join(choice))
+                line += " - NOT the only reading: it also bounds a region " + " or ".join(shown)
+            described.append(line)
         result.note = f"{shape}; " + "; ".join(described)
         folds = _uniform_folds(working, result.blocks)
         if folds:
@@ -2890,7 +3082,29 @@ def _build_quad(working: MeshModel, build: _Build, corners: list[str], resolved:
         if not _ordered_convex(quad, sign):
             raise TopologyError(_fill_fold_message(working, build, len(build.created_blocks) + index,
                                                    i, j, n, m, quad, sign, names))
-    _refuse_overlap(working, quads, names)
+
+    def segment_path(side: _FillSide, s: int) -> list[Point]:
+        """Segment ``s`` of a side as it will be built, from station s to s + 1."""
+        p, q = side.points[s], side.points[s + 1]
+        segment = side.segments[s]
+        if segment[0] == "edge":
+            key = segment[1]
+            samples = list(overlap._edge_samples(working, key, edge_cache))
+            return samples if math.dist(samples[0], p) <= math.dist(samples[-1], p) else samples[::-1]
+        if segment[0] == "curve" and segment[1]:
+            return [p, *segment[1], q]
+        return _straight(p, q)
+
+    edge_cache: dict = {}
+    outlines = {}
+    for (i, j), quad in quads:
+        outlines[i, j] = [
+            segment_path(resolved[0], i) if j == 0 else _straight(quad[0], quad[1]),
+            segment_path(resolved[1], j) if i == n - 1 else _straight(quad[1], quad[2]),
+            segment_path(resolved[2], n - 1 - i) if j == m - 1 else _straight(quad[2], quad[3]),
+            segment_path(resolved[3], m - 1 - j) if i == 0 else _straight(quad[3], quad[0]),
+        ]
+    _refuse_overlap(working, quads, names, outlines=outlines)
     # Vertices: new side stations, side by side, then the interior row by row.
     for side in resolved:
         for s, vertex in enumerate(side.vertices):
@@ -3000,10 +3214,18 @@ def _straight_side(first: str | None, a: Point, second: str | None, b: Point) ->
     return _FillSide("open", [first, second], [a, b], [("line", (), length)], [length], [a, b], None)
 
 
-def _exterior_walks(occurrences, a: str, b: str, forbidden: set[str]) -> list[list[str]]:
+def _exterior_walks(occurrences, a: str, b: str, forbidden: set[str],
+                    assigned: set[EdgeKey] | None = None,
+                    stops: list[str] | None = None) -> list[list[str]]:
     """Chains of exterior edges from ``a`` to ``b``: from each exterior edge
     at ``a``, on through vertices with exactly two exterior edges, never
-    through another corner."""
+    through another corner. At a vertex with more (a wall vertex at a
+    corner left open: two wall edges and two spokes) the walk goes on
+    along the one exterior edge there without a patch, when there is
+    exactly one: a patch's edge bounds the domain, never a fill (round 4's
+    slat cove, whose front runs through the open cusp's vertex). Where a
+    walk stops at such a vertex it is added to ``stops``."""
+    assigned = assigned or set()
     adjacency: dict[str, list[EdgeKey]] = {}
     for current, items in occurrences.items():
         if len(items) == 1:
@@ -3021,7 +3243,12 @@ def _exterior_walks(occurrences, a: str, b: str, forbidden: set[str]) -> list[li
                 break
             options = [e for e in adjacency[following] if e != edge]
             if len(options) != 1:
-                break
+                free = [e for e in options if e not in assigned]
+                if len(free) != 1:
+                    if stops is not None and len(options) > 1 and following not in stops:
+                        stops.append(following)
+                    break
+                options = free
             path.append(following)
             current, edge = following, options[0]
     return walks
@@ -3064,6 +3291,7 @@ def _choose_sides(model, occurrences, corners, candidates, paths, position):
     import itertools
 
     valid = []
+    loops: dict[int, list[Point]] = {}
     rejected: list[str] = []
     for combination in itertools.product(*candidates):
         loop: list[Point] = []
@@ -3093,10 +3321,13 @@ def _choose_sides(model, occurrences, corners, candidates, paths, position):
                 if not items:
                     continue
                 block = items[0][0]
-                cx, cy = _block_centre(model, block)
-                mx, my = model.edge_point(key, 0.5)
-                tx, ty = position[q][0] - position[p][0], position[q][1] - position[p][1]
-                outside = (tx * (cy - my) - ty * (cx - mx)) * sign < 0.0
+                # The block lies left of p -> q when it runs the edge that
+                # way (counter-clockwise blocks); the region lies left when
+                # ``sign`` is positive. From the topology, not the corners'
+                # mean, which a thin block on a curved edge has on the
+                # other side of the curve.
+                block_left = items[0][2][0] == p
+                outside = block_left != (sign > 0.0)
                 score += 1 if outside else -1
                 if not outside:
                     inside_edges.append(f"{key[0]}-{key[1]} (block {block.id})")
@@ -3123,6 +3354,7 @@ def _choose_sides(model, occurrences, corners, candidates, paths, position):
             )
             continue
         valid.append((sum(not isinstance(choice, int) for choice in combination), combination, sign))
+        loops[id(combination)] = loop
     if not valid:
         shown = list(dict.fromkeys(rejected))
         raise TopologyError(
@@ -3145,7 +3377,45 @@ def _choose_sides(model, occurrences, corners, candidates, paths, position):
             "the region is ambiguous: side" + ", side".join(map(str, differing))
             + " can run more than one way between its corners; give it explicitly (sideK=A,...,B)"
         )
-    return top[0]
+    # The other readings that also bound a region (fewer existing sides),
+    # for the note: the choice is then not the only one.
+    # A reading whose sides cross each other passes the side tests by
+    # accident of its signed area: not named.
+    # So is one whose region holds an existing block's centre (a straight side
+    # cutting through a curved band): built, it would be refused.
+    others = [combination for score, combination, _sign in sorted(valid, key=lambda item: -item[0])
+              if combination is not top[0][0] and _simple_loop(loops[id(combination)])]
+    if others:
+        centres = [shape.tests[-len(overlap.INTERIOR)][0] for shape in overlap.shapes(model)]
+        others = [combination for combination in others
+                  if not any(_inside(centre, loops[id(combination)]) for centre in centres)]
+    return top[0][0], top[0][1], others
+
+
+def _simple_loop(loop: Sequence[Point]) -> bool:
+    """Whether a closed polyline crosses itself nowhere (segments that are
+    not neighbours share no point)."""
+    n = len(loop)
+    segments = [(loop[k], loop[(k + 1) % n]) for k in range(n)]
+    boxes = [(min(a[0], b[0]), min(a[1], b[1]), max(a[0], b[0]), max(a[1], b[1])) for a, b in segments]
+
+    def cross(o: Point, a: Point, b: Point) -> float:
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    for i in range(n):
+        (p, q), bi = segments[i], boxes[i]
+        for j in range(i + 2, n):
+            if i == 0 and j == n - 1:
+                continue
+            bj = boxes[j]
+            if bi[0] > bj[2] or bj[0] > bi[2] or bi[1] > bj[3] or bj[1] > bi[3]:
+                continue
+            r, t = segments[j]
+            d1, d2 = cross(p, q, r), cross(p, q, t)
+            d3, d4 = cross(r, t, p), cross(r, t, q)
+            if (d1 > 0) != (d2 > 0) and (d3 > 0) != (d4 > 0) and d1 * d2 < 0 and d3 * d4 < 0:
+                return False
+    return True
 
 
 def _reading(corners, combination) -> str:
@@ -3317,13 +3587,24 @@ def _fill_fold_message(model, build, index, i, j, n, m, quad, sign, names) -> st
     )
 
 
-def _refuse_overlap(model: MeshModel, quads, names, label=None) -> None:
+def _refuse_overlap(model: MeshModel, quads, names, label=None, outlines=None) -> None:
     """Refuse a fill block lying over an existing block: an existing vertex
     strictly inside it, or its centre inside an existing block. ``label``
-    names a block by its (i, j) (default: the fill's column and row)."""
+    names a block by its (i, j) (default: the fill's column and row).
+
+    With ``outlines`` (per (i, j) its four sides as they will be built,
+    curved ones sampled) the block is its outline, not the quad of its
+    corners: a thin block beside a curved front has its corners' mean on
+    the other side of the curve, in the neighbour (round 4's elbow vane, a
+    0.04 band spanning 20 degrees at r = 1.4, whose chord sags 0.018).
+    Then a point of the block inside an existing one, or of an existing
+    block inside it (``overlap``), refuses it."""
     if label is None:
         def label(i: int, j: int) -> str:
             return f"the fill's block at column {i + 1}, row {j + 1}"
+    if outlines is not None:
+        _refuse_outline_overlap(model, quads, names, label, outlines)
+        return
     existing = []
     for block in model.blocks:
         polygon = _block_polygon(model, block)
@@ -3350,6 +3631,32 @@ def _refuse_overlap(model: MeshModel, quads, names, label=None) -> None:
                     f"the existing vertex {vertex_id} lies inside {label(i, j)}: a side passes the "
                     "wrong side of it, or it should be a station"
                 )
+
+
+def _refuse_outline_overlap(model: MeshModel, quads, names, label, outlines) -> None:
+    existing = overlap.shapes(model)
+    floor = overlap._floor(model)
+    every_vertex = [(v.id, (v.x, v.y)) for v in model.vertices.values()]
+    for (i, j), _quad in quads:
+        corners_here = {names.get((i + di, j + dj)) for di, dj in ((0, 0), (1, 0), (1, 1), (0, 1))}
+        shape = overlap.outline_shape("fill", outlines[i, j])
+        x0, y0, x1, y1 = shape.bbox
+        tolerance = max(floor, overlap.INSIDE_FRACTION * shape.size)
+        for vertex_id, point in every_vertex:
+            if vertex_id in corners_here:
+                continue
+            if x0 < point[0] < x1 and y0 < point[1] < y1 \
+                    and overlap._inside_by(point, shape.boundary) > tolerance:
+                raise TopologyError(
+                    f"the existing vertex {vertex_id} lies inside {label(i, j)}: a side passes the "
+                    "wrong side of it, or it should be a station"
+                )
+        found = overlap.overlaps_with(model, [shape], existing)
+        if found:
+            other = found[0].second if found[0].first == "fill" else found[0].first
+            raise TopologyError(
+                f"{label(i, j)} would lie over the existing block {other}: check the corners and sides"
+            )
 
 
 def _strictly_inside(point: Point, quad: Sequence[Point]) -> bool:

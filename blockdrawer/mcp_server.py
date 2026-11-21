@@ -39,6 +39,7 @@ from .describe import (
 )
 from .foam import block_mesh_dict, write_block_mesh_dict
 from .model import MeshModel
+from .overlap import refuse_overlaps
 from .quality import (
     DEFAULT_INTERIOR_CELLS,
     DEFAULT_MAX_WARNINGS,
@@ -452,6 +453,7 @@ def validate_session(path: str) -> dict[str, Any]:
     """Check that a session loads, is topologically valid, and exports."""
     model = load_session(path)
     model.validate()
+    refuse_overlaps(model)
     block_mesh_dict(model)
     return {"ok": True, "session": str(path), "summary": describe_model(model)["summary"]}
 

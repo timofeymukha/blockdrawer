@@ -26,6 +26,7 @@ from typing import Any, Sequence
 from .command_line import split_command_line
 from .foam import write_block_mesh_dict
 from .model import MeshModel
+from .overlap import overlapping_blocks
 from .polymesh import PolyMeshError, SetReport, locate_sets, written_set_names
 
 
@@ -115,6 +116,10 @@ class MeshCheckResult:
     # checkMesh's sets mapped to blocks, and why that failed when it did.
     sets: tuple[SetReport, ...] = ()
     set_error: str | None = None
+    # Blocks of the session lying over one another
+    # (``overlap.overlapping_blocks``): checkMesh does not fail two cells
+    # over one place, so they are reported beside its verdict.
+    overlaps: tuple[str, ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -145,6 +150,7 @@ class MeshCheckResult:
             "severe_non_orthogonal_faces": self.geometry.get("severe_non_orthogonal_faces"),
             "sets": [report.to_data(worst) for report in self.sets],
             "set_error": self.set_error,
+            "overlapping_blocks": list(self.overlaps),
         }
 
 
@@ -256,6 +262,9 @@ def run_mesh_check(
         result = _parse(case, kept, block_run, check_run)
         if locate and check_run is not None:
             result = _with_sets(result, model, case, check_run.log)
+        overlaps = overlapping_blocks(model)
+        if overlaps:
+            result = replace(result, overlaps=tuple(item.describe() for item in overlaps))
     finally:
         if temporary and not kept:
             shutil.rmtree(case, ignore_errors=True)
@@ -502,6 +511,12 @@ def format_mesh_check(result: MeshCheckResult, *, worst: int = 5) -> str:
     """Terminal text; ``worst`` blocks are listed per checkMesh set."""
     lines: list[str] = []
     block = result.block_mesh
+    if result.overlaps:
+        lines.append(
+            f"BLOCKS OVERLAP ({len(result.overlaps)} pair(s); blockMesh meshes both and checkMesh "
+            "does not fail it): " + "; ".join(result.overlaps[:4])
+            + (f" (and {len(result.overlaps) - 4} more)" if len(result.overlaps) > 4 else "")
+        )
     if block.ok:
         counts = ", ".join(
             f"{result.mesh_stats[key]} {key.replace('_', ' ')}"

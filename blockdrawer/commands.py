@@ -2601,15 +2601,30 @@ def batch_digest(
         known = set(old)
         return [identifier for identifier in new if identifier not in known]
 
+    # A block ID taken again by a new block (the placeholder b0 removed and
+    # an operator's first block named b0) is a block removed and one made:
+    # a block counts as the same only while it keeps at least two of its
+    # corners (a split or a merge keeps them, a new block does not).
+    # (Corners by ID and position: a vertex ID is taken again too.)
+    old_corners = {b.id: {(v, before.vertices[v].x, before.vertices[v].y) for v in b.vertices}
+                   for b in before.blocks}
+    new_corners = {b.id: {(v, after.vertices[v].x, after.vertices[v].y) for v in b.vertices}
+                   for b in after.blocks}
+    remade = {identifier for identifier, corners in new_corners.items()
+              if identifier in old_corners and len(corners & old_corners[identifier]) < 2}
+
+    def blocks_appeared(old: dict, new: dict) -> list[str]:
+        return [identifier for identifier in new if identifier not in old or identifier in remade]
+
     created = {
         "vertices": appeared(before.vertices, after.vertices),
-        "blocks": appeared((b.id for b in before.blocks), (b.id for b in after.blocks)),
+        "blocks": blocks_appeared(old_corners, new_corners),
         "curves": appeared(before.geometry_curves, after.geometry_curves),
         "boundaries": appeared(before.boundaries, after.boundaries),
     }
     removed = {
         "vertices": appeared(after.vertices, before.vertices),
-        "blocks": appeared((b.id for b in after.blocks), (b.id for b in before.blocks)),
+        "blocks": blocks_appeared(new_corners, old_corners),
         "curves": appeared(after.geometry_curves, before.geometry_curves),
         "boundaries": appeared(after.boundaries, before.boundaries),
     }

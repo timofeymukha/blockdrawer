@@ -47,6 +47,7 @@ from .domain import TopologyError
 from .foam import block_mesh_dict, write_block_mesh_dict
 from .geometry import GeometryImportError
 from .model import MeshModel
+from .overlap import refuse_overlaps
 from .quality import (
     DEFAULT_INTERIOR_CELLS,
     DEFAULT_MAX_WARNINGS,
@@ -548,6 +549,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
 def _cmd_validate(args: argparse.Namespace) -> int:
     model = _load(args.session)
     model.validate()
+    refuse_overlaps(model)  # blocks over one another validate one by one
     block_mesh_dict(model)  # also checks export-time constraints such as cyclic pairs
     summary = describe_model(model)["summary"]
     _emit(

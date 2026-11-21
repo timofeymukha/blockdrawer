@@ -775,6 +775,24 @@ them in the canvas widgets.
   for a triangle each side shorter than the other two together); each
   spoke is made by the first fill that needs it, with stations facing its
   opposite side, and reused reversed by the next. No engine code.
+- `blockdrawer/overlap.py`: blocks lying over one another, which the
+  topology rules (convex blocks, shared edges run both ways) do not see:
+  `overlapping_blocks` finds pairs where a point of one block - a corner,
+  an edge sample (curved edges at `SAMPLES` fractions), one of five
+  interior points of its Coons map - lies inside the other's sampled
+  boundary by more than `INSIDE_FRACTION` of the smaller block's size;
+  points on edges or vertices the two share are not tested, and a sweep on
+  the blocks' x extents keeps it at 0.07 s on the 1144-block high-lift
+  session. It misses two thin blocks crossing near their ends with no such
+  point inside the other. The CLI `validate` and MCP `validate_session`
+  refuse an overlap (`refuse_overlaps`), `quality` makes it a warning ranked
+  with the folds (after them), `overlapping_blocks` in the summary and verdict and `valid`
+  false, `check` reports it beside checkMesh's verdict (`overlaps`, `ok`
+  unchanged); `MeshModel.validate` does not run it (size and smooth call
+  that per move). Every construction operator refuses new blocks over
+  existing ones (`_Build.refuse_overlaps` in `finish`, the `new --box`
+  block included), and `add_grid` leaves out a cell over an existing block
+  whose centre lies outside it (`GRID_OVERLAP`), naming the blocks.
 - `blockdrawer/size_distance.py`: item 3's sizing (commit 9a84f29),
   unchanged, behind `size method=distance`: the scalar wall-distance field,
   wall-normal edges graded from their finer end, tangential edges uniform,

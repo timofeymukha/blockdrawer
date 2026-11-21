@@ -24,6 +24,7 @@ from typing import Any
 from .commands import edge_text
 from .domain import Block, EdgeKey, TopologyError, edge_key
 from .model import MeshModel, describe_hook, hook_culprit, hooked_spline_edges, transverse_edge
+from .overlap import overlapping_blocks
 from .sampling import (
     ASPECT_LIMIT, SEVERE_NON_ORTHOGONALITY, BlockSample, ModelSample, average_blocks, real_average,
     sample_model,
@@ -129,6 +130,9 @@ class QualityReport:
     # Spline edges with a segment running backwards along its chord
     # (``model.spline_hooks``), as ``A-B``.
     hooked_splines: tuple[str, ...] = ()
+    # Pairs of blocks lying over one another (``overlap.overlapping_blocks``),
+    # each described in one line; the topology rules do not see them.
+    overlaps: tuple[str, ...] = ()
 
     def summary(self) -> dict[str, Any]:
         if not self.blocks:
@@ -172,6 +176,7 @@ class QualityReport:
             },
             "warning_count": len(self.warnings),
             "hooked_spline_edges": len(self.hooked_splines),
+            "overlapping_blocks": len(self.overlaps),
         }
         if self.interior is not None:
             data["interior"] = self.interior.summary()
@@ -193,8 +198,11 @@ class QualityReport:
         data: dict[str, Any] = {
             # The topology always validated (the report raises otherwise);
             # export is checked with the interior sampling.
-            "valid": (self.export_error is None) if self.interior is not None else None,
+            "valid": (self.export_error is None and not self.overlaps) if self.interior is not None else None,
             "export_error": self.export_error,
+            # Blocks lying over one another: validated and exported, but two
+            # cells over one place (``overlap.overlapping_blocks``).
+            "overlapping_blocks": list(self.overlaps),
             "sampled": self.interior is not None,
             "untangled": None,
             "real_counts": None,
@@ -396,6 +404,15 @@ def assess_quality(
             "make the edge a line"
         )
         ranks.append((_ANGLE, 90.0))
+    overlaps = overlapping_blocks(model)
+    for item in overlaps:
+        # Two cells over one place: ranked with the folded cells, after
+        # them (a fold is often what puts one block over another).
+        warnings.append(
+            f"blocks {item.describe()}: two cells over one place; the export does not "
+            "see it - remove one and build that region again"
+        )
+        ranks.append((_FOLD, 0.0))
     total_cells = sum(
         nx * ny * nz
         for nx, ny, nz in (model.block_cell_counts(block) for block in model.blocks)
@@ -404,6 +421,7 @@ def assess_quality(
         blocks, interfaces, limits, total_cells, tuple(warnings),
         interior, export_error, tuple(ranks), tuple(wall_first_widths(model)),
         tuple("-".join(current) for current, _segments, _lengths in hooked),
+        tuple(item.describe() for item in overlaps),
     )
 
 
@@ -447,7 +465,8 @@ def format_quality(
         interior = summary["interior"]
         state = (
             "valid and exports" if verdict["valid"]
-            else f"does NOT export: {verdict['export_error']}"
+            else f"does NOT export: {verdict['export_error']}" if verdict["export_error"]
+            else f"BLOCKS OVERLAP ({len(report.overlaps)} pair(s), listed in the warnings)"
         )
         tangle = (
             "untangled" if verdict["untangled"]
