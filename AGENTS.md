@@ -214,7 +214,17 @@ them in the canvas widgets.
   warning carries a rank (folded first, then angle defects by degrees from
   90, then size defects by ratio to their limit); `ranked_warnings(N)` and
   `max_warnings` list the worst N, and `worst_blocks` ranks by folded cells
-  then sampled non-orthogonality when sampled. The corner screen's maximum
+  then sampled non-orthogonality when sampled. The verdict and the
+  summary's `interior` carry checkMesh's `average_non_orthogonality` and
+  `average_blocks` (`sampling.average_blocks`: per block its average over
+  its faces, its faces at the real counts and its share of the sum of
+  average times faces, largest first, `AVERAGE_BLOCKS` = 5); the text
+  verdict names the `AVERAGE_NAMED` (3) largest and the block table prints
+  each block's average beside its maximum - an average over a reference
+  could not be pointed at blocks before (round 4, NACA 4412: 15.45). The
+  verdict's average weights blocks by their faces at the real counts
+  (`sampling.real_average`; equal to checkMesh's to three decimals on
+  eleven sessions, a coarsened one included). The corner screen's maximum
   cell growth names its edge (`max_cell_growth_edge`).
   `wall_first_widths` (the
   report's `first_widths`, also `size`'s `bands`) gives per wall patch the
@@ -264,6 +274,10 @@ them in the canvas widgets.
   1000, checkMesh's) per block, and the summary's `worst_aspect_block`;
   it equalled checkMesh to two decimals on the eleven round-2 benchmark
   sessions and on a default-sized blunt plate (1846.52, 217 cells).
+  `BlockSample.mean_non_orthogonality` is checkMesh's average over a
+  block's faces (the angle of the mean cosine) and `real_faces` its faces
+  scaled to the real counts where the block was coarsened; the summary's
+  `average_non_orthogonality` stays the sampled faces' (smooth reads it).
   `blocks=` samples a
   subset, leaving out faces shared with blocks outside it (and a coupled
   side whose partner's block is left out). `smooth` and `size` refuse a

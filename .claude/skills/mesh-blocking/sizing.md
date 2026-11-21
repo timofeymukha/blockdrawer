@@ -123,8 +123,9 @@ $$
   rose (README, "The shear guard"). `field_grading` counts the strips kept
   so (`refused_by_shear`) and `refused_strips` lists every refused strip.
   Where an average is still several times what the block angles explain,
-  it is usually the blocks' shape (the splitter plate 14.2, a cascade
-  28.8, unchanged here); `grading=strip` on a copy remains the comparison.
+  `quality` names the blocks that make it (`average_blocks`): usually their
+  shape (the splitter plate 14.2, a cascade 28.8, unchanged here);
+  `grading=strip` on a copy remains the comparison.
 - `keep_counts=true` keeps every count, recomputes the gradings and
   regrades strips for continuity without raising a count (after moving
   vertices or setting a count by hand). As a step after the polish on 39

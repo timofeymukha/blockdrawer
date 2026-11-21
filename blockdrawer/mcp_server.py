@@ -97,8 +97,10 @@ JSON); ask for the part you need rather than the whole session.
    returns every command's result.
 3. quality_report: a verdict (valid, untangled, worst non-orthogonality and
    faces above 70 degrees, measured as checkMesh does on the block
-   interiors sampled at the real counts), the worst blocks and edges, and
-   the worst warnings - corner angles, aspect ratios, growth, size jumps.
+   interiors sampled at the real counts; the average non-orthogonality and
+   the blocks that make it, average_blocks), the worst blocks and edges,
+   and the worst warnings - corner angles, aspect ratios, growth, size
+   jumps.
 4. render_session to look, with zoom and highlight for trailing edges,
    corners and gaps.
 5. check_mesh runs blockMesh and checkMesh when OpenFOAM is available; it is
@@ -302,7 +304,9 @@ def quality_report(
     sampled cell folds, the worst non-orthogonality and where, how many
     faces exceed 70 degrees, the worst face skewness and checkMesh's cell
     aspect ratio with the block of the worst cell (checkMesh fails above
-    1000). Per wall patch it gives the first cell height normal to the wall
+    1000), and checkMesh's average non-orthogonality with the blocks that
+    make it, largest share of average times faces first (average_blocks).
+    Per wall patch it gives the first cell height normal to the wall
     at the band spokes (``first_widths``). The corner screen adds first-cell corner
     angles, aspect ratios, growth and size jumps across internal edges;
     check_mesh remains the authority. Thresholds default to angle 30-150

@@ -813,8 +813,19 @@ degrees of it (a wake line leaving a sharp trailing edge and an edge
 running on along the wall's line are not spokes), and its first width is
 the height of its first node above that wall edge's tangent at the vertex;
 the spokes with the smallest and largest heights are named, and the edges
-at the wall left out by the rule are counted. The corner screen's maximum
-cell growth names its edge. These remain
+at the wall left out by the rule are counted. The verdict also gives
+checkMesh's average non-orthogonality and the blocks that make it
+(`average_blocks`: each block's average over its faces, its faces at the
+real counts and its share of the sum of average times faces, largest
+first; the text names three and the block table prints each block's
+average beside its maximum), since an average over a reference cannot be
+pointed at blocks by the maximum (round 4: a NACA 4412 at 15.45 degrees).
+The average is weighted by each block's faces at the real counts, as
+checkMesh counts them: on eleven sized benchmark sessions it equalled
+checkMesh's to three decimals, among them a Y-junction
+with four blocks coarsened by the sampling cap (14.058 for checkMesh's
+14.0578, where an average over the sampled faces read 13.83). The corner
+screen's maximum cell growth names its edge. These remain
 screening measures; `checkMesh` is the authority. `render` draws the topology with vertex IDs, block IDs, cell
 counts, patch colors, reference curves, and spacing links to SVG (standard
 library) or PNG (requires Pillow, `pip install blockdrawer[png]`); `--zoom`

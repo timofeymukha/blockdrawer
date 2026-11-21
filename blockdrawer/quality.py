@@ -24,7 +24,10 @@ from typing import Any
 from .commands import edge_text
 from .domain import Block, EdgeKey, TopologyError, edge_key
 from .model import MeshModel, describe_hook, hook_culprit, hooked_spline_edges, transverse_edge
-from .sampling import ASPECT_LIMIT, SEVERE_NON_ORTHOGONALITY, BlockSample, ModelSample, sample_model
+from .sampling import (
+    ASPECT_LIMIT, SEVERE_NON_ORTHOGONALITY, BlockSample, ModelSample, average_blocks, real_average,
+    sample_model,
+)
 
 
 # The interior sampling cap the CLI and the MCP server use by default: at
@@ -34,6 +37,8 @@ from .sampling import ASPECT_LIMIT, SEVERE_NON_ORTHOGONALITY, BlockSample, Model
 DEFAULT_INTERIOR_CELLS = 256
 # Text output lists at most this many warnings unless asked for more.
 DEFAULT_MAX_WARNINGS = 20
+# The text verdict names this many blocks behind the average.
+AVERAGE_NAMED = 3
 
 # Warning ranks: folded cells first, then angle defects by their distance
 # from 90 degrees, then size defects by how far past the limit they are.
@@ -170,6 +175,7 @@ class QualityReport:
         }
         if self.interior is not None:
             data["interior"] = self.interior.summary()
+            data["interior"]["average_blocks"] = average_blocks(self.interior)
         return data
 
     def verdict(self) -> dict[str, Any]:
@@ -206,10 +212,17 @@ class QualityReport:
             "worst_aspect_block": None,
             "high_aspect_cells": None,
             "aspect_limit": ASPECT_LIMIT,
+            # checkMesh's average face non-orthogonality (faces weighted at
+            # the real counts, ``sampling.real_average``) and the blocks
+            # that make it, largest share first (``sampling.average_blocks``).
+            "average_non_orthogonality": None,
+            "average_blocks": None,
         }
         if self.interior is not None and self.blocks:
             summary = self.interior.summary()
             data.update({
+                "average_non_orthogonality": real_average(self.interior),
+                "average_blocks": average_blocks(self.interior),
                 "untangled": summary["folded_cells"] == 0,
                 "real_counts": summary["coarsened_blocks"] == 0,
                 "max_non_orthogonality": summary["max_non_orthogonality"],
@@ -460,6 +473,17 @@ def format_quality(
                 if verdict["high_aspect_cells"] else ""
             )
         )
+        ranked = verdict["average_blocks"] or []
+        lines.append(
+            f"  average non-orthogonality {_num(verdict['average_non_orthogonality'])}°"
+            + (
+                "; most from " + ", ".join(
+                    f"{item['block']} {_num(item['average'])}° ({_num(item['share'])}%)"
+                    for item in ranked[:AVERAGE_NAMED]
+                ) + " (block average, share of average x faces)"
+                if ranked else ""
+            )
+        )
         lines.append(
             f"  interior (sampled, checkMesh's face measure): cell angles "
             f"{_num(interior['min_angle'])}° .. {_num(interior['max_angle'])}°, "
@@ -500,7 +524,7 @@ def format_quality(
         lines.append(
             "Blocks (id | cells | angles min/max | non-orth | skew | "
             "aspect | growth | cell size min..max"
-            + (" | interior non-orth, severe faces, folded" if sampled else "")
+            + (" | interior non-orth (average), severe faces, folded" if sampled else "")
             + ")"
             + (f", the {len(blocks)} worst of {len(report.blocks)}:" if worst is not None else ":")
         )
@@ -510,7 +534,8 @@ def format_quality(
             extra = ""
             if block.interior is not None:
                 extra = (
-                    f" | {_num(block.interior.max_non_orthogonality)}, "
+                    f" | {_num(block.interior.max_non_orthogonality)} "
+                    f"({_num(block.interior.mean_non_orthogonality)}), "
                     f"{block.interior.severe_faces}, {block.interior.folded_cells}"
                 )
             lines.append(

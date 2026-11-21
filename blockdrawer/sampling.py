@@ -481,6 +481,25 @@ class BlockSample:
     max_aspect_ratio: float = 0.0
     worst_aspect_cell: Point | None = None
     high_aspect_cells: int = 0
+    # The block's real cell counts (x, y); the sampled ones when unknown.
+    real_cells: tuple[int, int] | None = None
+
+    @property
+    def mean_non_orthogonality(self) -> float:
+        """checkMesh's average over the block's faces: the angle of the mean
+        cosine (faces shared with a later block count here, as for the
+        severe faces)."""
+        if not self.faces:
+            return 0.0
+        return math.degrees(math.acos(max(-1.0, min(1.0, self.sum_cosines / self.faces))))
+
+    @property
+    def real_faces(self) -> float:
+        """The faces measured, scaled to the real counts where the sampling
+        coarsened the block (its sampled faces stand for that many more)."""
+        sx, sy = self.sampled_cells
+        rx, ry = self.real_cells or self.sampled_cells
+        return self.faces * (rx * ry) / (sx * sy) if sx * sy else float(self.faces)
 
     def to_data(self) -> dict[str, Any]:
         return {
@@ -500,10 +519,8 @@ class BlockSample:
             "max_aspect_ratio": self.max_aspect_ratio,
             "worst_aspect_cell": list(self.worst_aspect_cell) if self.worst_aspect_cell else None,
             "high_aspect_cells": self.high_aspect_cells,
-            "mean_non_orthogonality": (
-                math.degrees(math.acos(max(-1.0, min(1.0, self.sum_cosines / self.faces))))
-                if self.faces else 0.0
-            ),
+            "mean_non_orthogonality": self.mean_non_orthogonality,
+            "real_faces": round(self.real_faces),
         }
 
 
@@ -643,6 +660,7 @@ def sample_model(
             aspect.worst,
             aspect.worst_at,
             aspect.high,
+            (grid.x_cells, grid.y_cells),
         )
         for grid, measured, tally, aspect in zip(grids, angles, tallies, aspects)
     )
@@ -651,6 +669,45 @@ def sample_model(
 
 # A message about folded cells names at most this many blocks.
 FOLD_BLOCKS_NAMED = 5
+# The average's ranking lists this many blocks (``average_blocks``).
+AVERAGE_BLOCKS = 5
+
+
+def real_average(sample: ModelSample) -> float:
+    """checkMesh's average face non-orthogonality over the session, each
+    block's mean cosine weighted by its faces at the real counts
+    (``BlockSample.real_faces``). The summary's ``average_non_orthogonality``
+    weights the faces sampled, so a block coarsened by the sampling cap
+    counts less there than in checkMesh (a Y-junction with four coarsened
+    blocks: 13.83 there, 14.06 here and in checkMesh)."""
+    weight = sum(item.real_faces for item in sample.blocks if item.faces)
+    if weight <= 0.0:
+        return 0.0
+    cosine = sum(item.sum_cosines / item.faces * item.real_faces for item in sample.blocks if item.faces)
+    return math.degrees(math.acos(max(-1.0, min(1.0, cosine / weight))))
+
+
+def average_blocks(sample: ModelSample, count: int | None = AVERAGE_BLOCKS) -> list[dict[str, Any]]:
+    """The blocks that make the session's average face non-orthogonality,
+    largest contribution first: each block's average (checkMesh's, the angle
+    of the mean cosine over its faces), its faces at the real counts
+    (``BlockSample.real_faces``) and its share of the sum of average times
+    faces over every block, in percent - the blocks to look at when the
+    average is high and the maximum is elsewhere."""
+    rows = [(item.mean_non_orthogonality * item.real_faces, item) for item in sample.blocks if item.faces]
+    total = sum(weight for weight, _item in rows)
+    rows.sort(key=lambda entry: (-entry[0], entry[1].block_id))
+    if count is not None:
+        rows = rows[: max(0, count)]
+    return [
+        {
+            "block": item.block_id,
+            "average": item.mean_non_orthogonality,
+            "faces": round(item.real_faces),
+            "share": 100.0 * weight / total if total > 0.0 else 0.0,
+        }
+        for weight, item in rows
+    ]
 # The count-free (uniform) grid a fold is looked for on, cells a side: the
 # shape step's fold check (smooth's fold_cells default).
 FOLD_CELLS = 32

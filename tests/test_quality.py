@@ -200,7 +200,7 @@ class InteriorSamplingTests(unittest.TestCase):
         self.assertTrue(any("sampled interior non-orthogonality" in w for w in report.warnings))
         text = format_quality(report)
         self.assertIn("Verdict: valid and exports; untangled (real counts)", text)
-        self.assertIn("interior non-orth, severe faces, folded", text)
+        self.assertIn("interior non-orth (average), severe faces, folded", text)
 
     def test_a_fold_between_sound_corners_is_the_worst_warning(self) -> None:
         model = apply_commands(MeshModel(), [
@@ -267,6 +267,67 @@ def _quads(points: dict, quads: list, cells: int = 10) -> MeshModel:
     }
     data["edgeCells"] = [{"vertices": list(edge), "cells": cells} for edge in sorted(edges)]
     return from_data(data)
+
+
+class AverageBlocksTests(unittest.TestCase):
+    """The blocks that make the session's average (round 4: an average of
+    15.45 degrees nobody could point at)."""
+
+    def model(self) -> MeshModel:
+        # A square, and a parallelogram whose lines tilt by 31 degrees: the
+        # average is all the parallelogram's.
+        return _quads(
+            {"a0": (0, 0), "a1": (1, 0), "a2": (1, 1), "a3": (0, 1),
+             "p0": (3, 0), "p1": (4, 0), "p2": (4.6, 1), "p3": (3.6, 1)},
+            [("a0", "a1", "a2", "a3"), ("p0", "p1", "p2", "p3")],
+        )
+
+    def test_the_sheared_block_carries_the_average(self) -> None:
+        report = assess_quality(self.model(), interior_cells=256)
+        verdict = report.verdict()
+        ranked = verdict["average_blocks"]
+        self.assertEqual([item["block"] for item in ranked], ["b1", "b0"])
+        self.assertAlmostEqual(ranked[0]["share"], 100.0, places=6)
+        self.assertAlmostEqual(ranked[0]["average"], math.degrees(math.atan(0.6)), places=6)
+        self.assertEqual(ranked[0]["faces"], 2 * 10 * 9)
+        self.assertAlmostEqual(ranked[1]["average"], 0.0, places=6)
+        # No block is coarsened: the real-count average is the sampled one.
+        self.assertAlmostEqual(verdict["average_non_orthogonality"],
+                               report.summary()["interior"]["average_non_orthogonality"], places=9)
+        self.assertEqual(report.summary()["interior"]["average_blocks"], ranked)
+        data = report.to_data()
+        json.dumps(data)
+        self.assertAlmostEqual(data["blocks"][1]["interior"]["mean_non_orthogonality"], ranked[0]["average"])
+        text = format_quality(report)
+        self.assertIn("average non-orthogonality", text)
+        self.assertRegex(text, r"average non-orthogonality [\d.]+°; most from b1 30\.96\d*° \(100%\)")
+
+    def test_a_coarsened_block_counts_its_real_faces(self) -> None:
+        from blockdrawer.sampling import average_blocks, sample_model
+
+        model = self.model()
+        model.set_edge_cells(edge_key("p0", "p1"), 40)
+        model.set_edge_cells(edge_key("p1", "p2"), 40)
+        sample = sample_model(model, 16)
+        (block,) = [row for row in sample.blocks if row.block_id == "b1"]
+        self.assertTrue(block.coarsened)
+        sx, sy = block.sampled_cells
+        (item,) = [row for row in average_blocks(sample) if row["block"] == "b1"]
+        # 40 x 40 cells sampled coarser: the faces sampled stand for more.
+        self.assertEqual(item["faces"], round(block.faces * 1600 / (sx * sy)))
+        self.assertGreater(item["faces"], block.faces)
+        # The session's average weights the coarsened block by its real
+        # faces: nearer its own average than the sampled-face average is.
+        from blockdrawer.sampling import real_average
+
+        sampled = sample.summary()["average_non_orthogonality"]
+        self.assertGreater(real_average(sample), sampled)
+        self.assertLess(real_average(sample), item["average"])
+
+    def test_without_sampling_there_is_none(self) -> None:
+        verdict = assess_quality(self.model()).verdict()
+        self.assertIsNone(verdict["average_blocks"])
+        self.assertIsNone(verdict["average_non_orthogonality"])
 
 
 class WallFirstWidthTests(unittest.TestCase):
