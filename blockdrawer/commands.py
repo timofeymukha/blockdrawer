@@ -842,6 +842,15 @@ def _run_size(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
     bbox = args.get("bbox") or None
     if bbox is not None and len(bbox) != 4:
         raise CommandError("bbox needs four numbers: xmin, ymin, xmax, ymax")
+    caps = []
+    for name, axes in (("cap", (True, True)), ("cap_x", (True, False)), ("cap_y", (False, True))):
+        values = list(args.get(name) or ())
+        if len(values) % 5:
+            raise CommandError(f"{name} needs five numbers per box: xmin,ymin,xmax,ymax,size")
+        for k in range(0, len(values), 5):
+            xmin, ymin, xmax, ymax, value = values[k:k + 5]
+            caps.append((xmin, ymin, xmax, ymax, value if axes[0] else math.inf,
+                         value if axes[1] else math.inf))
     options = SizeOptions(
         first_width=args["first_width"],
         core_size=args["core_size"],
@@ -858,6 +867,7 @@ def _run_size(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
         keep_counts=args["keep_counts"],
         method=args["method"],
         grading=args["grading"],
+        caps=tuple(caps),
     )
     result = size_model(model, options, blocks=args.get("blocks") or None, bbox=bbox)
     return result.to_data()
@@ -1535,6 +1545,16 @@ _register(CommandSpec(
                   required=False, default=()),
         Parameter("bbox", "numbers", "only blocks with a corner inside xmin,ymin,xmax,ymax",
                   required=False, default=()),
+        Parameter("cap", "numbers",
+                  "cell-size cap in a box, both directions: xmin,ymin,xmax,ymax,size (repeat "
+                  "the five for more boxes); in the field, so counts, the budget (which does "
+                  "not coarsen a component through a box) and the continuity passes see it; "
+                  "the result's caps give the largest extents of the cells centred in each box",
+                  required=False, default=()),
+        Parameter("cap_x", "numbers", "as cap, the cell extent in x only",
+                  required=False, default=()),
+        Parameter("cap_y", "numbers", "as cap, the cell extent in y only (a shear layer's or "
+                  "a wake's height)", required=False, default=()),
     ),
     _run_size,
 ))
@@ -2489,6 +2509,9 @@ def _size_note(data: dict[str, Any]) -> dict[str, Any]:
         ),
         # The components spending raised, the most cells first.
         "raised": data.get("raised") or None,
+        # Cap boxes: the largest extents of the cells centred in each.
+        "caps": " | ".join(item["text"] + ("" if item["held"] else " NOT HELD")
+                           for item in data.get("caps") or ()) or None,
         "note": data.get("note"),
     }
     return {key: value for key, value in note.items() if value not in (None, "", [])}

@@ -974,6 +974,66 @@ class SizeNoteTests(unittest.TestCase):
                 isinstance(value, list) and all(not isinstance(item, (list, dict)) for item in value)), value)
 
 
+class CapTests(unittest.TestCase):
+    """Cell-size caps in boxes (``cap``, ``cap_x``, ``cap_y``)."""
+
+    def channel(self) -> MeshModel:
+        # The channel cut at y = 0.4 and 0.6, so the box's rows are blocks.
+        return apply_commands(channel(), ["split_edge v0-v3 0.4 id=c",
+                                          "split_edge c-v3 0.333333333 id=d"]).model
+
+    def test_a_cap_in_a_box_holds_and_is_reported(self) -> None:
+        from blockdrawer.sampling import cell_extents
+
+        box = (1.0, 0.4, 3.0, 0.6)
+        free = self.channel()
+        size_model(free, SizeOptions(first_width=0.005, core_size=0.2, growth=1.2, wall_aspect=10))
+        self.assertGreater(cell_extents(free, box)["max_y_extent"], 0.012)
+        model = self.channel()
+        result = size_model(model, SizeOptions(first_width=0.005, core_size=0.2, growth=1.2, wall_aspect=10,
+                                               caps=((*box, math.inf, 0.01),)))
+        found = cell_extents(model, box)
+        self.assertLessEqual(found["max_y_extent"], 0.01 * (1 + 1e-6))
+        self.assertTrue(result.caps[0]["held"])
+        self.assertEqual(result.caps[0]["cap_y"], 0.01)
+        self.assertIsNone(result.caps[0]["cap_x"])
+        self.assertNotIn("cap boxes not held", result.note)
+
+    def test_a_box_inside_an_edge_bounds_both_its_ends(self) -> None:
+        from blockdrawer.sampling import cell_extents
+
+        box = (1.0, 0.45, 3.0, 0.55)  # no block line on its sides
+        model = channel()
+        result = size_model(model, SizeOptions(first_width=0.005, core_size=0.2, growth=1.2, wall_aspect=10,
+                                               caps=((*box, math.inf, 0.01),)))
+        self.assertLessEqual(cell_extents(model, box)["max_y_extent"], 0.01 * (1 + 1e-6))
+        self.assertTrue(result.caps[0]["held"])
+
+    def test_a_lower_budget_does_not_coarsen_a_capped_component(self) -> None:
+        from blockdrawer.sampling import cell_extents
+
+        box = (1.0, 0.4, 3.0, 0.6)
+        model = self.channel()
+        options = SizeOptions(first_width=0.005, core_size=0.2, growth=1.2, wall_aspect=10,
+                              caps=((*box, math.inf, 0.01),))
+        full = size_model(model, options).total_cells
+        low = self.channel()
+        size_model(low, SizeOptions(**{**options.__dict__, "budget": full // 3}))
+        self.assertLessEqual(cell_extents(low, box)["max_y_extent"], 0.01 * (1 + 1e-6))
+
+    def test_the_command_takes_caps_and_refuses_a_short_box(self) -> None:
+        model = self.channel()
+        outcome = apply_commands(model, ["size 0.005 0.2 growth=1.2 wall_aspect=10 cap_y=1,0.4,3,0.6,0.01 "
+                                         "cap=0,0,0.5,1,0.1"])
+        note = batch_digest(model, outcome)["notes"][0]
+        self.assertIn("box 1,0.4,3,0.6: y ", note["caps"])
+        self.assertIn("box 0,0,0.5,1: x ", note["caps"])
+        with self.assertRaises(Exception):
+            apply_commands(self.channel(), ["size 0.005 0.2 cap_y=1,0.4,3,0.6"])
+        with self.assertRaises(Exception):
+            apply_commands(self.channel(), ["size 0.005 0.2 method=distance cap=1,0.4,3,0.6,0.01"])
+
+
 class RealCountReportTests(unittest.TestCase):
     def test_the_reported_verification_is_the_real_counts(self) -> None:
         """At 256 a side a face on an edge shared with a coarsened block read

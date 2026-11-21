@@ -63,6 +63,7 @@ from .render import (
     render_to_file,
     resolved_size,
 )
+from .sampling import cell_extents, format_cell_extents
 from .session import SessionError, load_session, save_session
 
 
@@ -225,6 +226,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--interior-cells", type=int, default=DEFAULT_INTERIOR_CELLS, metavar="N",
         help="sample block interiors at their real counts, up to N cells a side "
         f"(default {DEFAULT_INTERIOR_CELLS}); 0 keeps the corner screen alone",
+    )
+    quality.add_argument(
+        "--bbox", type=float, nargs=4, action="append", metavar=("XMIN", "YMIN", "XMAX", "YMAX"),
+        help="also report the largest cell extent in x and in y among the cells whose "
+        "centre lies in this box, at the real counts, with the block and the place "
+        "(repeatable; also XMIN,YMIN,XMAX,YMAX in one argument)",
     )
     quality.add_argument(
         "--no-interior", action="store_true",
@@ -465,16 +472,18 @@ def _cmd_quality(args: argparse.Namespace) -> int:
         None if args.all_warnings else
         args.max_warnings if args.max_warnings is not None else DEFAULT_MAX_WARNINGS
     )
-    _emit(
-        report.to_data(
-            summary_only=args.summary_only, worst=args.worst, max_warnings=args.max_warnings
-        ),
-        format_quality(
-            report, summary_only=args.summary_only, worst=args.worst,
-            max_warnings=text_warnings,
-        ),
-        args.json,
+    data = report.to_data(
+        summary_only=args.summary_only, worst=args.worst, max_warnings=args.max_warnings
     )
+    text = format_quality(
+        report, summary_only=args.summary_only, worst=args.worst,
+        max_warnings=text_warnings,
+    )
+    if args.bbox:
+        extents = [cell_extents(model, box) for box in args.bbox]
+        data["cell_extents"] = extents
+        text = "\n".join([text, *(format_cell_extents(found) for found in extents)])
+    _emit(data, text, args.json)
     return 0
 
 

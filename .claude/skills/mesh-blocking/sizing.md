@@ -39,7 +39,7 @@ $$
 `size FIRST CORE [growth=1.2] [wall_aspect=A] [count_rule=max|mean]
 [interface_growth=R] [budget=N] [first_widths=PATCH=W,...] [split=true]
 [method=directional|distance] [keep_counts=true] [grading=strip|field]
-[blocks=...] [bbox=...]`
+[cap=X0,Y0,X1,Y1,H] [cap_x=...] [cap_y=...] [blocks=...] [bbox=...]`
 
 - The directional field: across each `wall` patch the series
   `first + (growth - 1) d`, along it `wall_aspect` first widths, capped at
@@ -68,6 +68,15 @@ $$
   took it to 4.18 (README shape-limit corpus). Nor beside a fan or an open
   corner or across a channel one block thick (high-lift: 22 above 5 at a
   budget that was not binding): `failures.md`.
+- `cap_y=X0,Y0,X1,Y1,H` (`cap_x=` the extent in x, `cap=` both; five
+  numbers a box, repeated for more boxes): no cell centred in the box
+  taller (wider) than H. It is in the field, so counts, spending and the
+  continuity splits see it; every edge of a block with cells in the box is
+  bounded by H at both ends (one series has widths linear along an edge),
+  so block lines on the box's sides cost the fewest cells; a lower
+  `budget` does not coarsen those components. The result's `caps` (and
+  the note's) give each box's largest extents against H; `quality --bbox
+  X0,Y0,X1,Y1` reads the same on any session.
 - Judge the jumps after the polish (`smooth`), which moves vertices and so
   changes them: round 2's NACA 4412 C-grid 4 above 5 after `size`, none
   after the polish (round 4's engine session had none above 2.5 after `size`). The polish keeps a jump below 5 below 5 (`size_ceiling`; three

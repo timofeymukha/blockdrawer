@@ -771,3 +771,61 @@ def _measure_coupled(
         tally.add(_non_orthogonality(own, nei, start, end, canonical), start, end)
         tally.skew(_skewness(own, nei, start, end), start, end)
 
+
+
+def cell_extents(model: MeshModel, box: Sequence[float]) -> dict[str, Any]:
+    """The largest cell extent in x and in y among the cells whose centre
+    (the mean of its four corners) lies in ``box`` (xmin, ymin, xmax, ymax,
+    inclusive), at the real counts and grading: what a brief's "no cell
+    taller than H in this region" is checked against. Each extent is the
+    cell's span of its corners' x (or y) coordinates; the block and the
+    cell's centre are given with it. Only blocks whose edges come near the
+    box are sampled."""
+    if len(box) != 4:
+        raise TopologyError("a box needs four numbers: xmin, ymin, xmax, ymax")
+    xmin, ymin, xmax, ymax = (float(value) for value in box)
+    if xmin > xmax or ymin > ymax:
+        raise TopologyError("a box needs xmin <= xmax and ymin <= ymax")
+    found: dict[str, Any] = {
+        "box": [xmin, ymin, xmax, ymax], "cells": 0,
+        "max_x_extent": 0.0, "x_block": None, "x_at": None,
+        "max_y_extent": 0.0, "y_block": None, "y_at": None,
+    }
+    fractions = tuple(index / 16 for index in range(17))
+    for block in model.blocks:
+        points = []
+        for index in range(4):
+            points.extend(model.edge_points(edge_key(*block.directed_edge(index)), fractions))
+        xs = [point[0] for point in points]
+        ys = [point[1] for point in points]
+        pad = 0.05 * max(max(xs) - min(xs), max(ys) - min(ys))
+        if min(xs) - pad > xmax or max(xs) + pad < xmin or min(ys) - pad > ymax or max(ys) + pad < ymin:
+            continue
+        nodes = block_grid(model, block, None).nodes
+        for row, upper in zip(nodes, nodes[1:]):
+            for a in range(len(row) - 1):
+                corners = (row[a], row[a + 1], upper[a + 1], upper[a])
+                cx = 0.25 * sum(point[0] for point in corners)
+                cy = 0.25 * sum(point[1] for point in corners)
+                if not (xmin <= cx <= xmax and ymin <= cy <= ymax):
+                    continue
+                found["cells"] += 1
+                dx = max(point[0] for point in corners) - min(point[0] for point in corners)
+                dy = max(point[1] for point in corners) - min(point[1] for point in corners)
+                if dx > found["max_x_extent"]:
+                    found.update(max_x_extent=dx, x_block=block.id, x_at=[cx, cy])
+                if dy > found["max_y_extent"]:
+                    found.update(max_y_extent=dy, y_block=block.id, y_at=[cx, cy])
+    return found
+
+
+def format_cell_extents(found: dict[str, Any]) -> str:
+    """One line for ``cell_extents``."""
+    box = ",".join(f"{value:g}" for value in found["box"])
+    if not found["cells"]:
+        return f"cells in box {box}: none has its centre there"
+    return (
+        f"cells in box {box}: {found['cells']}; largest x extent {found['max_x_extent']:.6g} "
+        f"({found['x_block']} at {found['x_at'][0]:.6g},{found['x_at'][1]:.6g}), largest y extent "
+        f"{found['max_y_extent']:.6g} ({found['y_block']} at {found['y_at'][0]:.6g},{found['y_at'][1]:.6g})"
+    )

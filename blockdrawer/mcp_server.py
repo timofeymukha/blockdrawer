@@ -54,6 +54,7 @@ from .render import (
     render_png_bytes,
     render_to_file,
 )
+from .sampling import cell_extents, format_cell_extents
 from .session import load_session, save_session
 
 
@@ -101,7 +102,9 @@ JSON); ask for the part you need rather than the whole session.
    interiors sampled at the real counts; the average non-orthogonality and
    the blocks that make it, average_blocks), the worst blocks and edges,
    and the worst warnings - corner angles, aspect ratios, growth, size
-   jumps.
+   jumps. bbox=[xmin, ymin, xmax, ymax] adds the largest cell extents in x
+   and y among the cells centred in the box (a region's cell cap; size
+   takes one as cap=, cap_x=, cap_y=).
 4. render_session to look, with zoom and highlight for trailing edges,
    corners and gaps.
 5. check_mesh runs blockMesh and checkMesh when OpenFOAM is available; it is
@@ -295,6 +298,7 @@ def quality_report(
     worst: int | None = None,
     interior_cells: int = DEFAULT_INTERIOR_CELLS,
     max_warnings: int | None = None,
+    bbox: list[float] | None = None,
 ) -> dict[str, Any]:
     """Report the verdict, per-block and per-interface mesh quality.
 
@@ -317,8 +321,13 @@ def quality_report(
     non-orthogonality - and internal edges, and the ``max_warnings``
     (default 20) worst warnings. ``as_text=false`` returns structured data,
     complete unless ``worst``/``max_warnings`` are given; ``summary_only``
-    drops the tables.
+    drops the tables. ``bbox`` (xmin, ymin, xmax, ymax; several boxes as
+    consecutive groups of four) adds the largest cell extent in x and in y
+    among the cells whose centre lies in each box, at the real counts, with
+    the block and the place (``cell_extents``): a region's cell-size cap.
     """
+    if bbox is not None and (not bbox or len(bbox) % 4):
+        raise ToolFailure("bbox takes four numbers per box: xmin, ymin, xmax, ymax")
     if worst is not None and worst < 0:
         raise ToolFailure("worst must be a non-negative count")
     if max_warnings is not None and max_warnings < 0:
@@ -335,14 +344,19 @@ def quality_report(
         interface_size_ratio=interface_size_ratio,
     )
     report = assess_quality(model, thresholds, interior_cells=interior_cells)
+    extents = [cell_extents(model, bbox[k:k + 4]) for k in range(0, len(bbox or ()), 4)]
     if as_text:
-        return {"text": format_quality(
+        text = format_quality(
             report,
             summary_only=summary_only,
             worst=DEFAULT_WORST if worst is None else worst,
             max_warnings=DEFAULT_MAX_WARNINGS if max_warnings is None else max_warnings,
-        )}
-    return report.to_data(summary_only=summary_only, worst=worst, max_warnings=max_warnings)
+        )
+        return {"text": "\n".join([text, *(format_cell_extents(found) for found in extents)])}
+    data = report.to_data(summary_only=summary_only, worst=worst, max_warnings=max_warnings)
+    if extents:
+        data["cell_extents"] = extents
+    return data
 
 
 def render_session(

@@ -230,6 +230,17 @@ class ToolFunctionTests(unittest.TestCase):
         with self.assertRaisesRegex(ToolFailure, "non-negative"):
             quality_report(str(self.session), worst=-1)
 
+    def test_quality_report_gives_the_cells_in_a_box(self) -> None:
+        data = quality_report(str(self.session), bbox=[0, 0, 1, 1, 5, 5, 6, 6], as_text=False)
+        first, second = data["cell_extents"]
+        self.assertGreater(first["cells"], 0)
+        self.assertGreater(first["max_y_extent"], 0.0)
+        self.assertEqual(second["cells"], 0)
+        text = quality_report(str(self.session), bbox=[0, 0, 1, 1])["text"]
+        self.assertIn("cells in box 0,0,1,1:", text)
+        with self.assertRaises(ToolFailure):
+            quality_report(str(self.session), bbox=[0, 0, 1])
+
     def test_quality_report(self) -> None:
         edit_session(
             str(self.session), ["set_edge_grading v0-v1 total_ratio 20"], in_place=True,

@@ -827,6 +827,10 @@ each such block warned by name; on the eleven sessions of benchmark round
 2 the sampled maximum equalled checkMesh's to two decimals, and on a
 default-sized blunt plate it read 1846.52 and 217 cells above 1000 as
 checkMesh did. The measure is Cartesian: a thin cell at 45 degrees reads 1.
+`quality --bbox XMIN,YMIN,XMAX,YMAX` (repeatable; MCP `bbox`) adds the
+largest cell extent in x and in y among the cells whose centre lies in the
+box, at the real counts, with the block and the place - what a brief's
+"no cell taller than H in this region" is checked against.
 `size` reports it in its verification but does not act on it. Beside it, the corner
 screen reports per-block corner angles measured from the first mesh cell,
 non-orthogonality, equiangle skewness, corner cell aspect ratios, cell-to-cell
@@ -1396,7 +1400,27 @@ spending cost without `check`; the faces above 70 the field state itself
 has are left to the polish and to hand corrections. A result above
 skewness 4 from an input below is refused. Strips the
 spent state leaves coarse between finer neighbours at both ends are split
-and the budget spent again when that lowers the jumps. `keep_counts=true`
+and the budget spent again when that lowers the jumps. `cap=`, `cap_x=` and
+`cap_y=` (five numbers a box, `xmin,ymin,xmax,ymax,size`, repeated for more
+boxes) cap the cell extent in a box in both directions, in x or in y: inside
+a box the field allows along a direction u at most
+$1/\sqrt{(u_x/h_x)^2 + (u_y/h_y)^2}$, every edge of a block with cells in
+the box has both its end widths bounded by that along its direction (a
+block's cells take their widths from its edges, and one geometric series
+has widths linear along an edge, so the cells inside keep within the cap;
+block lines on the box's sides cost the fewest cells - an edge only partly
+in the box is held at the cap along its whole length, and it is split as
+two-ended only when its ends are finer than the cap by that factor too), and a budget below the field's does not coarsen a
+component holding such an edge; counts, spending and the continuity splits all see it. The result's
+`caps` give per box the largest extents of the cells centred there against
+the caps, and the note says when one is not held. Round 5's builds with
+their hand counts taken out and the cap put in (`size`, then
+`set_first_width`, checkMesh): the cavity's shear layer, `cap_y` 0.01, held
+at 0.0079 with 71,850 cells (delivered 95,879), and at `budget=72000` at
+0.0079 with 49,160 where the same budget without it gave 0.0104 (48,833);
+the orifice jet, `cap_y` 0.02, 0.0199 with 55,313 cells against the
+delivered hand counts' 56,208, no jump above 1.2, checkMesh maximum 0.52
+(3.95 delivered). `keep_counts=true`
 keeps every count and spends with a budget of the cells there are, so the
 strips are regraded for continuity but no count is raised (it used to
 recompute the gradings and drop the regrades: three cylinders after its

@@ -205,6 +205,10 @@ class SizeOptions:
     # count and SHEAR_ANGLE of its neighbours (_FieldGrading); "strip":
     # every member of a strip keeps the one total ratio spending left.
     grading: str = "field"
+    # Cell-size caps in boxes: (xmin, ymin, xmax, ymax, hx, hy), the largest
+    # cell extent in x and in y there (math.inf: no cap that way). See
+    # SizeField.cap_size and _Edge.cap.
+    caps: tuple[tuple[float, float, float, float, float, float], ...] = ()
 
     def check(self, model: MeshModel) -> None:
         if not (self.first_width > 0.0 and self.core_size >= self.first_width):
@@ -219,10 +223,18 @@ class SizeOptions:
             raise TopologyError("count_rule must be max or mean")
         if self.method not in ("directional", "distance"):
             raise TopologyError("method must be directional or distance")
+        if self.method == "distance" and self.caps:
+            raise TopologyError("cap boxes apply to method=directional only")
         if self.method == "distance" and self.keep_counts:
             raise TopologyError("keep_counts applies to method=directional only")
         if self.grading not in ("strip", "field"):
             raise TopologyError("grading must be strip or field")
+        for xmin, ymin, xmax, ymax, hx, hy in self.caps:
+            if not (xmin < xmax and ymin < ymax):
+                raise TopologyError(f"a cap box needs xmin < xmax and ymin < ymax, got "
+                                    f"{xmin:g},{ymin:g},{xmax:g},{ymax:g}")
+            if not (hx > 0.0 and hy > 0.0) or (math.isinf(hx) and math.isinf(hy)):
+                raise TopologyError("a cap needs a positive size")
         for name, width in self.patch_first_widths:
             if name not in model.boundaries:
                 raise TopologyError(f"Unknown patch {name!r} in a first-width override")
@@ -263,6 +275,8 @@ class SizeResult:
     raised: list[str] = field(default_factory=list)
     # The field's cells solved again after continuity splits (None: none).
     field_cells_after_splits: int | None = None
+    # Per cap box: sampling.cell_extents of the result and the caps asked.
+    caps: list[dict] = field(default_factory=list)
     note: str = ""
 
     def to_data(self) -> dict[str, Any]:
@@ -294,6 +308,7 @@ class SizeResult:
             "field_grading": self.field_grading,
             "raised": self.raised,
             "field_cells_after_splits": self.field_cells_after_splits,
+            "caps": self.caps,
             "note": self.note,
         }
 
@@ -322,6 +337,7 @@ class SizeField:
                 if (ax, ay) != (bx, by):
                     segments.append((ax, ay, bx, by, first))
         self.segments = segments
+        self.caps = tuple(options.caps)
         self.minimum_first = min((item[4] for item in segments), default=options.first_width)
         self.reach = (self.core - self.minimum_first) / (self.growth - 1.0)
         self.buckets: dict[tuple[int, int], list[int]] = {}
@@ -340,8 +356,35 @@ class SizeField:
     def has_walls(self) -> bool:
         return bool(self.segments)
 
+    def cap_size(self, x: float, y: float, ux: float, uy: float, strict: bool = False) -> float:
+        """The size the cap boxes holding (x, y) allow along the unit
+        direction u (inf: none). A box capping the extent in x at hx and in
+        y at hy allows 1 / sqrt((ux / hx)^2 + (uy / hy)^2) - hy along y, hx
+        along x, more along a slanted edge, whose cells reach the cap's
+        extent over a longer length - the walls' own ellipse form.
+        ``strict``: inside the box, not on its sides (within 1e-9 of its
+        size)."""
+        best = math.inf
+        for xmin, ymin, xmax, ymax, hx, hy in self.caps:
+            if strict:
+                tx, ty = 1.0e-9 * (xmax - xmin), 1.0e-9 * (ymax - ymin)
+                inside = xmin + tx < x < xmax - tx and ymin + ty < y < ymax - ty
+            else:
+                inside = xmin <= x <= xmax and ymin <= y <= ymax
+            if not inside:
+                continue
+            q = (ux / hx) ** 2 + (uy / hy) ** 2
+            if q > 0.0:
+                best = min(best, 1.0 / math.sqrt(q))
+        return best
+
     def size(self, x: float, y: float, ux: float, uy: float) -> float:
-        """The smallest size any wall asks for at (x, y) along the unit direction u."""
+        """The smallest size any wall or cap box asks for at (x, y) along the unit direction u."""
+        if self.caps:
+            return min(self._wall_size(x, y, ux, uy), self.cap_size(x, y, ux, uy))
+        return self._wall_size(x, y, ux, uy)
+
+    def _wall_size(self, x: float, y: float, ux: float, uy: float) -> float:
         if not self.segments:
             return self.core
         i0 = math.floor(x / self.bucket)
@@ -411,6 +454,14 @@ class _Edge:
     length: float
     arc: list[float]              # cumulative length at each sample
     field: list[float]            # the field's size along the edge at each sample
+    # The smallest size a cap box allows along the edge, for an edge of a
+    # block with cells in the box (inf: none; ``_block_caps``). A block's
+    # cells take their widths from its two opposite edges (transfinite
+    # interpolation), and one geometric series has cell widths linear in the
+    # distance along the edge, so the cells inside the box stay within the
+    # cap when both end widths of both edges do: both ends are bounded by it
+    # (_field_seeds), whether or not they lie in the box.
+    cap: float = math.inf
 
 
 def _sample_edge(model: MeshModel, current: EdgeKey, field: SizeField, options: SizeOptions) -> _Edge:
@@ -421,6 +472,13 @@ def _sample_edge(model: MeshModel, current: EdgeKey, field: SizeField, options: 
         samples = max(samples, min(MAX_SAMPLES, 4 * len(geometry.points)))
     fractions = tuple(index / samples for index in range(samples + 1))
     points = model.edge_points(current, fractions)
+    if field.caps:
+        # Sample where the edge enters, crosses and leaves a cap box, so a
+        # box thinner than the sample spacing is not stepped over.
+        extra = _cap_fractions(points, fractions, field.caps)
+        if extra:
+            fractions = tuple(sorted(set(fractions) | extra))
+            points = model.edge_points(current, fractions)
     arc = [0.0]
     for (x0, y0), (x1, y1) in zip(points, points[1:]):
         arc.append(arc[-1] + math.hypot(x1 - x0, y1 - y0))
@@ -432,6 +490,79 @@ def _sample_edge(model: MeshModel, current: EdgeKey, field: SizeField, options: 
         norm = math.hypot(tx, ty) or 1.0
         sizes.append(field.size(x, y, tx / norm, ty / norm))
     return _Edge(current, arc[-1] or length, arc, sizes)
+
+
+def _block_caps(model: MeshModel, edges: dict, caps) -> None:
+    """Give every edge of a block with cells in a cap box the cap along its
+    direction (``_Edge.cap``). A block has cells in a box when a node of
+    its count-free 16 x 16 map lies strictly inside the box or a box corner
+    lies inside the block's outline (a box smaller than one map cell)."""
+    from .sampling import block_grid
+
+    for block in model.blocks:
+        nodes = block_grid(model, block, uniform=16).nodes
+        outline = ([point for point in nodes[0]] + [row[-1] for row in nodes[1:]]
+                   + [point for point in reversed(nodes[-1][:-1])] + [row[0] for row in reversed(nodes[1:-1])])
+        hit = []
+        for box in caps:
+            xmin, ymin, xmax, ymax = box[:4]
+            tx, ty = 1.0e-9 * (xmax - xmin), 1.0e-9 * (ymax - ymin)
+            inside = any(xmin + tx < x < xmax - tx and ymin + ty < y < ymax - ty
+                         for row in nodes for x, y in row)
+            if not inside:
+                inside = any(_in_polygon(corner, outline)
+                             for corner in ((xmin, ymin), (xmax, ymin), (xmax, ymax), (xmin, ymax)))
+            if inside:
+                hit.append(box)
+        if not hit:
+            continue
+        for index in range(4):
+            current = edge_key(*block.directed_edge(index))
+            item = edges[current]
+            points = model.edge_points(current, tuple(k / 8 for k in range(9)))
+            for (x0, y0), (x1, y1) in zip(points, points[1:]):
+                norm = math.hypot(x1 - x0, y1 - y0)
+                if norm <= 0.0:
+                    continue
+                ux, uy = (x1 - x0) / norm, (y1 - y0) / norm
+                for _xmin, _ymin, _xmax, _ymax, hx, hy in hit:
+                    q = (ux / hx) ** 2 + (uy / hy) ** 2
+                    if q > 0.0:
+                        item.cap = min(item.cap, 1.0 / math.sqrt(q))
+
+
+def _in_polygon(point, outline) -> bool:
+    x, y = point
+    inside = False
+    for (x0, y0), (x1, y1) in zip(outline, outline[1:] + outline[:1]):
+        if (y0 > y) != (y1 > y) and x < x0 + (y - y0) * (x1 - x0) / (y1 - y0):
+            inside = not inside
+    return inside
+
+
+def _cap_fractions(points, fractions, caps) -> set[float]:
+    """Edge fractions where the sampled path enters, crosses the middle of
+    and leaves each cap box (Liang-Barsky clipping of each sample segment)."""
+    found: set[float] = set()
+    for (x0, y0), (x1, y1), f0, f1 in zip(points, points[1:], fractions, fractions[1:]):
+        dx, dy = x1 - x0, y1 - y0
+        for xmin, ymin, xmax, ymax, _hx, _hy in caps:
+            low, high = 0.0, 1.0
+            for p, q in ((-dx, x0 - xmin), (dx, xmax - x0), (-dy, y0 - ymin), (dy, ymax - y0)):
+                if p == 0.0:
+                    if q < 0.0:
+                        low, high = 1.0, 0.0
+                        break
+                    continue
+                t = q / p
+                if p < 0.0:
+                    low = max(low, t)
+                else:
+                    high = min(high, t)
+            if low < high:
+                for t in (low, 0.5 * (low + high), high):
+                    found.add(f0 + (f1 - f0) * t)
+    return {value for value in found if 0.0 < value < 1.0}
 
 
 def _profile(edge: _Edge, start: float, end: float, slope: float, core: float) -> list[float]:
@@ -705,6 +836,11 @@ def size_model(
             "before them, and the budget was spent again from there: a larger budget can end with "
             "fewer cells than a smaller one"
         )]))
+    if options.caps:
+        result.caps = _cap_report(working, options)
+        over = [item["text"] for item in result.caps if not item["held"]]
+        if over:
+            result.note = "; ".join(filter(None, [result.note, "cap boxes not held: " + "; ".join(over)]))
     spokes = _spoke_misses(working, options)
     if result.raised:
         result.raised = _raised_through_spokes(working, moves, spokes)
@@ -905,6 +1041,31 @@ def _raised_through_spokes(model: MeshModel, moves: list[dict],
     return entries
 
 
+def _cap_report(model: MeshModel, options: SizeOptions) -> list[dict]:
+    """Each cap box's largest cell extents in the sized mesh
+    (``sampling.cell_extents``: cells whose centre lies in the box, real
+    counts) against its caps, and a short text."""
+    from .sampling import cell_extents
+
+    report = []
+    for xmin, ymin, xmax, ymax, hx, hy in options.caps:
+        found = cell_extents(model, (xmin, ymin, xmax, ymax))
+        held = found["max_x_extent"] <= hx * (1.0 + 1.0e-6) and found["max_y_extent"] <= hy * (1.0 + 1.0e-6)
+        parts = []
+        for axis, cap in (("x", hx), ("y", hy)):
+            if not math.isinf(cap):
+                value = found[f"max_{axis}_extent"]
+                at = found[f"{axis}_at"]
+                parts.append(f"{axis} {value:.4g} for {cap:g}"
+                             + (f" ({found[f'{axis}_block']} at {at[0]:.4g},{at[1]:.4g})"
+                                if value > cap * (1.0 + 1.0e-6) and at else ""))
+        box = ",".join(f"{value:g}" for value in (xmin, ymin, xmax, ymax))
+        report.append({**found, "cap_x": None if math.isinf(hx) else hx,
+                       "cap_y": None if math.isinf(hy) else hy, "held": held,
+                       "text": f"box {box}: {', '.join(parts)}"})
+    return report
+
+
 def _brief(summary: dict) -> dict:
     """The verdict ``size`` reports for a state (``verification``)."""
     return {
@@ -1014,6 +1175,8 @@ def _solve(working, field_, options, blocks, bbox) -> dict:
     smaller than that), and the strips that are fine at both ends."""
     scope = _scope_edges(working, blocks, bbox)
     edges = {current: _sample_edge(working, current, field_, options) for current in working.edges()}
+    if field_.caps:
+        _block_caps(working, edges, field_.caps)
     links = _links(working)
     strips = _strips(working, edges)
     components = _components(working)
@@ -1027,9 +1190,13 @@ def _solve(working, field_, options, blocks, bbox) -> dict:
     if not options.keep_counts:
         ratios = _ratios(strips, edges, bounds, options)
         targets = _targets(edges, bounds, sized, slope, options, _strip_targets(strips, edges, bounds, ratios, options), two_ended)
-        factor = _budget_factor(working, sized, targets, options)
-        for members, target in zip(sized, targets):
-            value = int(min(options.maximum_cells, max(options.minimum_cells, math.ceil(target * factor - 1.0e-9))))
+        # A budget below the field's own does not coarsen a component
+        # through a cap box: the cap is a requirement, the budget a target.
+        capped = [any(edges[member].cap < math.inf for member in members) for members in sized]
+        factor = _budget_factor(working, sized, targets, options, capped)
+        for members, target, held in zip(sized, targets, capped):
+            scale = 1.0 if held else factor
+            value = int(min(options.maximum_cells, max(options.minimum_cells, math.ceil(target * scale - 1.0e-9))))
             for member in members:
                 counts[member] = value
     return {
@@ -1042,8 +1209,8 @@ def _solve(working, field_, options, blocks, bbox) -> dict:
 
 def _field_seeds(edges: dict[EdgeKey, _Edge]) -> dict[tuple[EdgeKey, str], float]:
     return {
-        **{(current, current[0]): item.field[0] for current, item in edges.items()},
-        **{(current, current[1]): item.field[-1] for current, item in edges.items()},
+        **{(current, current[0]): min(item.field[0], item.cap) for current, item in edges.items()},
+        **{(current, current[1]): min(item.field[-1], item.cap) for current, item in edges.items()},
     }
 
 
@@ -1097,7 +1264,11 @@ def _targets(edges, bounds, components, slope, options, needed, two_ended=None, 
                 start < own[(member, member[0])] * (1.0 - 1.0e-6)
                 and end < own[(member, member[1])] * (1.0 - 1.0e-6)
             )
-            if reached and profile[peak_index] >= SPLIT_RATIO * ends and 0.05 < fraction < 0.95:
+            # An edge held by a cap box is fine at both ends because the cap
+            # asks it: it is two-ended only when its ends are finer than the
+            # cap by SPLIT_RATIO too (a plate face between two walls).
+            if (reached and min(profile[peak_index], item.cap) >= SPLIT_RATIO * ends
+                    and 0.05 < fraction < 0.95):
                 # Fine at both ends: one series cannot serve it, its strip
                 # is split; meanwhile it asks only what its profile asks,
                 # since a shared series fine at both ends is a uniform one
@@ -1745,15 +1916,17 @@ def _scope_edges(model: MeshModel, blocks, bbox) -> set[EdgeKey]:
     return {edge_key(*block.directed_edge(index)) for block in chosen for index in range(4)}
 
 
-def _budget_factor(model, components, targets, options: SizeOptions) -> float:
+def _budget_factor(model, components, targets, options: SizeOptions, capped=None) -> float:
     if not options.budget or options.budget <= 0:
         return 1.0
     index_of = {member: position for position, members in enumerate(components) for member in members}
+    held = capped or [False] * len(targets)
 
     def total(factor: float) -> int:
         values = [
-            min(options.maximum_cells, max(options.minimum_cells, math.ceil(target * factor - 1.0e-9)))
-            for target in targets
+            min(options.maximum_cells, max(options.minimum_cells, math.ceil(
+                target * (1.0 if keep else factor) - 1.0e-9)))
+            for target, keep in zip(targets, held)
         ]
         result = 0
         for block in model.blocks:
@@ -1918,7 +2091,7 @@ def _stranded(state: dict, options: SizeOptions) -> dict[EdgeKey, tuple[float, f
         peak = max(range(len(profile)),
                    key=lambda index: (profile[index], -abs(item.arc[index] - 0.5 * item.arc[-1])))
         fraction = item.arc[peak] / item.arc[-1]
-        if profile[peak] >= SPLIT_RATIO * ends and 0.05 < fraction < 0.95:
+        if min(profile[peak], item.cap) >= SPLIT_RATIO * ends and 0.05 < fraction < 0.95:
             found[current] = (fraction, profile[peak] / ends)
     return found
 

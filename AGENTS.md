@@ -279,6 +279,11 @@ them in the canvas widgets.
   1000, checkMesh's) per block, and the summary's `worst_aspect_block`;
   it equalled checkMesh to two decimals on the eleven round-2 benchmark
   sessions and on a default-sized blunt plate (1846.52, 217 cells).
+  `cell_extents(model, box)` gives the largest cell extent in x and in y
+  (the span of a cell's corners) among the cells whose centre (the mean of
+  its corners) lies in a box, at the real counts, with the block and the
+  centre; `quality --bbox` (repeatable) and the MCP `quality_report`'s
+  `bbox` add it as `cell_extents`, and `size`'s cap report uses it.
   `BlockSample.mean_non_orthogonality` is checkMesh's average over a
   block's faces (the angle of the mean cosine) and `real_faces` its faces
   scaled to the real counts where the block was coarsened; the summary's
@@ -593,6 +598,27 @@ them in the canvas widgets.
   (NACA 4412's polished maximum 45.1 -> 62.2, a jump above 5 gained on
   three cylinders). `field_grading` gives `refused_by_shear` and
   `refused_strips` ("EDGE (jump|grid|shear)").
+  Cap boxes (`SizeOptions.caps`, the command's `cap=`, `cap_x=`, `cap_y=`
+  with five numbers a box, `xmin,ymin,xmax,ymax,size`, repeated for more):
+  `SizeField.cap_size` gives inside a box the size along a direction u
+  `1 / sqrt((ux/hx)^2 + (uy/hy)^2)` (a cap on both extents or on one), the
+  field is the smaller of that and the walls' (so the demand integral sees
+  it), `_sample_edge` adds samples where an edge's path enters, crosses and
+  leaves a box (`_cap_fractions`), `_block_caps` gives every edge of a
+  block with cells in a box (a node of its count-free 16 x 16 map strictly
+  inside, or a box corner inside its outline) the box's cap along its
+  direction (`_Edge.cap`), and `_field_seeds` bounds both its ends by it: a
+  block's cells take their widths from its edges and one series has widths
+  linear along an edge, so both end widths within the cap keep every cell
+  inside the box within it (an edge only partly in the box is held at the
+  cap along its length - block lines on the box's sides cost the fewest
+  cells; a capped edge is two-ended or stranded only when its ends are
+  finer than the cap by `SPLIT_RATIO` too - a plate face between two walls -
+  else it takes the cells its bounds need). A budget below the
+  field's does not coarsen a component holding a capped edge
+  (`_budget_factor(capped=...)`). The result's `caps` give per box
+  `sampling.cell_extents` against the caps (`held`), the digest note's
+  `caps` the same, and the note says when a cap is not held.
 - `blockdrawer/construct.py`: construction operators behind the registry
   commands `add_grid`, `add_band`, `add_rows`, `add_ring`, `add_stations`,
   `add_fill` and `set_boundary_by`, derived

@@ -177,6 +177,22 @@ class CliTests(unittest.TestCase):
         self.assertEqual(data["thresholds"]["cell_growth_ratio"], 5.0)
         self.assertEqual(data["summary"]["warning_count"], 0)
 
+    def test_quality_reports_the_largest_cells_in_a_box(self) -> None:
+        run_cli("apply", str(self.session), "set_edge_cells v0-v1 10", "set_edge_cells v1-v2 4",
+                "--in-place")
+        code, out, _ = run_cli("quality", str(self.session), "--bbox", "0,0,0.5,1", "--json")
+        self.assertEqual(code, 0)
+        found = json.loads(out)["cell_extents"][0]
+        self.assertEqual(found["cells"], 20)
+        self.assertAlmostEqual(found["max_x_extent"], 0.1)
+        self.assertAlmostEqual(found["max_y_extent"], 0.25)
+        self.assertEqual(found["y_block"], "b0")
+        code, out, _ = run_cli("quality", str(self.session), "--bbox", "0", "0", "1", "1",
+                               "--bbox", "5,5,6,6", "--summary-only")
+        self.assertEqual(code, 0)
+        self.assertIn("cells in box 0,0,1,1: 40; largest x extent 0.1 (b0 at", out)
+        self.assertIn("cells in box 5,5,6,6: none has its centre there", out)
+
     def test_render_svg_with_zoom_and_highlight(self) -> None:
         run_cli("apply", str(self.session), "add_block v1-v2", "--in-place")
         output = self.root / "picture.svg"
