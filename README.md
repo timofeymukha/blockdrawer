@@ -654,7 +654,14 @@ was 3.6e-5 of the extent):
   against 44,720 and 33.02; the reverse (bottom facing the top's) is
   refused: a facing station lands 0.036 from the bottom's foot, inside a
   band height of its mitre. The bump trial's pairs are compromises between
-  the two walls' normals, the annulus's lines normal to both. Tips are off by default: on 10:1, 4:1 and 5:1 ellipses they
+  the two walls' normals, the annulus's lines normal to both. Pairing by
+  the line making equal and opposite angles with both walls' normals (one
+  circle touching both walls) was measured in its place and not taken: the
+  annulus gave the trial's bipolar pairs (24,297 cells, 11.76 (3.64)) and the
+  nozzle's lower stations gave the upper `xs=` stations exactly, but the bump
+  channel's top ring was refused (beside the bottom bump's feet the pairs
+  came out of order, leaving a 0.020 edge at a 47-degree mitre that folds),
+  so the rule failed. Tips are off by default: on 10:1, 4:1 and 5:1 ellipses they
   cost 0.4 to 1.1 degrees of sampled non-orthogonality at default counts.
   For `to_box`, aim ring stations at the box corners with `normals=`; a
   band block that would fold against the box is refused with the spokes and
