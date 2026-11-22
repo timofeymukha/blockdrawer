@@ -819,6 +819,23 @@ above 5 3 -> 9); the same build with its band 0.1001 high for 0.1 gave
 the corner of the placeholder box the agent had put where the front
 belongs. The spoke stays the mitre.
 
+The wake of a blunt base whose corners are both open (high-lift's flap,
+rounds 3 to 5: four `add_vertex` and three `add_block_from_vertices` each
+time) needs no new operator. No carry direction lies in both corners'
+wedges, and the base's band block removed leaves the base no edge to
+carry; a fill makes the first row with the chain spoke-base-spoke as one
+side: `remove_edge` the base block, `add_vertex at=E1 dx=DX dy=DY id=A`
+and `id=D` at the two spoke ends, `add_fill E1,E2,D,A
+side1=E1,C1,C2,E2` (three blocks, the new side's stations facing the
+chain's), `set_edge_boundary C1-C2 WALL`, `add_rows between=A,D ...`. On
+round 5's flap the same vertex and block counts and vertex IDs (the two
+middle stations named by the fill), every vertex within 0.075 (the far field: `spread=100`
+carries the first row's small differences out), and through the trial's
+chain 217,786 cells, Mesh OK, max 68.30 (14.11), no jump above 5, first
+widths as delivered (219,594 cells, 68.30 (14.12)). Three commands for
+seven; a carry from a blockless wall edge or a band block with two given
+end spokes would save one more and is not built.
+
 Measured (`review_operators/` beside the trial data): the 27-block backward
 step in 8 commands (`add_grid` with one skip box and six `set_boundary_by`;
 `size`: 21,750 cells, Mesh OK, 0 degrees); the grooved tandem in 14 (two
