@@ -12,20 +12,12 @@ file; `blockdrawer-cli` and the `blockdrawer` MCP tools edit it, and
 `blockMeshDict` is exported from it. Topology first; counts and grading are a
 later, cheaper stage done by one command (`size`).
 
-This file is the procedure. Open a reference file only when a step sends you
-there:
+This file is the procedure. Open a reference file only when a step sends you there:
+`engine.md` (the topology engine, `research_cli.py`: per configuration, options, report),
+`sizing.md` (`size`'s inputs, its `verification`, sizing by hand), `failures.md` (a defect
+`quality` or `check` names -> the tool), `examples/README.md` (four batches, end to end).
 
-| File | Open it when |
-|---|---|
-| `engine.md` | you run the topology engine (`research_cli.py`): what it builds per configuration, its options, its report (the algorithm: `experiments/agentic_topology/README.md`) |
-| `sizing.md` | you choose `size`'s inputs, read its `verification`, or size by hand |
-| `failures.md` | `quality` or `check` names a defect: signature -> the tool that acts on it |
-| `examples/README.md` | before your own case: four batches to run end to end |
-
-Tool mechanics (arguments, defaults): `blockdrawer-cli commands`, MCP
-`list_commands`. **Kept in step with the engine (`experiments/agentic_topology/`):
-a template, acceptance term or option change there updates `engine.md`
-and, if the route changes, the table below.**
+Tool mechanics (arguments, defaults): `blockdrawer-cli commands`, MCP `list_commands`.
 
 ## Step 1 - Collect the inputs
 
@@ -51,25 +43,28 @@ Choose by what has been measured, not by what a route intends:
 
 | Case | Route | What it took | Result (checkMesh) | Source |
 |---|---|---|---|---|
-| Backward step, 2:1 | operators by hand | 8 commands, ~3 min (a hand script: 161 lines, 8 min) | 27 blocks; after `size` 21,750 cells, Mesh OK, 0 deg. Engine: 3 runs, refused (`sweep_correspondence: ribs cross or invert`) | `examples/backward_step.txt` |
-| Channel with a cavity | one `add_grid`, after the backward-step example | 3.4 min | 36 blocks, 71,850 cells, Mesh OK, 0 deg | benchmark round 4 |
-| Two grooved cylinders in tandem | operators by hand | 14 commands, ~6 min (a hand script: 299 lines, 25 min, max 42.7 deg) | 251 blocks; after shape/size/polish 47,616 cells, Mesh OK, max 20.5 deg. Engine: 5 runs of 11-23 min, refused (no groove template) | `examples/grooved_tandem.txt` |
+| Backward step, 2:1 | operators by hand | 8 commands, ~3 min | 27 blocks; after `size` 21,750 cells, Mesh OK, 0 deg. Engine refused (ribs cross) | `examples/backward_step.txt` |
+| Channel with a cavity | one `add_grid`, after the backward-step example | 3.4 min | 36 blocks, 71,850 cells, Mesh OK, 0 deg | round 4 |
+| Channel with an orifice plate | one `add_grid` (the cavity row), stations off the plate (Step 3) | 6 min | 34 blocks, 56,208 cells, Mesh OK, max 3.95 deg | round 5 |
+| Two grooved cylinders in tandem | operators by hand | 14 commands, ~6 min | 251 blocks; after shape/size/polish 47,616 cells, Mesh OK, max 20.5 deg. Engine refused (no groove template) | `examples/grooved_tandem.txt` |
 | NACA 0012 at 5 deg, box far field | operators by hand | 12 commands, ~10 min | 60,976 cells at first width 1e-4, Mesh OK, max 49.6 deg | `examples/naca0012.txt` |
 | | engine C-grid, r = 15, band 0.1 | 320 s | 185 blocks, resolved, Mesh OK 44.1 deg | `engine.md`, engine README table |
 | Single sharp airfoil, C-shaped far field (A-airfoil) | engine C-grid | 263 s | 200 blocks, resolved, Mesh OK 45.1 deg | engine README table |
 | Smooth bodies, clusters, simple channels | engine | seconds | e.g. `two_circles` 32 blocks resolved, Mesh OK 63.3 deg; `periodic_hill` resolved 36.2 deg | engine README table |
-| Three staggered cylinders (a cluster) | engine hull, or by hand: a ring and `to_box` per body, one H-grid round the boxes, 16 `move_vertex` snaps | hand: 12 min | engine: Mesh OK, 67.9 deg (average 21.7), skewness 3.46; by hand: 42.6 deg (10.2), 0.93 | benchmark rounds 3 and 4, one trial each |
-| Cylinder with a splitter plate (concave body corners) | ring round the body, mitred at the junctions; each junction wall's front carried along the other wall by `add_rows conform`; wake rows, far field by rows | 31 min | 461 blocks, 91,114 cells, Mesh OK, max 52.6 deg (average 15.1) | benchmark round 4 |
-| Elbow with a guide vane | ring on the vane, polar `add_grid` with `outside=`, four fills | 11 min | 92 blocks, 35,575 cells, Mesh OK, max 33.1 deg | benchmark round 4 |
-| 30P30N (slat, main, flap) | engine (`--wake --hull`) | minutes per run | 203 blocks, admissible not resolved; 5,486 cells, Mesh OK, max 77.9 deg, 60 faces above 70; defects left: the cove seam sliver (b21/b31 at v12), the slot strips | `engine.md`; review measurements in README (`smooth`, `size`) |
-| Internal flow with a body (cylinder in a channel) | operators by hand | 14 build commands, 4.5 min | 36 blocks, 21,824 cells, Mesh OK, 0 faces above 70, max 35.6 deg | benchmark round 1, one trial |
-| Duct, varying section, cross lines near the wall normals (nozzle) | operators: an open ring per wall with stations, one fill | 16 commands, 3-3.5 min (three agents) | Mesh OK, max 11.5 to 12.0 deg. The engine's sweep: `resolved`, but one core block with near-vertical lines - `resolved` does not test the brief | benchmark round 3, three trials |
-| Junction (Y-shaped channels) | operators: open rings on the wall chains, the sharp corner open with a station straight across the branch from it; a five-sided fill, or four-sided fills with the mitre's bisector | 7-15.5 min | round 4, three trials: 19, 30, 38 blocks, Mesh OK, max 32.1 / 25.0 / 24.9 deg. The corner fanned instead: 8 min lost, five jumps above 5, a spoke 82% fine | benchmark rounds 3 and 4 |
-| Periodic passage round a body (compressor cascade) | operators by hand: ring, wake strips, `add_stations offset=`, fills | 52 commands, 22 min | 56 blocks, 53,248 cells, Mesh OK, max 60.1 deg (average 28.0), skewness 2.52. Round 1's trailing-edge fan: 64.7, skewness 3.26 | benchmark rounds 1 and 2; the engine refuses a `cyclic` pair from the command line |
-| Multi-element airfoil with coves, engine not allowed | operators by hand plus two vertex scripts (cove pocket fill, hull) | 259 commands, 64 min | 538 blocks, 378,785 cells, Mesh OK, max 62.3 deg. **Weakness**: by operators alone (round 2, fills for coves and far field) checkMesh failed: 949 blocks, skewness 4.07 at a far-field corner, 391 faces above 70 in one sheared cove fill | benchmark rounds 1 and 2, one trial each |
+| Three staggered cylinders (a cluster) | engine hull, or by hand: a box per body (`to_box`), its sides on lines it shares with the others, a ring station (`normals=`, the angle to the point) wherever another box's line crosses; one H-grid; 12-16 `move_vertex` snaps | hand: 8-12 min | engine: Mesh OK, 67.9 deg (average 21.7); two hand trials: 42.6 and 37.0 deg | rounds 3 to 5 |
+| Cylinder with a splitter plate (concave body corners) | ring round the body, mitred at the junctions; each junction wall's front carried along the other wall by `add_rows conform`; wake rows, far field by rows | 31 min | 461 blocks, 91,114 cells, Mesh OK, max 52.6 deg (average 15.1) | round 4 |
+| Elbow with a guide vane | ring on the vane, polar `add_grid` with `outside=`, four fills; a rounded body end: a box from the cap's 45-degree stations | 11 min | 92 blocks, 35,575 cells, Mesh OK, max 33.1 deg; another layout 40.3 | rounds 4 and 5 |
+| 30P30N (slat, main, flap) | engine (`--wake --hull`) | minutes per run | 203 blocks, admissible not resolved; 5,486 cells, Mesh OK, max 77.9 deg, 60 faces above 70 | `engine.md` |
+| Internal flow with a body (cylinder in a channel) | operators by hand | 14 build commands, 4.5 min | 36 blocks, 21,824 cells, Mesh OK, 0 faces above 70, max 35.6 deg | round 1 |
+| Duct, varying section, cross lines near the wall normals (nozzle) | operators: an open ring per wall with stations, one fill | 16 commands, 3-3.5 min | Mesh OK, max 11.5 to 12.0 deg after the polish (25 after `size`). The engine's sweep: `resolved`, but one core block with near-vertical lines - `resolved` does not test the brief | round 3 |
+| Junction (Y-shaped channels) | open rings; the open corner's chain first (`fan=false`), the station across the branch `points=CORNER_ID`; the corner a station on a side of the junction's fill, not its corner (34.75 deg for 24.85); split the corner's spoke (`failures.md`; without: a wall 51% fine, 21k cells more) | 5.6-11.2 min | round 5, three trials: max 24.85 / 24.86 / 25.83 deg, first widths within 5.5%; 63,360 / 80,062 / 52,599 cells by the budget chosen | rounds 3 to 5 |
+| Periodic passage round a body (compressor cascade) | operators by hand: ring, wake strips, `add_stations offset=`, fills | 52 commands, 22 min | 56 blocks, 53,248 cells, Mesh OK, max 60.1 deg (average 28.0), skewness 2.52. Round 1's trailing-edge fan: 64.7, skewness 3.26 | rounds 1 and 2 |
+| Multi-element airfoil with coves, engine not allowed | operators only: three rings, cove and slot fills, wake rows, far field by rows | 59 min | round 5: 1822 blocks, 219,594 cells, Mesh OK, max 68.3 deg, no jump above 5 | rounds 1, 2, 5 |
+| Two airfoils in tandem | two rings `fan=false`, wake rows (`spread_about`), far field by rows, two fills | 16 min | 1058 blocks, 118,320 cells, Mesh OK, max 40.2 deg | round 5 |
+| Eccentric annulus | a ring on each wall (`side=in` outside), stations paired on lines normal to both walls, two half-annulus fills | 6.6 min | 96 blocks, 24,297 cells, Mesh OK, max 11.7 deg | round 5 |
 
-A row records what one trial built and measured; a weakness it names is not
-to be copied. Rules that follow from the table; the first that matches decides:
+A row records what benchmark trials built and measured; a weakness it names is
+not to be copied. Rules that follow from the table; the first that matches decides:
 
 1. **A periodic (`cyclic`) passage with a body in it, internal flow with a body, a junction,
    a turn round a divider tip, a duct whose brief asks for cross lines near the wall normals** -
@@ -81,8 +76,8 @@ to be copied. Rules that follow from the table; the first that matches decides:
    operators on a refusal. A blunt base wider than about two percent of the perimeter has no
    template there. **A cluster of smooth bodies**: one hand trial beat the engine's hull
    (three cylinders, above); by hand where the bodies fit boxes of one H-grid.
-3. **Multi-element, cove, groove** - the engine builds 30P30N with defects left; by hand it
-   took an hour and two vertex scripts; a groove or pocket the operators can state: by hand.
+3. **Multi-element, cove, groove** - the engine builds 30P30N with defects left; operators alone
+   took an hour (round 5); a groove or pocket: by hand.
 4. **Anything else the operators can state** (stations on curves, polar
    patches, bands, rings, boxes, fills between fronts) - by hand: minutes.
 5. A layout script that computes vertices is the last resort, when no operator
@@ -98,19 +93,25 @@ to be copied. Rules that follow from the table; the first that matches decides:
    first operator has built (the only block cannot be removed).
 2. `import_curve FILE name=NAME` for every body and chain.
 3. The layout, from the wall outwards:
-   - `add_grid xs=... ys=... skip=...` - Cartesian stations, cells in skip
-     boxes, inside `outside=` curves or inside existing blocks left out;
+   - `add_grid xs=... ys=... skip=X0,Y0,X1,Y1,...` - Cartesian stations, cells in skip
+     boxes (four numbers a box, one list), inside `outside=` curves or existing blocks left out;
      `add_grid center=X,Y rs=... thetas=... period=DEG` - a polar patch (arcs).
    - `add_ring CURVE HEIGHT count=N` - a wall band round a closed curve, a fan
      above 60 degrees of turning (one block to 90); `tips=true` adds a station at
      each rounded nose, `normals=140,180,220` where the outward normal has those
-     angles (`near=X,Y` per angle where it has one at several places), `corner=DEG`
-     sets the corners; `fan=false` leaves a sharp trailing edge open.
+     angles (`near=X,Y` where it has several); `fan=false` leaves
+     a sharp trailing edge open; `counts=14,14` edges per section between stations;
+     `facing=V1;V2` stations where another wall's normals at those points meet this one
+     (hand pairings did better: README). The note pairs front and wall IDs.
    - Internal flow, no block yet: `add_ring WALL1,WALL2 H side=left` - curves
      joined end to start, the band on the fluid's side; stations at ends, joints,
      corners, `xs=`, `points=X,Y;V` (nearest curve point: `xs=` crossing twice, a
      vertex opposite) and `count=`; end spokes run along an inlet curve ending
      there, else normal (the note says where; `start=0,1 end=0,1` set them).
+   - A long band beside a mitred or tilted spoke, a long edge into a wall face: a station
+     about a band height from it (a channel width for a long straight band), or the tilt
+     shears the whole block (bump 41.3 -> 33.0 deg, average 15.9 -> 11.3; Y-junction
+     average 10.5 -> 7.8), the edge is one series (orifice: 104,767 cells, 48,508 with).
    - A concave domain corner: no block line from it to a convex wall feature (a
      divider tip, a body) - they would share one graded strip (`failures.md`).
      A concave body corner (a plate on a cylinder): the ring mitres it; carry
@@ -118,10 +119,12 @@ to be copied. Rules that follow from the table; the first that matches decides:
    - `add_rows edges=A-B,B-C direction=1,0 to_x=X stations=...` (`rows=N
      growth=G`, `to_y=`, `distance=`) - a chain carried along a direction as
      rows: an open trailing edge's spokes to the outlet (`spread=10` widens
-     them, else `size` carries the wall spacing out; `examples/naca0012_cgrid.txt`).
+     them, else `size` carries the wall spacing out; `examples/naca0012_cgrid.txt`);
+     `to_y=V` takes V's y. A blunt base with both corners open: `failures.md`.
      `between=A,B` takes the shortest unassigned chain: assign the wall first.
      Never from a fan's front (high-lift: 3593 cells above aspect 1000); the note
-     names the thinnest column. `far_ratio=2`: mixed on five builds (`failures.md`).
+     names the thinnest column. `far_ratio=2`: mixed on five builds; a run of thin
+     columns stays thin (`failures.md`).
    - `add_band bbox=... height=H rows=N` - more rows along the unassigned
      exterior edges in a box; `to_box=...` carries them to a rectangle
      (spokes at its corners: ring stations by `normals=` aimed at them).
@@ -136,8 +139,8 @@ to be copied. Rules that follow from the table; the first that matches decides:
    - `add_block_from_vertices A,B points=X,Y;X,Y` - one block. `add_vertex X Y
      id=NAME`; `x_of=V y_of=W`, `at=V dx=...`, `between=A,B fraction=F`, `r=...
      theta=... about=V`: level with, offset from, between, polar about existing
-     vertices - never type their coordinates (a band front at a line/arc tangent joint
-     lies 0.0013-0.0026 off it: the refusal names the `move_vertex`).
+     vertices - never type their coordinates (a front at a line/arc joint lies 0.0013
+     off it: the refusal names the `move_vertex`).
    - `add_grid xs=... ys=... outside=BODIES` again for the H-grid round what
      is built (existing vertices on its cell sides become stations); a box
      whose sides carry different stations ("would fall inside the existing
@@ -156,28 +159,28 @@ blocks lying over one another.
 **By the engine**: `engine.md` - the command, the brief's options, the report. Go on when
 `admissible`; `resolved` is better. Its z patches are `empty`; rename its patches (`rename_boundary`).
 
-On hundreds of blocks read a region (`--bbox`), a block (`--only`) or a count component
-(`--component EDGE`). Two cores: `size` 2-12 min and `smooth` 6 min near 1000 blocks, the
-engine's C-grid 8.5 min; set a timeout above that.
+On hundreds of blocks read a region (`--bbox`), a block (`--only`) or a component (`--component
+EDGE`). Two cores: `size` 2-12 min, `smooth` 6 min near 1000 blocks; set a timeout above that.
 
 ## Step 4 - Shape
 
 `smooth mode=shape allow_stale_fold=true` moves the free interior vertices on the count-free
 block map before any count exists; band spokes keep their length and do not turn from the wall
-normal; no edge ends below `shape_length_ratio` (0.1) of its input (unlimited, a ring edge went
-to 0.002, a jump of 269 after `size`). Read `reason`: the count-free maximum before and after,
-`min_edge_ratio` and `max_pair_change`; applied only when no worse ("nothing to gain" on rectangles).
+normal; no edge ends below `shape_length_ratio` (0.1) of its input. Read `reason`: the count-free
+maximum before and after, `min_edge_ratio` and `max_pair_change`; applied only when no worse.
 Optional; on 19 hand builds, sized and polished, it lowered checkMesh's maximum by over a degree
 against no step on 10 (y-junction 39.1 -> 32.0), raised it on 3 (triangle +12.3) (README). Then:
 
-- Lines the brief requires (a wake line, cross lines): held here and in the polish (Step 6).
-- `min_edge_ratio` 0.1 with `max_pair_change` above 15: `shape_pair_ratio=2.5` was right on
-  one round-4 build (triangle: jumps above 2.5 / 5 19 / 3 -> 7 / 0, max 28.0 -> 25.9) and wrong
-  on another (three cylinders: 42.6 deg for the default step's 33.3, no jump above 5 either
-  way): size both and keep what `check` prefers. An engine session needs the step: the engine's
-  NACA 4412 with it 45.1 deg, 205,506 cells (4 jumps above 5 after `size`, none polished); without 69.6.
-- "already fold ... on the count-free block map": a spline running backwards
-  (`failures.md`), else move a station, split, or leave the step out.
+- What the brief fixes, held here and in the polish (Step 6): it pinches a wake band to a third
+  (airfoil tunnel: `hold_box=X0,Y0,X1,Y1` on the band, 15k cells more), turns fans at a blunt base
+  (triangle: lines 17 deg off; held, a jump of 5.5), makes a box an octagon (cylinder in a channel);
+  `hold_along=x` (or `y`, `line`) lets the held vertices slide along their line.
+- `min_edge_ratio` 0.1 and a large `max_pair_change` (not a threshold: splitter, 14.0, 31 jumps
+  above 5 after `size`, 7 with the limit): `shape_pair_ratio=2.5` was right on one
+  round-4 build (triangle: 28.0 -> 25.9 deg, jumps above 5 3 -> 0) and wrong on another (three
+  cylinders: 42.6 deg for 33.3): size both, keep what `check` prefers. An engine session needs
+  the step (NACA 4412: 45.1 deg with it, 69.6 without).
+- "already fold ... on the count-free block map": a spline running backwards (`failures.md`).
 
 ## Step 5 - Size
 
@@ -196,9 +199,7 @@ lower `budget=N` cuts cells and coarsens the field, first widths included (Y-jun
   asked; `note` names strips kept on one ratio and `raised` raises through spokes (Step 6).
 - `worst_jump` (counts above 2.5, 5, 20), `splits`, `refused`, `guard`. Judge jumps after the
   polish (NACA 4412: 4 above 5 after `size`, none after). `budget_binding=True` with jumps above
-  5: one run with a larger budget (three cylinders: 12 -> 6); one that stays is the shape's (Step
-  4) or the topology's - beside a fan, an open corner, across a channel one block thick or where
-  a fine column carried to a boundary meets a coarse row no budget helps: `failures.md`.
+  5: one run with a larger budget (three cylinders: 12 -> 6); one that stays: `failures.md`.
 
 A high average: the `quality` verdict names the blocks (`average_blocks`); it is their shape
 (Step 4, `failures.md`); `grading=strip` on a copy compares.
@@ -212,27 +213,25 @@ Where `check` still finds them, locate the block (`check` maps the set) and use 
 
 `smooth` - the real-count polish: interior vertices move to lower the face non-orthogonality
 checkMesh measures, never raising a block's worst face, wall-band spokes within 5 percent of
-their length, edges within 50 percent, no size jump past 2.5 created; applied only when the
-sampled check at 256 cells a side is no worse and checkMesh's aspect limit 1000 is not crossed
+their length, no size jump past 2.5 created; applied only when the
+sampled check is no worse and checkMesh's aspect limit 1000 is not crossed
 (`reason` says which bound). Lines the brief requires a free polish bends: hold them as in
-Step 4, `hold_line=A,B;C,D hold_along=line` (along them only; cost: triangle 24.8 -> 27.3 deg,
-cylinder in a channel 35 -> 41). `hold=V1,V2`/`hold_box=` fix vertices, `keep_lines=true` holds
-every line; `blocks=`/`bbox=` limit it; `slide=true` slides boundary vertices (if `check` agrees).
-The first width moves up to 5 percent with the spokes (`band_tolerance`), 11 to 18 where
-`size`'s note says the field pass was dropped (elbow -16, annulus -18 percent). Where the brief
-asks it exact, `set_first_width FIRST` is the last step (counts kept, jumps reported); not on a
-spoke running on as a line to the outlet (bluff body: 51 degrees of tilt with `opposite=keep`,
-nine jumps with `follow`). `size ... keep_counts=true` regrades every strip: first width or
-average got worse (U-bend -27 -> -50 percent; cylinder in a channel 3.26 -> 4.07).
+Step 4, `hold_line=A,B;C,D hold_along=line` (along them only; it costs degrees: `failures.md`).
+`hold=V1,V2`/`hold_box=` fix vertices, `keep_lines=true` holds every line; `blocks=`/`bbox=`
+limit it; `slide=true` slides boundary vertices (if `check` agrees). The first width moves up to
+5 percent with the spokes (`band_tolerance`), 11 to 18 where `size`'s note says the field pass
+was dropped. Where the brief asks it exact, `set_first_width FIRST` is the last step (counts
+kept, jumps reported); not on a spoke running on as a line to the outlet (`sizing.md`). `size
+... keep_counts=true` regrades every strip: first width or average got worse (`sizing.md`).
 
 ## Step 7 - Judge
 
 0. `validate SESSION` (MCP `validate_session`): loads, valid, no blocks over one another, exports.
 1. `quality SESSION` (MCP `quality_report`): the **verdict** first - valid and exports, untangled,
    worst non-orthogonality and where, faces above 70, max skewness and max aspect ratio and
-   where (above 1000 checkMesh fails), sampled at real counts (coarsened above 256 a side) as
-   checkMesh measures them; then the worst blocks, edges and warnings. The corner screen (corner
-   angles, growth, interface jumps - only there) hides interior distortion.
+   where (above 1000 checkMesh fails), sampled at real counts as checkMesh measures them; then
+   the worst blocks, edges and warnings. The corner screen (corner angles, growth, interface
+   jumps - only there) hides interior distortion.
 2. `check SESSION` (MCP `check_mesh`): `blockMesh` then `checkMesh` must print `Mesh OK`. It
    passes with any number of faces above 70 - read the severe count and the warnings too. `sets`
    maps checkMesh's bad faces to blocks, worst first, with bounds to render. The authority.
