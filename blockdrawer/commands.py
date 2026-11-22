@@ -1653,7 +1653,7 @@ def _run_add_rows(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
         to_x=args["to_x"], to_y=args["to_y"], distance=args["distance"], rows=args["rows"],
         growth=args["growth"], stations=tuple(stations), conform=args["conform"],
         between=args["between"], spread=args["spread"], spread_about=args["spread_about"],
-        far_ratio=args["far_ratio"], prefix=args["id"],
+        far_ratio=args["far_ratio"], far_min=args["far_min"], prefix=args["id"],
     ).to_data()
 
 
@@ -1840,6 +1840,9 @@ _register(CommandSpec(
         Parameter("far_ratio", "float", "the far row's own distribution: neighbouring far-row columns "
                   "within this ratio of each other, the narrow ones widened and the row scaled back between "
                   "its ends (0: the chain's image)", required=False, default=0.0),
+        Parameter("far_min", "float", "the far row's own distribution: no far-row column narrower than "
+                  "this fraction of the mean column width between its ends, the wider ones narrowed to "
+                  "make room (0: none); measured, not a default", required=False, default=0.0),
         _BETWEEN,
         _ID,
     ),

@@ -739,7 +739,12 @@ them in the canvas widgets.
   faces above 70, and a blend towards even columns (0.5, 1) 29 and 44
   percent more cells at 1e-4. On five round-3 builds it failed the
   rule for the skill to recommend it (README): it cannot widen a chain of
-  thin columns only, nor a column of normal width holding many cells.
+  thin columns only, nor a column of normal width holding many cells, nor
+  a column between two pinned points; its note says so. `far_min=F` (off
+  by default, `_floor_widths`) raises every far-row column to F times its
+  stretch's mean width and narrows the others in proportion; at 0.5 and
+  0.2 on three round-5 builds it failed its rule (README: column lines
+  tilt, maxima up to 41.8 degrees higher).
   Refused before anything is
   built: a point not reaching the line, a station outside every point's
   travel, a block not strictly convex in construction order (a direction

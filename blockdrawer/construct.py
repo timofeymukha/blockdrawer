@@ -1620,6 +1620,7 @@ def add_rows(
     spread: float = 1.0,
     spread_about: str | None = None,
     far_ratio: float = 0.0,
+    far_min: float = 0.0,
     prefix: str | None = None,
 ) -> ConstructResult:
     """Rows of blocks carrying a chain of exterior edges along ``direction``.
@@ -1672,6 +1673,8 @@ def add_rows(
         raise TopologyError("spread must be positive (1: no widening)")
     if far_ratio and far_ratio <= 1.0:
         raise TopologyError("far_ratio must be above 1 (0: the far row is the chain's image)")
+    if not 0.0 <= far_min < 1.0:
+        raise TopologyError("far_min is a fraction of the mean far-row column width, from 0 (none) below 1")
     lateral = (0.0, 1.0) if to_x is not None else (1.0, 0.0) if to_y is not None else (-d[1], d[0])
 
     def reach(p: Point) -> float:
@@ -1719,7 +1722,7 @@ def add_rows(
             for p in chain.interiors[e]:
                 if reach(p) <= build.tol:
                     raise TopologyError(f"the curved edge from {chain.vertices[e]} crosses {target}")
-        translation = distance > 0.0 and spread == 1.0 and not far_ratio
+        translation = distance > 0.0 and spread == 1.0 and not far_ratio and not far_min
         if not translation:
             # An arc carried by different distances is no longer an arc:
             # its rows follow samples of it as splines.
@@ -1804,13 +1807,13 @@ def add_rows(
         # The far row's own distribution: each vertex's displacement along
         # the target line from the chain's image there (none by default).
         shifts = {vertex: 0.0 for vertex in chain.vertices}
-        if far_ratio:
+        if far_ratio or far_min:
             if chain.closed:
-                raise TopologyError("far_ratio takes an open chain")
+                raise TopologyError("far_ratio and far_min take an open chain")
             along = [carried(position[v], last)[0] * lateral[0] + carried(position[v], last)[1] * lateral[1]
                      for v in chain.vertices]
             pinned = {0, count - 1} | {chain.vertices.index(v) for v in conformed.values()}
-            moved = _far_distribution(along, sorted(pinned), far_ratio)
+            moved = _far_distribution(along, sorted(pinned), far_ratio, far_min)
             if moved is None:
                 raise TopologyError(
                     "the chain's image on the far row runs back on itself: the rows would cross "
@@ -1898,7 +1901,9 @@ def add_rows(
         parts = [f"{len(rows_at)} row(s) of {edge_count} block(s) to {target}"
                  + (f", widened {spread:g} times" if spread != 1.0 else "")
                  + (f" about {spread_about}" if spread != 1.0 and spread_about is not None else "")
-                 + (f", far row with neighbouring columns within {far_ratio:g} times" if far_ratio else ""),
+                 + (f", far row with neighbouring columns within {far_ratio:g} times (a run of equally thin "
+                    "columns, or one between two pinned points, stays as carried)" if far_ratio else "")
+                 + (f", far-row columns at least {far_min:g} of their stretch's mean width" if far_min else ""),
                  f"far row along the chain {listed[0]}..{listed[-1]}, in its order: "
                  f"{_id_list(far, 12)}" + ("" if chain.closed else
                                           f"; its ends {far[0]} (beside {listed[0]}) and "
@@ -1918,7 +1923,8 @@ def add_rows(
     return _atomic(model, work)
 
 
-def _far_distribution(along: Sequence[float], pinned: Sequence[int], ratio: float) -> list[float] | None:
+def _far_distribution(along: Sequence[float], pinned: Sequence[int], ratio: float,
+                      floor: float = 0.0) -> list[float] | None:
     """The far row's positions along the target line, from the chain's
     image ``along`` (one value per chain vertex, monotone).  Between
     consecutive ``pinned`` indices (the chain's ends and any column holding
@@ -1929,7 +1935,13 @@ def _far_distribution(along: Sequence[float], pinned: Sequence[int], ratio: floa
 
     Measured before choosing (the skill's C-grid example, first width
     1e-4): a blend towards even columns cost 29 percent more cells half
-    way and 44 percent all the way; ``ratio`` 2 kept the example's rule."""
+    way and 44 percent all the way; ``ratio`` 2 kept the example's rule.
+
+    ``floor`` (a fraction of the stretch's mean column width, 0: none)
+    raises every column narrower than that to it and takes the width from
+    the wider ones in proportion - a run of equally thin columns that the
+    ratio alone leaves as it is (`_floor_widths`); ``ratio`` 0 applies the
+    floor alone."""
     count = len(along)
     widths = [along[k + 1] - along[k] for k in range(count - 1)]
     sign = 1.0 if along[-1] >= along[0] else -1.0
@@ -1941,13 +1953,40 @@ def _far_distribution(along: Sequence[float], pinned: Sequence[int], ratio: floa
             continue
         own = [abs(w) for w in widths[i0:i1]]
         total = sum(own)
-        target = [max(w / ratio ** abs(j - k) for j, w in enumerate(own)) for k in range(len(own))]
+        target = ([max(w / ratio ** abs(j - k) for j, w in enumerate(own)) for k in range(len(own))]
+                  if ratio else list(own))
+        if floor:
+            target = _floor_widths(target, floor * total / len(own) * sum(target) / total)
         scale = total / sum(target)
         position = along[i0]
         for k, w in enumerate(target[:-1]):
             position += sign * w * scale
             result[i0 + k + 1] = position
     return result
+
+
+def _floor_widths(widths: Sequence[float], least: float) -> list[float]:
+    """``widths`` with every one below ``least`` raised to it and the rest
+    scaled down to keep the sum (repeated while a scaled one falls below)."""
+    total = sum(widths)
+    fixed: set[int] = set()
+    out = list(widths)
+    for _ in range(len(widths) + 1):
+        free = [k for k in range(len(widths)) if k not in fixed]
+        rest = total - least * len(fixed)
+        own = sum(widths[k] for k in free)
+        if not free or own <= 0.0:
+            break
+        scale = rest / own
+        low = [k for k in free if widths[k] * scale < least]
+        if not low:
+            for k in free:
+                out[k] = widths[k] * scale
+            for k in fixed:
+                out[k] = least
+            return out
+        fixed.update(low)
+    return [total / len(widths)] * len(widths)
 
 
 def _far_row_note(model: MeshModel, chain: Sequence[str], far: Sequence[str]) -> str:

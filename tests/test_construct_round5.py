@@ -141,5 +141,36 @@ class PositionByVertexTests(unittest.TestCase):
             run(model, ["add_rows edges=v2-v3 direction=0,1 distance=2 stations=mid"])
 
 
+class FarMinTests(unittest.TestCase):
+    def test_a_run_of_thin_columns_is_widened(self) -> None:
+        # A chain of ten 0.1 edges and one 2.0 edge carried to y = 5: the far
+        # row is the chain's image (ten thin columns, far_ratio leaves the
+        # run as it is); far_min=0.5 gives none narrower than half the mean.
+        points = [(0.1 * k, 0.0) for k in range(11)] + [(3.0, 0.0)]
+        commands = [f"add_vertex {x} {y} id=c{k}" for k, (x, y) in enumerate(points)]
+        commands += [f"add_vertex {x} -1 id=d{k}" for k, (x, _y) in enumerate(points)]
+        commands += [f"add_block_from_vertices c{k},c{k + 1},d{k + 1},d{k}" for k in range(len(points) - 1)]
+        model, _ = run(MeshModel(box=(10, 10, 11, 11)), commands + ["remove_edge v0-v1"])
+        chain = ",".join(f"c{k}-c{k + 1}" for k in range(len(points) - 1))
+
+        def far_widths(extra):
+            carried, _ = run(model, [f"add_rows edges={chain} direction=0,1 to_y=5 id=r {extra}"])
+            far = sorted(v.x for k, v in carried.vertices.items() if k.startswith("r_") and abs(v.y - 5) < 1e-12)
+            return [b - a for a, b in zip(far, far[1:])]
+
+        mean = 3.0 / 11
+        # far_ratio widens the thin columns beside the wide one and scales
+        # the stretch back: the run's far end gets thinner still.
+        self.assertLess(min(far_widths("far_ratio=2")), 0.1)
+        widths = far_widths("far_min=0.5")
+        self.assertAlmostEqual(sum(widths), 3.0)
+        self.assertGreaterEqual(min(widths), 0.5 * mean - 1e-12)
+        self.assertAlmostEqual(far_widths("")[0], 0.1)
+
+    def test_far_min_is_a_fraction_below_one(self) -> None:
+        with self.assertRaisesRegex(CommandError, "far_min is a fraction"):
+            run(MeshModel(box=(0, 0, 1, 1)), ["add_rows edges=v2-v3 direction=0,1 to_y=3 far_min=1.5"])
+
+
 if __name__ == "__main__":
     unittest.main()

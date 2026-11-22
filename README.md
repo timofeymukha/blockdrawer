@@ -558,6 +558,29 @@ was 3.6e-5 of the extent):
   percent cells and a jump above 5, the high-lift 17 -> 19 jumps above 5.
   The rule fixed beforehand (four of five falling 30 percent, nothing
   worse) failed, so the skill does not recommend it for far-field rows.
+  `far_ratio` cannot widen a run of equally thin columns (each within the
+  ratio of its neighbours; it narrows the run's end beside a wide column
+  as it scales the stretch back) nor a column between two pinned points;
+  the note says so. `far_min=F` (batch 13, off by default) gives every
+  far-row column at least F times its stretch's mean width, the wider
+  ones narrowed in proportion (`_floor_widths`; with `far_ratio` or
+  alone). Measured on round 5's three builds whose agents reported thin
+  far columns, `far_min` added to every far-field row, each through its
+  trial's own chain (cells, checkMesh max (average), aspect, jumps above
+  2.5 / 5, first widths):
+
+  | build | as built | `far_min=0.5` | `far_min=0.2` |
+  |---|---|---|---|
+  | blunt_plate 5 | 69,872, 31.38 (4.71), 99, 10 / 0, exact | 85,782, 73.13 (13.05), 1 face above 70, 100, 48 / 2, exact | 81,035, 44.69 (5.85), 59, 10 / 0, exact |
+  | splitter_cylinder 5 | 83,763, 43.58 (9.32), 607, 26 / 3, -8..+5% | 67,047, 61.94 (10.74), 962, 40 / 0, -6..+10% | 81,468, 43.22 (9.39), 527, 40 / 11, -6..+5% |
+  | tandem_airfoils 5 | 118,320, 40.23 (4.37), 282, 18 / 0, -5..+5% | 121,323, 40.34 (11.30), 376, 17 / 0, -5..+5% | 118,172, 40.26 (5.09), 272, 18 / 0, -5..+5% |
+
+  The rule fixed beforehand (on two of the three cells down 5 percent or
+  the aspect ratio 30; on none a new face above 70, a new jump above 5, a
+  maximum 2 degrees higher or more cells) failed at both values: the
+  floor widens the thin columns over a body by narrowing the wake's and
+  tilts every column line between the chain and the far row (the blunt
+  plate's average and maximum, the tandem's average). It stays off.
   Vertices are reused by coordinate, and with `conform` (default) an
   existing exterior vertex on a point's path becomes a station; a row
   vertex that would cut an existing edge, a block over an existing block or
@@ -769,6 +792,32 @@ that end and the `move_vertex` putting it on the line: the U-bend front
 0.0013 off a line/arc joint, which a spoke on the straight stretch's own
 normal would have removed but which moved vertices on six round-3/4 builds
 and made one fail to replay, so the spoke stays the mitre.
+
+Batch 13 measured the general fix and kept it out. The bisector of the
+chords to a band vertex's neighbouring points is one defect seen twice:
+it is off the wall's normal by up to half the turn of the segment beside
+the vertex, at a tangent line/arc joint (U-bend) and at a station inside a
+segment (three cylinders: a `normals=` station's spoke, carried through
+the ring's front by `add_band ... to_box`, ended up to 0.0029 off the box
+point its angle aimed at). The fix tried: a smooth vertex takes the curve's
+normal (at a curve vertex the mean of the circles through it and its next
+two points either side, between vertices the normal through the point
+where the vertex normals cross, the rule `normals=` then placed its
+stations by too), a band on a front continues the straight spoke below
+it, and a `to_box` spoke within a millionth of a box corner ends on it.
+Its purpose builds held: the U-bend trial 5 without its two `move_vertex`
+built 23,754 cells, 37.45 degrees, as delivered; the three cylinders
+without their 12 snaps built with every box end within 9e-9 of its point,
+47,004 cells, 36.90 (9.05) against the delivered 45,261, 37.02 (9.27). The
+rule fixed beforehand failed: 38 of the 62 round-3/4/5 builds and examples
+moved by more than 1e-6 of their extent; of the 34 run through their own
+chains (the four high-lift and tandem builds were not), 33 held every term
+and `splitter_cylinder` trial 5 rose from 43.58 to 48.10 degrees (jumps
+above 5 3 -> 9); the same build with its band 0.1001 high for 0.1 gave
+44.33 (3 -> 7), so the chain is that sensitive, but the term is the term.
+`u_bend` trial 3c stopped at a block naming the front vertex `d_14`, now
+the corner of the placeholder box the agent had put where the front
+belongs. The spoke stays the mitre.
 
 Measured (`review_operators/` beside the trial data): the 27-block backward
 step in 8 commands (`add_grid` with one skip box and six `set_boundary_by`;
