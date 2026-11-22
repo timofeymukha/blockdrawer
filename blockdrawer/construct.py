@@ -66,6 +66,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import math
+import re
 from typing import Any, Sequence
 
 from .domain import Block, EdgeGeometry, EdgeKey, TopologyError, Vertex, edge_key
@@ -173,6 +174,8 @@ class _Build:
         # Chain vertices whose corner a band left open, and its front (`_band`).
         self.opened: list[str] = []
         self.front: list[str] = []
+        # Per chain vertex: (wall vertex, its front vertices, kind, turn, convex).
+        self.over: list[tuple[str, list[str], str, float, bool]] = []
         coordinates = [abs(v.x) + abs(v.y) for v in model.vertices.values()] or [1.0]
         self.tol = 1.0e-9 * max(1.0, max(coordinates))
         if prefix is not None and (not prefix or any(c.isspace() for c in prefix)):
@@ -774,6 +777,10 @@ def _band(build: _Build, chain: _Chain, height: float, rows: int, growth: float,
     # spokes per vertex: list of (direction, length factor); fans add mid points
     spokes: list[list[tuple[Point, float]]] = []
     opened: set[int] = set()
+    # What each vertex's spokes are, for the ring's note: (kind, turn in
+    # degrees, convex) - kind "open", "fan", "mitre" (a single spoke at a
+    # corner turning more than CORNER_ANGLE), "end" or "" (a plain spoke).
+    kinds: list[tuple[str, float, bool]] = []
     asked = None if open_corners == "all" else set(open_corners)
     for k in range(count):
         incoming = (k - 1) % count if (chain.closed or k > 0) else None
@@ -794,8 +801,11 @@ def _band(build: _Build, chain: _Chain, height: float, rows: int, growth: float,
                         "corner can be left open"
                     )
                 spokes.append([(n_in, 1.0), (n_out, 1.0)])
+                kinds.append(("open", math.degrees(turn), True))
                 opened.add(k)
                 continue
+            kinds.append(("fan" if box is None and convex and turn > FAN_ANGLE else
+                          "mitre" if turn > CORNER_ANGLE else "", math.degrees(turn), convex))
             if box is None and convex and turn > FAN_ANGLE:
                 sectors = max(1, math.ceil(turn / FAN_SECTOR - 1.0e-9))
                 start = math.atan2(n_in[1], n_in[0])
@@ -815,6 +825,7 @@ def _band(build: _Build, chain: _Chain, height: float, rows: int, growth: float,
             cosine = direction[0] * n_out[0] + direction[1] * n_out[1]
             spokes.append([(direction, min(MITRE_LIMIT, 1.0 / max(cosine, 1.0e-9)))])
         else:
+            kinds.append(("end", 0.0, False))
             edge = outgoing if outgoing is not None else incoming
             t = tangent_out(edge) if outgoing is not None else tangent_in(edge)
             n = normal(t)
@@ -925,14 +936,78 @@ def _band(build: _Build, chain: _Chain, height: float, rows: int, growth: float,
                         build.block([vid(k, first, r - 1), vid(k, second, r - 1),
                                      vid(k, second, r), vid(k, first, r)], expect=chain.side)
     front: list[str] = []
+    build.over = []
     for k in range(count):
+        here = []
         for spoke in range(len(spokes[k])):
             identifier = vid(k, spoke, rows)
+            if not here or here[-1] != identifier:
+                here.append(identifier)
             if not front or front[-1] != identifier:
                 front.append(identifier)
+        build.over.append((chain.vertices[k], here, *kinds[k]))
     build.opened = [chain.vertices[k] for k in sorted(opened)]
     build.front = list(front)
     return front
+
+
+_NUMBERED = re.compile(r"^(.*?)(\d+)$")
+
+
+def _numbered(identifier: str) -> tuple[str, int] | None:
+    match = _NUMBERED.match(identifier)
+    return (match.group(1), int(match.group(2))) if match else None
+
+
+def _over_note(over, closed: bool) -> str:
+    """Which front vertex stands over which wall station, for the ring's
+    note (`_band`'s ``build.over``: wall vertex, front vertices, kind, turn,
+    convex): the single spokes as runs ``WALL_a..WALL_b->FRONT_c..FRONT_d``
+    where both run in step, then each open corner's two spoke ends, each
+    fan's front and each mitre's front vertex (a single spoke at a corner
+    turning more than 30 degrees) with the corner's turn."""
+    runs: list[list[tuple[str, str]]] = []
+    for wall, front, kind, _turn, _convex in over:
+        if len(front) != 1:
+            runs.append([])
+            continue
+        pair = (wall, front[0])
+        if runs and runs[-1]:
+            last_wall, last_front = runs[-1][-1]
+            a, b = _numbered(last_wall), _numbered(wall)
+            c, d = _numbered(last_front), _numbered(front[0])
+            if a and b and c and d and a[0] == b[0] and c[0] == d[0] and b[1] == a[1] + 1 and d[1] == c[1] + 1:
+                runs[-1].append(pair)
+                continue
+        runs.append([pair])
+    runs = [run for run in runs if run]
+    # A closed ring's last run continues into its first.
+    if closed and len(runs) > 1:
+        a, b = _numbered(runs[-1][-1][0]), _numbered(runs[0][0][0])
+        c, d = _numbered(runs[-1][-1][1]), _numbered(runs[0][0][1])
+        if a and b and c and d and a[0] == b[0] and c[0] == d[0] and b[1] == a[1] + 1 and d[1] == c[1] + 1:
+            runs[0] = runs.pop() + runs[0]
+
+    def text(run: list[tuple[str, str]]) -> str:
+        if len(run) == 1:
+            return f"{run[0][0]}->{run[0][1]}"
+        return f"{run[0][0]}..{run[-1][0]}->{run[0][1]}..{run[-1][1]}"
+
+    parts = []
+    if runs:
+        parts.append("front over the wall stations: " + ", ".join(text(run) for run in runs))
+    neighbours = [item[0] for item in over]
+    count = len(over)
+    for k, (wall, front, kind, turn, convex) in enumerate(over):
+        if kind == "open" and len(front) == 2:
+            before = neighbours[(k - 1) % count]
+            after = neighbours[(k + 1) % count]
+            parts.append(f"open corner {wall}: {front[0]} on its {before} side, {front[1]} on its {after} side")
+        elif kind == "fan":
+            parts.append(f"fan at {wall}: {', '.join(front)}")
+        elif kind == "mitre":
+            parts.append(f"mitre at {wall} ({'convex' if convex else 'concave'} {turn:.0f} deg): {front[0]}")
+    return "; ".join(parts)
 
 
 def _front_note(chain: _Chain, front: Sequence[str], to_box: bool) -> str:
@@ -1923,10 +1998,12 @@ def add_ring(
     height: float,
     *,
     count: int = 0,
+    counts: Sequence[int] = (),
     fractions: Sequence[float] = (),
     normals: Sequence[float] = (),
     near: Sequence[Point] = (),
     points: Sequence[Point] = (),
+    facing: Sequence[Point] = (),
     corner: float = math.degrees(CORNER_ANGLE),
     tips: bool = False,
     rows: int = 1,
@@ -1953,7 +2030,11 @@ def add_ring(
     nearest its point), with ``tips`` the peak of every rounded convex corner
     (`_tip_stations`), and ``count`` edges spread by arc length between
     them; ``points`` puts a station at the curve point nearest each point
-    (refused where that is not unique).
+    (refused where that is not unique); ``facing`` puts one where the
+    normal of another reference curve at each point - a point on that curve,
+    its bisector at a corner (`_facing_parameters`) - meets this one;
+    ``counts`` gives the edges of each section between consecutive stations
+    in order along the curve, in place of ``count`` spread over the whole.
 
     Along an open curve (``side=left`` or ``right`` of its point order, no
     host block needed; `_open_ring`) - or several, given in order, each
@@ -1982,8 +2063,13 @@ def add_ring(
                             "(a closed ring takes one curve)")
     if count < 0:
         raise TopologyError("count is the number of edges, at least 0")
-    if not open_curve and not (count or fractions or normals or points):
-        raise TopologyError("give count (edges round the curve), fractions, normals or points")
+    if counts and count:
+        raise TopologyError("give count (edges spread over the whole curve) or counts (per section), not both")
+    if any(c < 1 or c != int(c) for c in counts):
+        raise TopologyError("counts are whole numbers of edges, at least 1 per section")
+    counts = [int(c) for c in counts]
+    if not open_curve and not (count or fractions or normals or points or facing):
+        raise TopologyError("give count (edges round the curve), fractions, normals, points or facing")
     if not 0.0 < corner < 180.0:
         raise TopologyError("corner is an angle in degrees between 0 and 180")
     if not open_curve:
@@ -2006,7 +2092,7 @@ def add_ring(
         if open_curve:
             build, chain, notes, stations, follows = _open_ring(
                 working, curves, side, between, corner_angle, corner, fractions, xs, ys, points,
-                count, prefix)
+                count, prefix, counts, facing)
             chain.end_spokes = end_spokes
             where = {v: (working.vertices[v].x, working.vertices[v].y) for v in chain.vertices}
             _band(build, chain, height, rows, growth, None,
@@ -2015,10 +2101,10 @@ def add_ring(
             result = build.result("add_ring")
             result.note = "; ".join(part for part in (
                 f"{stations} stations along the open curve, band on its {side}: "
-                + ("; ".join(notes) or ("by arc length" if count else "its ends alone")),
-                _front_note(chain, build.front, False),
+                + ("; ".join(notes) or ("by arc length" if count or counts else "its ends alone")),
+                _over_note(build.over, False),
                 _end_spokes_note(working, build.front, end_spokes, follows),
-                _opened_note(build)) if part)
+                ) if part)
             return result
         curve_id = curves[0]
         loop = _curve_polygon(working, curve_id)
@@ -2050,6 +2136,11 @@ def add_ring(
             extent = _extent(loop)
             explicit.update(u * total for u in _station_points(nodes, True, points, extent, 1.0e-3 * extent))
             notes.append(f"{len(points)} station(s) at points")
+        if facing:
+            closed_loop = list(loop) + [loop[0]]
+            explicit.update(_facing_parameters(working, curves, closed_loop, lengths, 0.0, total, facing,
+                                               corner_angle))
+            notes.append(f"{len(facing)} station(s) facing")
         stations.update(explicit)
         if tips:
             found = [
@@ -2061,12 +2152,15 @@ def add_ring(
                 " at fraction " + ", ".join(f"{round(t / total, 6) % 1.0:.4g}" for t in sorted(found))
                 if found else ""
             ))
-        if count:
-            anchors = sorted(stations) or [0.0]
+        if count or counts:
+            anchors = (sorted({round(value, 12) for value in stations}) if counts else sorted(stations)) or [0.0]
             pieces = [(anchors[k], anchors[(k + 1) % len(anchors)] + (total if k + 1 == len(anchors) else 0.0))
                       for k in range(len(anchors))]
-            for piece_start, piece_end in pieces:
-                share = max(1, round(count * (piece_end - piece_start) / total))
+            if counts:
+                _check_counts(counts, [a / total for a, _b in pieces])
+                notes.append("counts " + ",".join(str(c) for c in counts) + " by section")
+            for index, (piece_start, piece_end) in enumerate(pieces):
+                share = counts[index] if counts else max(1, round(count * (piece_end - piece_start) / total))
                 for step in range(1, share):
                     stations.add((piece_start + (piece_end - piece_start) * step / share) % total)
             stations.add(anchors[0] % total)
@@ -2108,7 +2202,8 @@ def add_ring(
         build.finish()
         result = build.result("add_ring")
         result.note = "; ".join(part for part in (
-            f"{len(ordered)} stations: " + ("; ".join(notes) or "by arc length"), _opened_note(build)) if part)
+            f"{len(ordered)} stations: " + ("; ".join(notes) or "by arc length"),
+            _over_note(build.over, True)) if part)
         return result
 
     return _atomic(model, work)
@@ -2244,7 +2339,8 @@ def _end_follow(model: MeshModel, curves: Sequence[str], point: Point, normal: P
 
 def _open_ring(working: MeshModel, curves: Sequence[str], side: str, between: Sequence[float],
                corner_angle: float, corner: float, fractions: Sequence[float], xs: Sequence[float],
-               ys: Sequence[float], places: Sequence[Point], count: int, prefix: str | None):
+               ys: Sequence[float], places: Sequence[Point], count: int, prefix: str | None,
+               counts: Sequence[int] = (), facing: Sequence[Point] = ()):
     """The wall chain of a band along an open curve (the polyline through
     its points, no closing segment) - or several joined end to start, each
     joint a station (`_joined_curve`) - or the section ``between`` two
@@ -2325,11 +2421,21 @@ def _open_ring(working: MeshModel, curves: Sequence[str], side: str, between: Se
         for u in _station_points(nodes, False, places, path.extent, path.tolerance):
             anchors.add(s0 + u * (s1 - s0))
         notes.append(f"{len(places)} station(s) at points")
+    if facing:
+        anchors.update(_facing_parameters(working, curves, points, lengths, s0, s1, facing, corner_angle))
+        notes.append(f"{len(facing)} station(s) facing")
     ordered = sorted(anchors)
-    if count:
+    if counts:
+        ordered = []
+        for value in sorted(anchors):
+            if not ordered or value - ordered[-1] > 1.0e-9 * total:
+                ordered.append(value)
+        _check_counts(counts, [value / total for value in ordered[:-1]])
+        notes.append("counts " + ",".join(str(c) for c in counts) + " by section")
+    if count or counts:
         extra = set()
-        for first, last in zip(ordered, ordered[1:]):
-            share = max(1, round(count * (last - first) / (s1 - s0)))
+        for index, (first, last) in enumerate(zip(ordered, ordered[1:])):
+            share = counts[index] if counts else max(1, round(count * (last - first) / (s1 - s0)))
             extra.update(first + (last - first) * step / share for step in range(1, share))
         ordered = sorted(set(ordered) | extra)
     merged: list[float] = []
@@ -2366,6 +2472,148 @@ def _open_ring(working: MeshModel, curves: Sequence[str], side: str, between: Se
             working, curves, points[0] if slot == 0 else points[-1], normal, path.tolerance)
     chain.ends = (ends[0], ends[1])
     return build, chain, notes, len(merged), follows
+
+
+def _check_counts(counts: Sequence[int], starts: Sequence[float]) -> None:
+    """Refuse ``counts`` unless it gives one number per section; the
+    sections are named by the fraction each starts at."""
+    if len(counts) != len(starts):
+        listed = ", ".join(f"{u:.4g}" for u in starts[:12]) + (", ..." if len(starts) > 12 else "")
+        raise TopologyError(
+            f"counts gives {len(counts)} section(s); the stations make {len(starts)}, in order along the "
+            f"curve from fraction {listed}: give one count per section"
+        )
+
+
+def _polyline_normal(points: Sequence[Point], lengths: Sequence[float], closed: bool, s: float,
+                     corner_angle: float) -> Point:
+    """The unit normal (left of the point order) of a polyline - its
+    distinct ``points``, ``lengths`` cumulative with the closing segment
+    when ``closed`` - at arc length ``s``, as ``normals=`` reads a curve: a smooth vertex's normal
+    bisects its two segments', a corner's (turning more than
+    ``corner_angle``) at the corner itself too, and between vertices the
+    normal turns linearly from one end's to the other's - at an end beside
+    a corner, or an open curve's end, the segment's own."""
+    n = len(points)
+    segments = n if closed else n - 1
+    total = lengths[segments]
+
+    def segment_normal(k: int) -> Point:
+        a, b = points[k % n], points[(k + 1) % n]
+        t = _unit(b[0] - a[0], b[1] - a[1])
+        return _left(t)
+
+    def vertex(j: int, own: int | None) -> Point:
+        """The normal at vertex ``j``; ``own`` is the segment asking (None:
+        the vertex itself), which keeps its own normal beside a corner."""
+        if not closed and (j == 0 or j == n - 1):
+            return segment_normal(0 if j == 0 else n - 2)
+        before, after = segment_normal(j - 1), segment_normal(j)
+        turn = math.atan2(before[0] * after[1] - before[1] * after[0],
+                          before[0] * after[0] + before[1] * after[1])
+        if abs(turn) > corner_angle and own is not None:
+            return segment_normal(own)
+        return _unit(before[0] + after[0], before[1] + after[1])
+
+    s = s % total if closed else min(max(s, 0.0), total)
+    k = max(0, min(segments - 1, _bisect(lengths, s) - 1))
+    span = lengths[k + 1] - lengths[k]
+    f = 0.0 if span <= 0.0 else (s - lengths[k]) / span
+    tol = 1.0e-9
+    if f <= tol:
+        return vertex(k % n, None)
+    if f >= 1.0 - tol:
+        return vertex((k + 1) % n, None)
+    a, b = vertex(k % n, k), vertex((k + 1) % n, k)
+    angle = math.atan2(a[1], a[0]) + f * _wrap(math.atan2(b[1], b[0]) - math.atan2(a[1], a[0]))
+    return math.cos(angle), math.sin(angle)
+
+
+def _facing_parameters(model: MeshModel, own: Sequence[str], points: Sequence[Point],
+                       lengths: Sequence[float], s0: float, s1: float, places: Sequence[Point],
+                       corner_angle: float) -> list[float]:
+    """Arc lengths on the polyline ``points`` (``lengths`` its cumulative
+    lengths; a closed loop repeats its first point at the end), within
+    [``s0``, ``s1``], where the normal of another reference curve at each
+    of ``places`` meets it: each place lies on another curve (within a
+    thousandth of that curve's size; the nearest, a curve it lies inside
+    before one it ends on), whose normal there is `_polyline_normal`'s (a
+    corner's bisector); of the points where that line crosses this polyline,
+    the nearest to the place.  Refused when a place lies on no other curve
+    or its normal line misses this one."""
+    out = []
+    for place in places:
+        best = None
+        for curve_id, curve in sorted(model.geometry_curves.items()):
+            if curve_id in own or len(curve.points) < 2:
+                continue
+            try:
+                other = _CurvePath(model, curve_id)
+            except TopologyError:
+                continue
+            s, distance = other.locate(place)
+            if distance > other.tolerance:
+                continue
+            at_end = not other.closed and (s <= other.tolerance or s >= other.total - other.tolerance)
+            key = (at_end, distance)
+            if best is None or key < best[0]:
+                best = (key, other, s)
+        where = f"({place[0]:.6g}, {place[1]:.6g})"
+        if best is None:
+            raise TopologyError(
+                f"facing: the point {where} lies on no other reference curve (within a thousandth of "
+                "its size): give a station or point of the curve whose normal is meant"
+            )
+        _key, other, s = best
+        nx, ny = _polyline_normal(other.points, other.lengths, other.closed, s, corner_angle)
+        origin = other.at(s)
+        hits = []
+        for k in range(len(points) - 1):
+            a, b = points[k], points[k + 1]
+            ex, ey = b[0] - a[0], b[1] - a[1]
+            denominator = nx * ey - ny * ex
+            if abs(denominator) <= 1.0e-15 * math.hypot(ex, ey):
+                continue
+            # origin + t n = a + u e
+            wx, wy = a[0] - origin[0], a[1] - origin[1]
+            t = (wx * ey - wy * ex) / denominator
+            u = (wx * ny - wy * nx) / denominator
+            if -1.0e-12 <= u <= 1.0 + 1.0e-12:
+                arc = lengths[k] + min(1.0, max(0.0, u)) * (lengths[k + 1] - lengths[k])
+                if s0 - 1.0e-12 * lengths[-1] <= arc <= s1 + 1.0e-12 * lengths[-1]:
+                    hits.append((abs(t), arc, t))
+        # A hit reached only through the other curve itself (across its
+        # body, round a closed curve) does not face it.
+        source = list(other.points) + ([other.points[0]] if other.closed else [])
+        hits = [hit for hit in sorted(hits)
+                if not _crosses(source, origin, (origin[0] + nx * hit[2], origin[1] + ny * hit[2]), other.tolerance)]
+        if not hits:
+            raise TopologyError(
+                f"facing: the normal of {other.name} at {where} (direction {nx:.4g}, {ny:.4g}) does not meet "
+                "this curve" + (" in the section given by between" if s1 - s0 < lengths[-1] else "")
+            )
+        out.append(hits[0][1])
+    return out
+
+
+def _crosses(polyline: Sequence[Point], start: Point, end: Point, clear: float) -> bool:
+    """Whether the segment ``start``-``end`` crosses ``polyline`` more
+    than ``clear`` away from ``start`` (where it leaves the polyline)."""
+    dx, dy = end[0] - start[0], end[1] - start[1]
+    length = math.hypot(dx, dy)
+    if length <= clear:
+        return False
+    for a, b in zip(polyline, polyline[1:]):
+        ex, ey = b[0] - a[0], b[1] - a[1]
+        denominator = dx * ey - dy * ex
+        if denominator == 0.0:
+            continue
+        wx, wy = a[0] - start[0], a[1] - start[1]
+        t = (wx * ey - wy * ex) / denominator
+        u = (wx * dy - wy * dx) / denominator
+        if 0.0 <= u <= 1.0 and clear / length < t <= 1.0:
+            return True
+    return False
 
 
 def _turning(loop: Sequence[Point]) -> list[float]:
@@ -2831,6 +3079,7 @@ def add_stations(
     ys: Sequence[float] = (),
     offset: Sequence[float] = (),
     points: Sequence[Point] = (),
+    facing: Sequence[Point] = (),
     prefix: str | None = None,
 ) -> ConstructResult:
     """Standalone vertices on a reference curve, ordered along it.
@@ -2843,14 +3092,16 @@ def add_stations(
     its first point), the arc-length ``fractions`` of the whole curve, and
     where the section crosses each of ``xs`` and ``ys`` (refused unless it
     crosses exactly once), and the section's point nearest each of
-    ``points`` (refused where that is not unique).  ``offset`` translates every station after it is
+    ``points`` (refused where that is not unique), and where the normal of
+    another reference curve at each of ``facing`` meets the curve
+    (`_facing_parameters`).  ``offset`` translates every station after it is
     placed, so the translated partner of a periodic chain gets stations
     matching this chain's node for node.  With ``id=NAME`` station k along
     the section is ``NAME_k``; a station on an existing vertex reuses it."""
     if count < 0 or count == 1:
         raise TopologyError("count is the number of stations, at least 2 (0: none)")
-    if not (count or fractions or xs or ys or points):
-        raise TopologyError("give count, fractions, xs, ys or points")
+    if not (count or fractions or xs or ys or points or facing):
+        raise TopologyError("give count, fractions, xs, ys, points or facing")
     if between and len(between) not in (2, 4):
         raise TopologyError("between takes two fractions or two points (x0,y0,x1,y1)")
     if offset and len(offset) != 2:
@@ -2915,6 +3166,11 @@ def add_stations(
                 nodes = [(0.0, path.at(s0)), *path.inside_with_parameters(s0, length),
                          (1.0, path.at(s0 + length))]
             found += _station_points(nodes, whole_loop, points, path.extent, path.tolerance)
+        if facing:
+            polyline = list(path.points) + ([path.points[0]] if path.closed else [])
+            for arc in _facing_parameters(working, (curve,), polyline, path.lengths, 0.0, total, facing,
+                                          CORNER_ANGLE):
+                found.append(section_u(arc, f"the station facing at ({path.at(arc)[0]:.6g}, {path.at(arc)[1]:.6g})"))
         ordered: list[float] = []
         for u in sorted(found):
             if not ordered or abs(u - ordered[-1]) * abs(length) > build.tol:

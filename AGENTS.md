@@ -160,7 +160,9 @@ them in the canvas widgets.
   (jump|grid|shear)"). A `set_first_width` note gives the spokes graded,
   the first widths and the jumps before -> after, and the edges opposite a
   spoke with the largest tilt left. Parameter kinds `blocks` (block IDs) and `numbers` (a list of
-  floats, e.g. a bbox) serve `smooth`; `locations` (`_coerce_locations`:
+  floats, e.g. a bbox) serve `smooth`; `x_value`/`y_value` (a number or a
+  vertex ID's x/y) and `values` (numbers or vertex IDs, resolved by the
+  command) serve `add_rows`' `to_x`/`to_y` and `stations`; `locations` (`_coerce_locations`:
   `x,y` points or vertex IDs, separated by `;`, each ID its vertex's
   position) serves `add_ring`/`add_stations` `points=` and `smooth`'s
   `hold_line=` (consecutive pairs). `resolve_position` gives
@@ -727,7 +729,10 @@ them in the canvas widgets.
   them, then the stretch is scaled back to its length; every point's
   displacement along the target line is taken in proportion to its
   travel (as `spread`), so column lines stay straight and the ends stay
-  where two carried chains meet. Measured on the skill's C-grid before
+  where two carried chains meet. `to_x`/`to_y` take a vertex ID for its
+  coordinate (kinds `x_value`/`y_value`), and `stations` vertex IDs with
+  them (kind `values`, read in `_run_add_rows`; refused with `distance`).
+  Measured on the skill's C-grid before
   choosing: R = 2 kept every term of the example's rule at both first
   widths (1e-4: 38,300 cells for 41,152, 0 faces above 70 for 11, aspect
   376 for 978); R = 1.5 cost 21 percent more cells at 5e-4, R = 1.2 8
@@ -771,8 +776,28 @@ them in the canvas widgets.
   the wall turns convexly at least `TIP_TURN` within `TIP_WINDOW` of the
   perimeter either side, the station at the turning midpoint of the
   window about the run's peak; corners carry no turning there; a tip
-  within `TIP_MERGE` of another station is that station) and by arc length
-  between all of them, reporting the stations in its `note`. Tips are off
+  within `TIP_MERGE` of another station is that station), at `facing`
+  (also open rings and `add_stations`; `_facing_parameters`: each point
+  lies on another reference curve - within a thousandth of its size, one
+  it lies inside preferred to one it ends on, refused naming it when none
+  -, the normal there is `_polyline_normal`'s, the `normals=` field with a
+  corner's bisector, and the station is the nearest crossing of that line
+  with this curve not reached through the other curve itself
+  (`_crosses`: across the eccentric annulus's inner body the far side
+  was nearer); measured in the README: the bump channel's and the
+  annulus's hand pairings beat pure normals) and by arc length
+  between all of them - `count` spread over the whole, or `counts` one
+  number per section between consecutive stations in order from the
+  curve's first point (`_check_counts` refuses another number of
+  sections, naming where each starts) -, reporting the stations in its
+  `note`, and which front vertex stands over which wall station
+  (`_over_note`, from `_band`'s `build.over`): single spokes as runs
+  `W_a..W_b->F_c..F_d` where both IDs run in step (the first two fronts
+  are made swapped, `r_0->r_9, r_1->r_8`), each open corner's two spoke
+  ends with the wall neighbour on their side, each fan's front and each
+  mitre's front (a single spoke at a corner turning more than
+  `CORNER_ANGLE`) with its turn; for an open ring this replaced the front
+  listed in order (`_front_note`, which `add_band` keeps). Tips are off
   because on 10:1, 4:1 and 5:1 ellipses they cost 0.4 to 1.1 degrees of
   sampled non-orthogonality at default counts and the blunt plate's
   `to_box` needed the normal stations anyway. `side=in` bands the inside

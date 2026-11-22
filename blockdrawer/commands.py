@@ -421,6 +421,31 @@ def coerce_argument(
         if unknown:
             raise CommandError(f"Unknown block(s) {', '.join(unknown)}")
         return tuple(identifiers)
+    if kind in ("x_value", "y_value"):
+        # A coordinate, or a vertex ID giving its own (as x_of=/y_of= do).
+        if isinstance(value, str) and value.strip() in model.vertices:
+            vertex = model.vertices[value.strip()]
+            return vertex.x if kind == "x_value" else vertex.y
+        try:
+            return _coerce_float(value, name)
+        except CommandError:
+            raise CommandError(f"{name} must be a number or a vertex ID, got {value!r}") from None
+    if kind == "values":
+        # Numbers or vertex IDs (kept as IDs: the command reads the coordinate it needs).
+        if isinstance(value, str) and not value.strip().startswith("["):
+            items = [item for item in value.replace(",", " ").replace(";", " ").split() if item]
+        else:
+            items = _coerce_list(value, name)
+        out: list[Any] = []
+        for item in items:
+            if isinstance(item, str) and item.strip() in model.vertices:
+                out.append(item.strip())
+                continue
+            try:
+                out.append(_coerce_float(item, name))
+            except CommandError:
+                raise CommandError(f"{name}: {item!r} is neither a number nor a vertex ID") from None
+        return tuple(out)
     if kind == "numbers":
         if isinstance(value, str) and not value.strip().startswith("["):
             items: list[Any] = [item for item in value.replace(",", " ").split() if item]
@@ -1611,10 +1636,22 @@ def _run_add_band(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
 def _run_add_rows(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
     from .construct import add_rows
 
+    stations = []
+    for item in args["stations"]:
+        if isinstance(item, str):
+            # A vertex ID: its x with to_x, its y with to_y.
+            if args["to_x"] is not None and args["to_y"] is None:
+                item = model.vertices[item].x
+            elif args["to_y"] is not None and args["to_x"] is None:
+                item = model.vertices[item].y
+            else:
+                raise CommandError(f"stations: the vertex {item} gives a coordinate only with to_x or to_y "
+                                   "(with distance give the distances)")
+        stations.append(item)
     return add_rows(
         model, edges=args["edges"], bbox=args["bbox"], direction=args["direction"],
         to_x=args["to_x"], to_y=args["to_y"], distance=args["distance"], rows=args["rows"],
-        growth=args["growth"], stations=args["stations"], conform=args["conform"],
+        growth=args["growth"], stations=tuple(stations), conform=args["conform"],
         between=args["between"], spread=args["spread"], spread_about=args["spread_about"],
         far_ratio=args["far_ratio"], prefix=args["id"],
     ).to_data()
@@ -1624,8 +1661,9 @@ def _run_add_ring(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
     from .construct import add_ring
 
     return add_ring(
-        model, args["curve"], args["height"], count=args["count"],
+        model, args["curve"], args["height"], count=args["count"], counts=args["counts"],
         fractions=args["fractions"], normals=args["normals"], near=args["near"], points=args["points"],
+        facing=args["facing"],
         corner=args["corner"],
         tips=args["tips"], rows=args["rows"], growth=args["growth"], side=args["side"],
         between=args["between"], xs=args["xs"], ys=args["ys"], start=args["start"], end=args["end"],
@@ -1639,7 +1677,7 @@ def _run_add_stations(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
     return add_stations(
         model, args["curve"], count=args["count"], between=args["between"],
         fractions=args["fractions"], xs=args["xs"], ys=args["ys"],
-        offset=args["offset"], points=args["points"], prefix=args["id"],
+        offset=args["offset"], points=args["points"], facing=args["facing"], prefix=args["id"],
     ).to_data()
 
 
@@ -1687,6 +1725,10 @@ _POINTS = Parameter("points", "locations",
                     "stations at the curve points nearest these points: x,y or vertex IDs, "
                     "separated by ';' (refused where the nearest point is not unique)",
                     required=False, default=())
+_FACING = Parameter("facing", "locations",
+                    "stations where the normal of another reference curve at these points (x,y or vertex "
+                    "IDs on that curve, ';' between; a corner's bisector) meets this curve - stations "
+                    "facing another wall's", required=False, default=())
 _register(CommandSpec(
     "add_grid",
     (
@@ -1779,13 +1821,15 @@ _register(CommandSpec(
         Parameter("bbox", "numbers", "select the unassigned exterior edges inside this box",
                   required=False, default=()),
         Parameter("direction", "numbers", "dx,dy the chain is carried along"),
-        Parameter("to_x", "float", "carry every point to the line x = to_x", required=False, default=None),
-        Parameter("to_y", "float", "carry every point to the line y = to_y", required=False, default=None),
+        Parameter("to_x", "x_value", "carry every point to the line x = to_x (a number, or a vertex ID: "
+                  "its x)", required=False, default=None),
+        Parameter("to_y", "y_value", "carry every point to the line y = to_y (a number, or a vertex ID: "
+                  "its y)", required=False, default=None),
         Parameter("distance", "float", "carry every point this far", required=False, default=0.0),
         Parameter("rows", "int", "rows of blocks (without stations)", required=False, default=1),
         Parameter("growth", "float", "row height ratio along each path", required=False, default=1.0),
-        Parameter("stations", "numbers", "rows at these x (to_x), y (to_y) or distances",
-                  required=False, default=()),
+        Parameter("stations", "values", "rows at these x (to_x), y (to_y) or distances; with to_x/to_y "
+                  "a vertex ID gives its x/y", required=False, default=()),
         Parameter("conform", "bool", "take existing exterior vertices on the paths as stations",
                   required=False, default=True),
         Parameter("spread", "float", "the far row's width across the carry over the chain's "
@@ -1811,9 +1855,12 @@ _register(CommandSpec(
         "counter-clockwise from +x; exactly one such point is required, or "
         "near=X,Y;... - one point per angle - takes the place nearest it), "
         "at the curve point nearest each of points (x,y or vertex IDs), "
+        "facing another wall's stations (facing=: where that curve's normal "
+        "at each point meets this one), "
         "with tips=true at the peak of each rounded convex corner (a nose "
         "turning 45 degrees within a hundredth of the perimeter either "
-        "side), and count edges spread by arc length between them; wall "
+        "side), and count edges spread by arc length between them (counts=: "
+        "edges per section between consecutive stations); wall "
         "edges as splines through the curve's points, then the band as "
         "add_band builds it, height high: a station where the curve turns "
         "convexly by more than 60 degrees gets a fan of corner blocks, one "
@@ -1835,6 +1882,9 @@ _register(CommandSpec(
         Parameter("height", "float", "band height"),
         Parameter("count", "int", "edges round the curve (0: stations only)",
                   required=False, default=0),
+        Parameter("counts", "numbers", "edges per section between consecutive stations, in order along "
+                  "the curve from its first point (from the first station round a closed curve): "
+                  "counts=14,14 for two sections, in place of count", required=False, default=()),
         Parameter("fractions", "numbers", "arc-length fractions of extra stations",
                   required=False, default=()),
         Parameter("normals", "numbers", "outward-normal angles (degrees) of extra stations",
@@ -1843,6 +1893,7 @@ _register(CommandSpec(
                   "where the normal has that angle at several places, the one nearest it",
                   required=False, default=()),
         _POINTS,
+        _FACING,
         Parameter("corner", "float", "a vertex turning more than this many degrees is a station",
                   required=False, default=30.0),
         Parameter("tips", "bool", "a station at the peak of each rounded convex corner",
@@ -1874,7 +1925,8 @@ _register(CommandSpec(
         "closed curve), the arc-length fractions of the whole curve, and "
         "where it crosses each xs and ys (exactly one crossing, else "
         "refused), and at the curve point nearest each of points (x,y or "
-        "vertex IDs; in the section). offset=DX,DY translates them all: the stations of a "
+        "vertex IDs; in the section), and where the normal of another curve at "
+        "each of facing (points on it) meets it. offset=DX,DY translates them all: the stations of a "
         "periodic partner chain, node for node. id=NAME names station k "
         "NAME_k; a station on an existing vertex reuses it."
     ),
@@ -1889,6 +1941,7 @@ _register(CommandSpec(
         Parameter("ys", "numbers", "stations where the curve crosses these y", required=False, default=()),
         Parameter("offset", "numbers", "dx,dy added to every station", required=False, default=()),
         _POINTS,
+        _FACING,
         Parameter("id", "optional_str", "name station k ID_k (default: next vN)",
                   required=False, default=None),
     ),

@@ -825,8 +825,7 @@ class OpenCornerTests(unittest.TestCase):
         # Two exterior spokes leave the corner, each normal to its own side.
         self.assertEqual(len(spokes), 2)
         note = opened_batch.results[1].result["note"]
-        self.assertIn("left open", note)
-        self.assertIn(te.id, note)
+        self.assertIn(f"open corner {te.id}:", note)
 
     def test_open_at_picks_the_nearest_corner_and_refuses_a_concave_one(self) -> None:
         one = self._ring("open_at=1.01,0").model

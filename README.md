@@ -604,7 +604,34 @@ was 3.6e-5 of the extent):
   neighbour (a station just past a curve point), so the control point at
   the end of such a segment beside its longer neighbour is left out, pass
   by pass until nothing hooks (`model.unhooked_points`). The result's note lists
-  the stations. Tips are off by default: on 10:1, 4:1 and 5:1 ellipses they
+  the stations and which front vertex stands over which wall station: the
+  single spokes as runs (`r_0->r_9, r_1->r_8, r_2..r_7->r_10..r_15`: the
+  first two fronts are made swapped), each open corner's two spoke ends,
+  each fan's front and each mitre's front vertex (a spoke at a corner
+  turning more than 30 degrees). Round 5's trials probed these IDs three
+  times (an open corner's spoke ends, a mitre's front, the swapped first
+  two); on the 34 rings of the round-5 builds the note is 101 to 367
+  characters (median 269; closed rings 34 to 105 before, open rings 314 to
+  382, which listed the front in order). `counts=14,14` gives the edges of
+  each section between consecutive stations, in order from the curve's
+  first point (round 5's cascade typed 27 fractions for 14 edges a side:
+  `fractions=0.524428 counts=14,14` builds the same blocks, vertices within
+  1.1e-5, the trial's rounding). `facing=POINTS` (also on open rings and
+  `add_stations`) puts a station where the normal of another reference
+  curve at each point - a station or point on that curve, a corner's
+  bisector - meets this one, the nearest crossing not reached through the
+  other curve's body. Measured through the trials' own chains against
+  their hand pairings, it did not beat them: the eccentric annulus with
+  the outer stations facing the inner ones (radial lines) 24,388 cells,
+  max 17.32 degrees (average 5.68) against the trial's bipolar lines,
+  24,297 and 11.74 (3.56); the bump channel with the top's stations
+  facing the bottom's 21 (and two bottom stations facing the top's foot
+  corners) 47,190 cells, max 85.96, 275 faces above 70 in one block (the
+  station facing the bottom's x = 4.22 lands 0.058 from the top's foot)
+  against 44,720 and 33.02; the reverse (bottom facing the top's) is
+  refused: a facing station lands 0.036 from the bottom's foot, inside a
+  band height of its mitre. The bump trial's pairs are compromises between
+  the two walls' normals, the annulus's lines normal to both. Tips are off by default: on 10:1, 4:1 and 5:1 ellipses they
   cost 0.4 to 1.1 degrees of sampled non-orthogonality at default counts.
   For `to_box`, aim ring stations at the box corners with `normals=`; a
   band block that would fold against the box is refused with the spokes and
@@ -695,6 +722,10 @@ and its distance), so a batch need not look up the IDs `add_grid` gave. The
 round-1 junction's branch (two `add_vertex`, a block from probed IDs,
 `split_edge` and `slide_vertex`) is two `add_stations` and two blocks: same
 vertices to 6e-13, same checkMesh numbers.
+
+`add_rows ... to_y=V` (and `to_x=V`) takes the vertex's coordinate, and
+`stations=` vertex IDs with them: round 5's tandem airfoils typed
+`to_y=-0.11961770602216258`, which is `to_y=f_82` (the same session).
 
 A vertex relative to existing ones: `add_vertex at=V dx=0.1 dy=0` (an
 offset), `add_vertex x=-0.7 y_of=V` or `x_of=V y_of=W` (level with them),
