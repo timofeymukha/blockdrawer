@@ -1486,8 +1486,9 @@ wanted size peaks (multi-section grading is out of scope), unless a piece
 would be shorter than half a cell of the size wanted along it, the cut folds
 a block, or the strip holds a cyclic edge (its partner would not be cut). A strip whose members are fine at opposite
 ends - none two-ended alone - is found as well, and the note names every
-strip left uncut with why and the `split_edge EDGE FRACTION` that would cut
-it (`uncut_strips` lists them all). That is the field's own state.
+strip left uncut that costs cells or an interface jump above 5, with why and
+the `split_edge EDGE FRACTION` that would cut it (`uncut_strips` lists them
+all). That is the field's own state.
 A strip a long count component makes fine (a thin wake strip, a seam
 sliver) is invisible to it, so `budget` total cells (default 1.5 times the
 field's own; a smaller budget first coarsens the field to budget/1.5) are
@@ -1857,10 +1858,18 @@ splitter reached its term (104,063 cells, first widths within 6 percent, no
 jump above 5) but the corpus failed - maxima up by 11.6 (blunt plate 5) and
 12.7 degrees (tandem 6), a jump above 5 gained on two splitter builds.
 
-The note names what is left uncut (`uncut_strips`): on the 44 builds it
-fires on 17 sessions (more than a third), 49 strips, so it names at most
-`NAMED_STRIPS` (4), those whose members meet the most interface pairs
-above 5 first, each with why and the `split_edge` that would cut it.
+`uncut_strips` lists what is left uncut: on the 44 builds 49 strips on 17
+sessions (more than a third), most of them on sessions meeting every
+target - strips stranded after spending with no jump above 5 at their
+members, or whose split a round tried and undid as no gain. The note
+therefore names only strips that cost something - an interface pair above
+5 at their members, or two-ended in the field's own state and not undone -
+at most `NAMED_STRIPS` (4), the most pairs above 5 first, each with why and
+the `split_edge` that would cut it. Of thirteen builds with strips listed,
+run again through `size`, it fires on six (high-lift 6, tandem 6, blunt
+plate 5, the splitter's 6, 6c and 6b without its hand split) and is silent
+on seven (NACA 4412, three cylinders, cascade, airfoil in a tunnel, blunt
+plate 6, splitter 5, flap airfoil), every cell count as before.
 
 `method=distance` keeps item 3's sizing reachable (`size_distance.py`, as
 of commit 9a84f29): counts from the wall distance alone, wall-normal edges

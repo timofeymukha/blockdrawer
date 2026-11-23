@@ -1116,6 +1116,22 @@ class OpposedStripTests(unittest.TestCase):
         self.assertIn("leaves the piece of v1-v2", text)
         self.assertIn("`split_edge v1-v2 0.5`", text)
 
+    def test_the_note_shows_only_strips_that_cost_something(self) -> None:
+        from blockdrawer.size import _uncut_strips
+
+        model = channel()
+        edge = edge_key("v1", "v2")
+        options = SizeOptions(first_width=0.005, core_size=0.1)
+        # Two-ended in the field's state, not tried: shown.
+        named: list[str] = []
+        _uncut_strips(model, {"two_ended": {edge: (0.5, 4.0)}}, options, {"reasons": {}, "members": {}}, named)
+        self.assertEqual(len(named), 1)
+        # A round tried the split and undid it as no gain: listed, not shown.
+        named = []
+        log = {"reasons": {edge: "the split was undone: it raised the interface jump cost"}, "members": {}}
+        listed = _uncut_strips(model, {"two_ended": {edge: (0.5, 4.0)}}, options, log, named)
+        self.assertEqual((len(listed), named), (1, []))
+
 
 class SplitAdmissionTests(unittest.TestCase):
     """Batch 14: a field round's cut is refused only for a piece under half

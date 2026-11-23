@@ -52,9 +52,9 @@ $$
   split where its size peaks - also a strip whose members are fine at
   opposite ends - unless a piece would be shorter than half a wanted cell
   or the cut folds a block (`refused` says so); the
-  note names every strip left uncut - one edge fine at both ends, members
-  fine at opposite ends, a strip coarse between finer neighbours after
-  spending - with why and the `split_edge EDGE FRACTION` that would cut it
+  note names the strips left uncut that cost cells or a jump above 5 - one
+  edge fine at both ends, members fine at opposite ends, a strip coarse
+  between finer neighbours after spending - with why and the `split_edge EDGE FRACTION` that would cut it
   (`uncut_strips` lists all): run it before `size`, or vary the fraction.
 - `count_rule=max` lets the finest demand in a count component decide;
   `mean` the length-weighted mean (coarser where a short wall piece shares

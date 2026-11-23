@@ -844,7 +844,9 @@ def size_model(
                 working, field_, state, moves, guard, options, budget, blocks, bbox, splits, refused,
                 skew_floor, fold_floor, log,
             )
-    uncut = _uncut_strips(working, state, options, log) if options.split and not options.keep_counts else []
+    named_uncut: list[str] = []
+    uncut = (_uncut_strips(working, state, options, log, named_uncut)
+             if options.split and not options.keep_counts else [])
     field_grading = None
     if options.grading == "field":
         state, field_grading = _field_pass(working, state, options)
@@ -872,12 +874,16 @@ def size_model(
     result.field_grading = field_grading
     result.raised = _raised(moves)
     result.uncut_strips = uncut
-    if uncut:
+    if named_uncut:
+        # The note names only the strips that cost something (_uncut_strips'
+        # ``named``); ``uncut_strips`` lists every one.
         result.note = "; ".join(filter(None, [result.note, (
-            f"{len(uncut)} strip(s) one geometric series cannot serve were left uncut - each with why "
-            "and the split that would cut it (run it before size, or vary the fraction): "
-            + "; ".join(uncut[:NAMED_STRIPS])
-            + (f"; and {len(uncut) - NAMED_STRIPS} more (uncut_strips)" if len(uncut) > NAMED_STRIPS else "")
+            f"{len(named_uncut)} strip(s) one geometric series cannot serve were left uncut where it costs "
+            "cells or an interface jump above 5 - each with why and the split that would cut it (run it "
+            "before size, or vary the fraction): "
+            + "; ".join(named_uncut[:NAMED_STRIPS])
+            + (f"; and {len(uncut) - min(len(named_uncut), NAMED_STRIPS)} more (uncut_strips)"
+               if len(uncut) > min(len(named_uncut), NAMED_STRIPS) else "")
         )]))
     if not options.keep_counts and len(splits) > splits_before:
         # The field was solved again on the split blocks: ``field_cells``
@@ -2175,7 +2181,8 @@ def _split_strips(model, field_, state, options, splits, refused, log=None, sliv
     return split_any
 
 
-def _uncut_strips(model: MeshModel, state: dict, options: SizeOptions, log: dict) -> list[str]:
+def _uncut_strips(model: MeshModel, state: dict, options: SizeOptions, log: dict,
+                  named: list[str] | None = None) -> list[str]:
     """Every strip the final state still finds two-ended - one edge fine at
     both ends (``two_ended``), members fine at opposite ends
     (``_opposed_strips``) - or stranded after spending (``_stranded``),
@@ -2187,7 +2194,15 @@ def _uncut_strips(model: MeshModel, state: dict, options: SizeOptions, log: dict
     tried) and the ``split_edge`` that would cut it, at the fraction size
     found along the edge as written (round 6: the trials' hand splits were
     at strips size refused for a piece a few percent short of one cell, or
-    did not name)."""
+    did not name).
+
+    ``named`` collects the entries the note shows - the strips that cost
+    something: one whose members meet an interface pair above 5, or one
+    two-ended in the field's own state (its one series is paid in cells)
+    that no round tried and undid. A strip stranded after spending with
+    no pair above 5, or one whose split a round undid as no gain, is only
+    in the list: named regardless, the note fired on 17 of 44 delivered
+    builds, most of them meeting every target with nothing to cut."""
     found = []
     kinds = (
         (state.get("two_ended") or {}, "fine at both ends"),
@@ -2223,6 +2238,9 @@ def _uncut_strips(model: MeshModel, state: dict, options: SizeOptions, log: dict
         carried = f", {-minus_jumps} interface pair(s) above 5 at its members" if minus_jumps else ""
         entries.append(f"{edge} ({kind}, peak {-negative:.3g} times its ends{carried}): {reason} - "
                        f"`split_edge {edge} {fraction:.3g}`")
+        if named is not None and (minus_jumps or not (kind.startswith("coarse between")
+                                                      or reason.startswith("the split was undone"))):
+            named.append(entries[-1])
     return entries
 
 

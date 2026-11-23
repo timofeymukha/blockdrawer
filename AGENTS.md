@@ -155,7 +155,9 @@ them in the canvas widgets.
   left uncut (`size._uncut_strips`, the result's `uncut_strips`): one
   member edge, what it is, why it was not cut and the `split_edge EDGE
   FRACTION` that would cut it, at most `NAMED_STRIPS`, those whose members
-  meet the most interface pairs above 5 first. `size`'s note says, when it applies, that continuity splits
+  meet the most interface pairs above 5 first - only strips that cost
+  something: a pair above 5 at their members, or two-ended in the field's
+  state and not undone by a round (the rest stay in `uncut_strips`). `size`'s note says, when it applies, that continuity splits
   changed the cells after spending (so a larger budget can end with fewer
   cells), and which wall patches end more than 10 percent off the first
   width asked when the field pass was dropped or strips kept their shared
@@ -508,7 +510,10 @@ them in the canvas widgets.
   `_uncut_strips` names every strip the final state still finds
   two-ended, opposed or stranded, per count component, with the reason
   recorded when it was tried (`_split_strips`' `log`: a short piece, a
-  cyclic edge, `split_edge` refused, a round undone) and the split. That is the field's state; `budget` (default
+  cyclic edge, `split_edge` refused, a round undone) and the split; its
+  `named` are the ones the note shows (a pair above 5 at the members, or
+  two-ended in the field's state and not undone: naming every strip, the
+  note fired on 17 of 44 delivered builds, most with nothing to cut). That is the field's state; `budget` (default
   `DEFAULT_BUDGET` = 1.5 times its cells; a smaller budget coarsens the
   field to budget/1.5 first) is then spent by `_spend`, a greedy optimiser
   of the jump cost - over the quality screen's interface pairs, the square
