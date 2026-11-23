@@ -834,7 +834,11 @@ them in the canvas widgets.
   curves=` agrees: an edge along the closing segment is taken when its
   block lies outside the closed curve (the curve bounds a body: a blunt
   base whose corners are not repeated), not when inside (an open wall whose
-  chord bounds the domain, a cavity lid). `add_stations` places standalone
+  chord bounds the domain, a cavity lid) - the block's side read at the
+  centre of its transfinite map (`_block_inner_point`), which follows its
+  curved edges: the mean of its corners put a band block spanning 61
+  degrees of a circle inside it (round 6, three cylinders: the wall edge
+  across the curve's seam left out). `add_stations` places standalone
   vertices on a `_CurvePath` (the polyline `add_ring` stations lie on):
   `count` spread by arc length over the curve or a `between` section (two
   fractions, or two points taken to the curve; forward round a closed

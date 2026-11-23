@@ -743,7 +743,11 @@ was 3.6e-5 of the extent):
   [unassigned=true]` - every exterior edge all given selectors choose, the
   patch created when missing. A curve whose end point is not repeated is
   closed as `add_ring` closes it where the mesh lies outside it (a blunt
-  base), not where the closing chord bounds the domain itself (a cavity lid).
+  base), not where the closing chord bounds the domain itself (a cavity lid);
+  which side a block lies on is read at the centre of its transfinite map,
+  so a wide band block on a curved wall counts as outside (round 6: one of
+  three cylinders lost the wall edge across its seam, its band block's
+  corners averaging to a point inside the circle).
 
 One block from corners by coordinates: `add_block_from_vertices bl,br
 points=0,1;0.9138,1` takes each point as the existing vertex there (within a

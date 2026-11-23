@@ -2875,7 +2875,7 @@ def set_boundary_by(
                         on_curves.add(e)
                     elif len(points) >= 3 \
                             and all(_distance_to(p, points, True) <= limit for p in samples[e]) \
-                            and not _inside(_block_centre(working, occurrences[e][0][0]), points):
+                            and not _inside(_block_inner_point(working, occurrences[e][0][0]), points):
                         # Along the closing segment from the last point to
                         # the first, with its block outside the closed
                         # curve: the curve bounds a body and is closed
@@ -2903,9 +2903,15 @@ def set_boundary_by(
     return _atomic(model, work)
 
 
-def _block_centre(model: MeshModel, block: Block) -> Point:
-    return (sum(model.vertices[v].x for v in block.vertices) / 4.0,
-            sum(model.vertices[v].y for v in block.vertices) / 4.0)
+def _block_inner_point(model: MeshModel, block: Block) -> Point:
+    """A point inside ``block``: the centre of its transfinite map, which
+    follows its curved edges. The mean of its corners does not: a band
+    block spanning 61 degrees of a circle has it inside the circle (round
+    6, three cylinders: the wall edge across the curve's closing segment
+    was left out of its patch)."""
+    from .sampling import block_grid
+
+    return block_grid(model, block, uniform=2).nodes[1][1]
 
 
 def _exterior_path(model, exterior, start, end) -> list[EdgeKey]:
