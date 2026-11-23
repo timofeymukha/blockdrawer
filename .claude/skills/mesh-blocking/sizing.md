@@ -222,6 +222,13 @@ size, polish.)
     2`) and run `size FIRST CORE keep_counts=true`.
   - A thin strip beside an edge that needs fine cells at both ends, whose
     split would leave a sliver (three ellipses, b67/b73, jump 25).
+  - **A long single series** between a fine region and a coarse one: an
+    edge is one geometric series end to end, so a long strip graded from a
+    wall width to the far field's carries fine cells far out. Put block
+    lines across it where the size changes (transition stations): the
+    round-6 bluff body over ground has lines at x = -0.3 and 1.3 and at
+    y = 2 in its H-grid for that (`bluff_ground` trial 6: 186,597 cells,
+    Mesh OK, max 51.69).
   - Faces above 70 degrees the field state itself has (fine 30P30N, b21,
     b39, b53): `failures.md`; there `method=distance` was the one that
     removed them.

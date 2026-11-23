@@ -99,7 +99,11 @@ best verdict, and judge a candidate in the orientation you export.
   `--farfield-outlet`); refusals are under `medial.cgrid`. Measured: A-airfoil
   200 blocks resolved, Mesh OK 45.1, at every raster width 420-1000 (block
   count 200-205); NACA 0012 185 and NACA 4412 at 8 degrees 225 blocks,
-  resolved. A rectangle or circle without the cut falls back to the annular
+  resolved. Against the operators the route goes by hand (`SKILL.md` rule
+  2): the NACA 4412 in its C-shaped far field from the skill's C-grid
+  example (`naca4412` trial 6) has 113,484 cells, max 38.62 (average 3.86),
+  against 205,506 cells, 45.12 (7.32) for the engine's session with the default chain.
+  A rectangle or circle without the cut falls back to the annular
   construction, admissible only to about six chords of far field. A smooth
   body that misses only its wall misalignment can take a tighter
   `--max-wall-turning`.

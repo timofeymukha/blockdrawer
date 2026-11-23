@@ -38,6 +38,15 @@ commands for 36, Mesh OK, max 25.4 deg; cascade: 37 for 52, max 60.6). For a
 single body in an external C-shaped far field the engine's C-grid is the
 measured alternative (`../engine.md`).
 
+Three round-6 cases have no batch here; their trials' `build.txt` (benchmark,
+`CASE/trial6/`) are the recipes, measured on the current code:
+
+| Case | Route | Result (checkMesh) |
+|---|---|---|
+| Ellipse at incidence | ring with stations by normal every 25 degrees, wake rows, far field by rows; default chain, `cap_y` for the wake | 466 blocks, 27,982 cells, Mesh OK, max 23.57 (average 5.42) |
+| Two tubes in a periodic passage | ring and `to_box` per tube (`counts=`), one periodic H-grid; no shape step | 255 blocks, 17,194 cells, Mesh OK, max 41.50 (4.39) |
+| Two-element airfoil (main and flap) | two rings `fan=false` (`counts=`), the slot as a fill and its entrance as a fill to a free vertex below (`../failures.md`), wake rows, far field by rows; no shape step; `set_first_width` | 1118 blocks, 151,929 cells, Mesh OK, max 51.18 (9.52) |
+
 Files: `cylinder1.dat`, `cylinder2.dat` (D = 1, six 0.25-deep grooves, centres
 (0, 0) and (3, 0), from the grooved tandem trial), `naca0012_a5.dat` (NACA
 0012, closed trailing edge, chord 1, rotated 5 degrees about x = 0.25).
