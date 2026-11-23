@@ -151,7 +151,11 @@ them in the canvas widgets.
   (LOW%..HIGH%)" - their first heights against the one asked,
   `size._raised_through_spokes`), `field_cells_after_splits`
   (the field solved again on continuity splits' blocks), `note`, empty ones
-  left out. `size`'s note says, when it applies, that continuity splits
+  left out. The note lists the strips one series cannot serve that were
+  left uncut (`size._uncut_strips`, the result's `uncut_strips`): one
+  member edge, what it is, why it was not cut and the `split_edge EDGE
+  FRACTION` that would cut it, at most `NAMED_STRIPS`, those whose members
+  meet the most interface pairs above 5 first. `size`'s note says, when it applies, that continuity splits
   changed the cells after spending (so a larger budget can end with fewer
   cells), and which wall patches end more than 10 percent off the first
   width asked when the field pass was dropped or strips kept their shared
@@ -486,7 +490,16 @@ them in the canvas widgets.
   wanted; the refusal names the piece by the existing end it runs from
   and the edge it is of, since the undone split's vertex does not exist),
   and undoing a round that raises the jump cost (at most
-  `SPLIT_ROUNDS`). That is the field's state; `budget` (default
+  `SPLIT_ROUNDS`). `_opposed_strips` finds a strip no member of which is
+  two-ended alone but whose members are fine at opposite ends: each
+  member's profile over its length, the smallest at each of
+  `OPPOSED_POINTS` fractions along the oriented strip, peaking
+  `SPLIT_RATIO` above both ends (round 6, Y-junction: 81,200 cells until a
+  hand split at mid-length gave 54,960; `size` had not named it).
+  `_uncut_strips` names every strip the final state still finds
+  two-ended, opposed or stranded, per count component, with the reason
+  recorded when it was tried (`_split_strips`' `log`: a short piece, a
+  cyclic edge, `split_edge` refused, a round undone) and the split. That is the field's state; `budget` (default
   `DEFAULT_BUDGET` = 1.5 times its cells; a smaller budget coarsens the
   field to budget/1.5 first) is then spent by `_spend`, a greedy optimiser
   of the jump cost - over the quality screen's interface pairs, the square

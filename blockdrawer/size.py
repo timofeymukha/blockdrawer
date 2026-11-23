@@ -25,7 +25,9 @@ the geometry's units and knows no construction roles.
    along it, capped from both ends by the gradation) peaks well inside
    cannot be served by one geometric series, and multi-section grading is
    outside BlockDrawer's scope: its strip is cut with ``split_edge`` at
-   the peak, and the bounds are recomputed.
+   the peak, and the bounds are recomputed. A strip whose members are fine
+   at opposite ends (``_opposed_strips``) is found too; every strip left
+   uncut is named in the note with the split that would cut it.
 4. **Counts and series.** Each edge demands the integral of ``ds / size``
    along it; each component takes the largest (or the length-weighted
    mean) demand. Each edge then carries the one geometric series whose end
@@ -131,6 +133,17 @@ SHAPE_REPAIRS = 30
 CONTINUITY_SPLIT_ROUNDS = 3
 # Strips split per sizing pass before the sizing is solved again.
 SPLITS_PER_ROUND = 8
+# Strips fine at opposite ends on different members (``_opposed_strips``):
+# the envelope is read at this many fractions along the strip; SPLIT_OPPOSED
+# makes size split them as it splits a two-ended edge (otherwise the note
+# names them with the split that would cut them).
+OPPOSED_POINTS = 41
+SPLIT_OPPOSED = False
+# A piece of a cut must be at least this fraction of one cell of the size
+# the field wants along it (1: one whole cell), and a cut must fold no
+# block on the count-free map or, once solved, at its counts (SPLIT_FOLDS).
+SLIVER_FRACTION = 1.0
+SPLIT_FOLDS = False
 # Whether opposite sides share one grading along their strip.
 STRIP_SHARE = True
 # Opposite sides of a block share one grading only within this length ratio.
@@ -277,6 +290,10 @@ class SizeResult:
     field_cells_after_splits: int | None = None
     # Per cap box: sampling.cell_extents of the result and the caps asked.
     caps: list[dict] = field(default_factory=list)
+    # Strips found two-ended (one edge, or opposite ends on different
+    # members) or stranded and left uncut: "EDGE (kind): why - `split_edge
+    # EDGE FRACTION`" (_uncut_strips).
+    uncut_strips: list[str] = field(default_factory=list)
     note: str = ""
 
     def to_data(self) -> dict[str, Any]:
@@ -309,6 +326,7 @@ class SizeResult:
             "raised": self.raised,
             "field_cells_after_splits": self.field_cells_after_splits,
             "caps": self.caps,
+            "uncut_strips": self.uncut_strips,
             "note": self.note,
         }
 
@@ -755,6 +773,9 @@ def size_model(
     )
     splits: list[dict] = []
     refused: list[str] = []
+    # Why each two-ended or stranded strip tried was not cut, per member
+    # edge, and each split's component (_split_strips), for the note.
+    log: dict = {"reasons": {}, "members": {}}
     state = _solve(working, field_, options, blocks, bbox)
     if options.split and not options.keep_counts:
         for _attempt in range(SPLIT_ROUNDS):
@@ -762,17 +783,39 @@ def size_model(
                 break
             saved = from_data(to_data(working))
             made = len(splits)
-            if not _split_strips(working, field_, state, options, splits, refused):
+            # A round is judged against the state in which every strip found
+            # two-ended - opposed strips too - asks only its profile's cells
+            # (a two-ended edge's own rule): the one-series fit a split
+            # removes is not a cost the split adds (round 6, Y-junction: the
+            # cut a hand made was undone against the fitted strip).
+            judge = (_solve(working, field_, options, blocks, bbox, exempt_opposed=True)
+                     if SPLIT_OPPOSED and state.get("opposed") else state)
+            if not _split_strips(working, field_, state, options, splits, refused, log):
                 break
             trial = _solve(working, field_, options, blocks, bbox)
+            folded = ""
+            if SPLIT_FOLDS:
+                probe = from_data(to_data(working))
+                _write(probe, trial, options)
+                folded = _folded_new_blocks(probe, [b for item in splits[made:] for b in item["new_blocks"]], True)
+            if folded:
+                working.__dict__.update(saved.__dict__)
+                for item in splits[made:]:
+                    refused.append(f"split of {item['edge']} undone: at the counts solved it folds {folded}")
+                    for member in log["members"].get(item["edge"], ()):
+                        log["reasons"][member] = f"the split was undone: at the counts solved it folds {folded}"
+                del splits[made:]
+                break
             # A split must not leave a worse interface than the one it was
             # meant to remove: the round is undone when the jump cost rises.
-            if _jump_cost(trial, options) > _jump_cost(state, options) * (1.0 + 1.0e-9):
+            if _jump_cost(trial, options) > _jump_cost(judge, options) * (1.0 + 1.0e-9):
                 working.__dict__.update(saved.__dict__)
                 for item in splits[made:]:
                     refused.append(
                         f"split of {item['edge']} undone: it raised the interface jump cost"
                     )
+                    for member in log["members"].get(item["edge"], ()):
+                        log["reasons"][member] = "the split was undone: it raised the interface jump cost"
                 del splits[made:]
                 break
             state = trial
@@ -796,8 +839,9 @@ def size_model(
         if options.split:
             state, moves, guard = _continuity_splits(
                 working, field_, state, moves, guard, options, budget, blocks, bbox, splits, refused,
-                skew_floor, fold_floor,
+                skew_floor, fold_floor, log,
             )
+    uncut = _uncut_strips(working, state, options, log) if options.split and not options.keep_counts else []
     field_grading = None
     if options.grading == "field":
         state, field_grading = _field_pass(working, state, options)
@@ -824,6 +868,14 @@ def size_model(
     result.budget_binding = state.get("budget_binding")
     result.field_grading = field_grading
     result.raised = _raised(moves)
+    result.uncut_strips = uncut
+    if uncut:
+        result.note = "; ".join(filter(None, [result.note, (
+            f"{len(uncut)} strip(s) one geometric series cannot serve were left uncut - each with why "
+            "and the split that would cut it (run it before size, or vary the fraction): "
+            + "; ".join(uncut[:NAMED_STRIPS])
+            + (f"; and {len(uncut) - NAMED_STRIPS} more (uncut_strips)" if len(uncut) > NAMED_STRIPS else "")
+        )]))
     if not options.keep_counts and len(splits) > splits_before:
         # The field was solved again on the split blocks: ``field_cells``
         # is the first field's (the budget's base), this is the last one's.
@@ -1169,7 +1221,7 @@ def _write(working: MeshModel, state: dict, options: SizeOptions) -> None:
     working.validate()
 
 
-def _solve(working, field_, options, blocks, bbox) -> dict:
+def _solve(working, field_, options, blocks, bbox, exempt_opposed: bool = False) -> dict:
     """Counts, bounds and strip ratios for the model as it is: the field's
     bounds, the counts their profiles and strips need (scaled to a budget
     smaller than that), and the strips that are fine at both ends."""
@@ -1187,9 +1239,19 @@ def _solve(working, field_, options, blocks, bbox) -> dict:
     counts: dict[EdgeKey, int] = dict(working.edge_cells)
     factor = 1.0
     two_ended: dict[EdgeKey, tuple[float, float]] = {}
+    opposed: list[tuple[EdgeKey, float, float, list[EdgeKey]]] = []
     if not options.keep_counts:
         ratios = _ratios(strips, edges, bounds, options)
-        targets = _targets(edges, bounds, sized, slope, options, _strip_targets(strips, edges, bounds, ratios, options), two_ended)
+        opposed = _opposed_strips(strips, edges, bounds, options)
+        # ``exempt_opposed``: the members of opposed strips ask only what
+        # their profiles ask, as a two-ended edge's do - the state a split
+        # round is judged against (see size_model).
+        exempt = {member for *_found, members in opposed for member in members} if exempt_opposed else set()
+        targets = _targets(edges, bounds, sized, slope, options, _strip_targets(strips, edges, bounds, ratios, options),
+                           two_ended, exempt=exempt)
+        if SPLIT_OPPOSED:
+            for current, fraction, ratio, _members in opposed:
+                two_ended.setdefault(current, (fraction, ratio))
         # A budget below the field's own does not coarsen a component
         # through a cap box: the cap is a requirement, the budget a target.
         capped = [any(edges[member].cap < math.inf for member in members) for members in sized]
@@ -1204,6 +1266,7 @@ def _solve(working, field_, options, blocks, bbox) -> dict:
         "components": len(sized), "factor": factor, "links": links, "seeds": seeds,
         "ratios": _ratios(strips, edges, bounds, options),
         "two_ended": {key: value for key, value in two_ended.items() if key in scope},
+        "opposed": {current: (fraction, ratio) for current, fraction, ratio, _members in opposed if current in scope},
     }
 
 
@@ -1236,7 +1299,7 @@ def _fit_count(length: float, total: float, start: float, end: float, limit: int
     return high
 
 
-def _targets(edges, bounds, components, slope, options, needed, two_ended=None, own=None) -> list[float]:
+def _targets(edges, bounds, components, slope, options, needed, two_ended=None, own=None, exempt=()) -> list[float]:
     """Each component's count: the demand of its edges' profiles, and enough
     cells for each edge's shared series to stay within its end bounds (the
     shared ratio can be less extreme than an edge's own, which left the
@@ -1275,7 +1338,7 @@ def _targets(edges, bounds, components, slope, options, needed, two_ended=None, 
                 # (481 cells on a 1.2-long grooved-tandem edge).
                 if two_ended is not None:
                     two_ended[member] = (fraction, profile[peak_index] / ends)
-            elif options.count_rule == "max":
+            elif options.count_rule == "max" and member not in exempt:
                 demand = max(demand, needed[member])
             demands.append(demand)
             weights.append(item.length)
@@ -1285,6 +1348,58 @@ def _targets(edges, bounds, components, slope, options, needed, two_ended=None, 
             total = sum(weights)
             targets.append(sum(w * d for w, d in zip(weights, demands)) / total if total > 0.0 else 1.0)
     return targets
+
+
+def _opposed_strips(strips, edges, bounds, options) -> list[tuple[EdgeKey, float, float, list[EdgeKey]]]:
+    """Strips that one shared series cannot serve although no member is
+    two-ended alone: fine at opposite ends on different members.
+
+    Every member of a strip shares one total ratio, so its cell widths are
+    its length times one distribution along the strip. Each member's wanted
+    size (``_profile``: the field capped from both end bounds by the
+    gradation) over its length is the largest that distribution may be
+    there; the strip's envelope is the smallest of these at each fraction,
+    oriented through the strip. When the envelope peaks inside at
+    ``SPLIT_RATIO`` times both its ends - the per-edge rule applied to the
+    strip - no single series fits it: a member fine at its start and
+    another fine at its end (round 6, Y-junction: 81,200 cells where a hand
+    split at mid-length gave 54,960; `size` did not name the strip). Each
+    such strip: one member (its smallest edge), the peak's fraction along
+    that edge as written, the peak over the ends, and the members."""
+    found = []
+    slope = options.growth - 1.0
+    grid = [k / (OPPOSED_POINTS - 1) for k in range(OPPOSED_POINTS)]
+    for orientation in strips:
+        if len(orientation) < 2:
+            continue
+        envelope = [math.inf] * len(grid)
+        for current, begin in orientation.items():
+            item = edges[current]
+            total = item.arc[-1]
+            if total <= 0.0:
+                break
+            profile = _profile(item, bounds[(current, current[0])], bounds[(current, current[1])], slope,
+                               options.core_size)
+            along = [s / total for s in item.arc]
+            values = [min(value, item.cap) / total for value in profile]
+            if begin != current[0]:
+                along = [1.0 - u for u in reversed(along)]
+                values = list(reversed(values))
+            k = 0
+            for index, u in enumerate(grid):
+                while k < len(along) - 2 and along[k + 1] < u:
+                    k += 1
+                span = along[k + 1] - along[k]
+                t = 0.0 if span <= 0.0 else min(1.0, max(0.0, (u - along[k]) / span))
+                envelope[index] = min(envelope[index], values[k] + t * (values[k + 1] - values[k]))
+        else:
+            ends = max(envelope[0], envelope[-1])
+            peak = max(range(len(grid)), key=lambda index: (envelope[index], -abs(grid[index] - 0.5)))
+            if ends > 0.0 and envelope[peak] >= SPLIT_RATIO * ends and 0.05 < grid[peak] < 0.95:
+                member = min(orientation)
+                fraction = grid[peak] if orientation[member] == member[0] else 1.0 - grid[peak]
+                found.append((member, fraction, envelope[peak] / ends, sorted(orientation)))
+    return found
 
 
 def _strips(model, edges) -> list[dict[EdgeKey, str]]:
@@ -1953,9 +2068,20 @@ def _budget_factor(model, components, targets, options: SizeOptions, capped=None
     return low
 
 
-def _split_strips(model, field_, state, options, splits, refused) -> bool:
+def _split_strips(model, field_, state, options, splits, refused, log=None, sliver_fraction=None) -> bool:
     """Split the two-ended strips found, the most two-ended first, at most
-    one per count component; ``True`` when one was split."""
+    one per count component; ``True`` when one was split. ``log`` (a dict)
+    collects, per member edge of each component tried, why it was not cut
+    (``reasons``) and, per split made, its component (``members``), for the
+    note's list of strips left uncut."""
+    log = {} if log is None else log
+    reasons = log.setdefault("reasons", {})
+    members_of = log.setdefault("members", {})
+
+    def remember(component, reason):
+        for member in component:
+            reasons[member] = reason
+
     candidates = sorted(state["two_ended"].items(), key=lambda item: (-item[1][1], item[0]))
     cyclic = {edge for match in _cyclic_matches(model) for edge in (match.first, match.second)}
     done: set[EdgeKey] = set()
@@ -1977,6 +2103,7 @@ def _split_strips(model, field_, state, options, splits, refused) -> bool:
             )
             if text not in refused:
                 refused.append(text)
+            remember(component, f"it holds the cyclic edge {'-'.join(coupled[0])}, whose partner a split would not cut")
             continue
         saved = from_data(to_data(model))
         try:
@@ -1989,6 +2116,7 @@ def _split_strips(model, field_, state, options, splits, refused) -> bool:
             text = f"two-ended strip of {'-'.join(current)} (peak {ratio:.3g} times its ends) not split: {exc}"
             if text not in refused:
                 refused.append(text)
+            remember(component, f"split_edge refused: {exc}")
             continue
         new_edges = [
             item for item in model.edges()
@@ -2001,9 +2129,18 @@ def _split_strips(model, field_, state, options, splits, refused) -> bool:
         sliver = None
         for item in new_edges:
             sample = _sample_edge(model, item, field_, options)
-            if sample.length < min(sample.field):
+            if sample.length < (SLIVER_FRACTION if sliver_fraction is None else sliver_fraction) * min(sample.field):
                 sliver = (item, sample.length, min(sample.field))
                 break
+        folded = _folded_new_blocks(model, split.new_block_ids) if SPLIT_FOLDS and sliver is None else ""
+        if folded:
+            model.__dict__.update(saved.__dict__)
+            text = (f"two-ended strip of {'-'.join(current)} not split: cutting it at {fraction:.3g} "
+                    f"folds {folded} on the count-free map")
+            if text not in refused:
+                refused.append(text)
+            remember(component, f"the cut at {fraction:.3g} folds {folded} on the count-free map")
+            continue
         if sliver is not None:
             model.__dict__.update(saved.__dict__)
             # The split is undone, so its vertex does not exist: name the
@@ -2017,7 +2154,10 @@ def _split_strips(model, field_, state, options, splits, refused) -> bool:
             )
             if text not in refused:
                 refused.append(text)
+            remember(component, f"the cut leaves the piece of {'-'.join(parent)} at {end} {sliver[1]:.3g} long "
+                                f"where cells of {sliver[2]:.3g} are wanted")
             continue
+        members_of["-".join(current)] = component
         splits.append({
             "edge": "-".join(current),
             "fraction": fraction,
@@ -2030,6 +2170,71 @@ def _split_strips(model, field_, state, options, splits, refused) -> bool:
         if made >= SPLITS_PER_ROUND:
             break
     return split_any
+
+
+def _uncut_strips(model: MeshModel, state: dict, options: SizeOptions, log: dict) -> list[str]:
+    """Every strip the final state still finds two-ended - one edge fine at
+    both ends (``two_ended``), members fine at opposite ends
+    (``_opposed_strips``) - or stranded after spending (``_stranded``),
+    one per count component, those whose members meet the most interface
+    jumps above 5 in the state first (what a strip costs: on the round-6
+    high-lift the strip a hand split cured carried 31 of 46), then the most
+    two-ended: one member edge,
+    what it is, why it was not cut (``log``'s reasons, else that it was not
+    tried) and the ``split_edge`` that would cut it, at the fraction size
+    found along the edge as written (round 6: the trials' hand splits were
+    at strips size refused for a piece a few percent short of one cell, or
+    did not name)."""
+    found = []
+    kinds = (
+        (state.get("two_ended") or {}, "fine at both ends"),
+        (state.get("opposed") or {}, "fine at opposite ends on different members"),
+        (_stranded(state, options) if "verification" in state else {}, "coarse between finer neighbours at both ends"),
+    )
+    for table, kind in kinds:
+        for current, (fraction, ratio) in table.items():
+            found.append((-ratio, current, fraction, kind))
+    jumps: dict[EdgeKey, int] = {}
+    if found and all(key in state for key in ("edges", "ratios", "counts", "links")):
+        widths = _actual(state["edges"], state["ratios"], state["counts"])
+        for a, b in _pair_list(state["links"]):
+            if max(widths[a] / widths[b], widths[b] / widths[a]) > 5.0:
+                for current in (a[0], b[0]):
+                    jumps[current] = jumps.get(current, 0) + 1
+    ranked = []
+    seen: set[EdgeKey] = set()
+    for negative, current, fraction, kind in sorted(found, key=lambda item: (item[0], item[1])):
+        if current in seen or current not in model.edge_cells:
+            continue
+        component = model.edge_constraint_component(current)
+        seen.update(component)
+        ranked.append((-sum(jumps.get(member, 0) for member in component), negative, current, fraction, kind,
+                       component))
+    entries = []
+    for minus_jumps, negative, current, fraction, kind, component in sorted(ranked, key=lambda item: item[:3]):
+        reason = next((log["reasons"][member] for member in sorted(component) if member in log["reasons"]), None)
+        if reason is None:
+            reason = ("not tried: size splits a strip only where one edge is fine at both ends"
+                      if kind.startswith("fine at opposite") and not SPLIT_OPPOSED else "not tried")
+        edge = "-".join(current)
+        carried = f", {-minus_jumps} interface pair(s) above 5 at its members" if minus_jumps else ""
+        entries.append(f"{edge} ({kind}, peak {-negative:.3g} times its ends{carried}): {reason} - "
+                       f"`split_edge {edge} {fraction:.3g}`")
+    return entries
+
+
+def _folded_new_blocks(model: MeshModel, blocks, counts: bool = False) -> str:
+    """The blocks among ``blocks`` that fold - on the count-free map, or at
+    their counts and gradings (``counts``) - as ``sampling.folded_blocks``
+    names them; empty when none."""
+    from .sampling import FOLD_CELLS, folded_blocks, sample_model
+
+    blocks = [block for block in blocks if any(item.id == block for item in model.blocks)]
+    if not blocks:
+        return ""
+    sample = (sample_model(model, GUARD_CELLS, blocks=blocks, planar=True) if counts
+              else sample_model(model, uniform=FOLD_CELLS, blocks=blocks))
+    return folded_blocks(sample)
 
 
 def _bands(model: MeshModel, options: SizeOptions | None = None) -> list[dict]:
@@ -2097,7 +2302,7 @@ def _stranded(state: dict, options: SizeOptions) -> dict[EdgeKey, tuple[float, f
 
 
 def _continuity_splits(working, field_, state, moves, guard, options, budget, blocks, bbox, splits, refused,
-                       skew_floor=None, fold_floor=None):
+                       skew_floor=None, fold_floor=None, log=None):
     """Split strips the spent state leaves stranded, then solve and spend
     again; a round is kept only when it lowers the jump cost without
     raising the worst jump."""
@@ -2107,7 +2312,10 @@ def _continuity_splits(working, field_, state, moves, guard, options, budget, bl
             break
         saved = from_data(to_data(working))
         made = len(splits)
-        if not _split_strips(working, field_, {"two_ended": stranded}, options, splits, refused):
+        # A continuity cut keeps the one-cell rule (SLIVER_FRACTION is the
+        # field rounds'): judged by its round alone, the cuts it then took
+        # raised four corpus maxima by up to 12.7 degrees (README).
+        if not _split_strips(working, field_, {"two_ended": stranded}, options, splits, refused, log, 1.0):
             break
         trial = _solve(working, field_, options, blocks, bbox)
         solved_cells = _state_cells(working, trial)
@@ -2128,6 +2336,10 @@ def _continuity_splits(working, field_, state, moves, guard, options, budget, bl
                     f"split of {item['edge']} undone: after spending the budget again it did "
                     "not lower the interface jumps"
                 )
+                if log is not None:
+                    for member in log["members"].get(item["edge"], ()):
+                        log["reasons"][member] = ("the split was undone: after spending again it did not "
+                                                  "lower the interface jumps")
             del splits[made:]
             break
         trial["verification"] = {**trial["verification"], "field": promised,

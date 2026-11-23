@@ -50,7 +50,11 @@ $$
   sides of a strip of similar blocks share one series until the field pass
   (`grading=field`, below) grades them apart; a strip fine at both ends is
   split where its size peaks unless a
-  piece would be shorter than one wanted cell (`refused` says so).
+  piece would be shorter than one wanted cell (`refused` says so); the
+  note names every strip left uncut - one edge fine at both ends, members
+  fine at opposite ends, a strip coarse between finer neighbours after
+  spending - with why and the `split_edge EDGE FRACTION` that would cut it
+  (`uncut_strips` lists all): run it before `size`, or vary the fraction.
 - `count_rule=max` lets the finest demand in a count component decide;
   `mean` the length-weighted mean (coarser where a short wall piece shares
   a component with long far-field edges).

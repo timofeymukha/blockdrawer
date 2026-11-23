@@ -1484,7 +1484,10 @@ its 9 pairs differ before; matching them took the agent a hand batch). A
 strip that wants fine cells at both ends is cut with `split_edge` where the
 wanted size peaks (multi-section grading is out of scope), unless a piece
 would be shorter than one cell of the size wanted along it or the strip holds
-a cyclic edge (its partner would not be cut). That is the field's own state.
+a cyclic edge (its partner would not be cut). A strip whose members are fine at opposite
+ends - none two-ended alone - is found as well, and the note names every
+strip left uncut with why and the `split_edge EDGE FRACTION` that would cut
+it (`uncut_strips` lists them all). That is the field's own state.
 A strip a long count component makes fine (a thin wake strip, a seam
 sliver) is invisible to it, so `budget` total cells (default 1.5 times the
 field's own; a smaller budget first coarsens the field to budget/1.5) are

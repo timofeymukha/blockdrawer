@@ -1066,3 +1066,52 @@ class RealCountReportTests(unittest.TestCase):
         polished = smooth.smooth_model(model)
         self.assertAlmostEqual(polished.after["max_non_orthogonality"],
                                sample_model(model, None).summary()["max_non_orthogonality"])
+
+
+class OpposedStripTests(unittest.TestCase):
+    """Round 6: a strip fine at opposite ends on different members, which no
+    per-edge test sees, and the note naming strips left uncut."""
+
+    @staticmethod
+    def edge(key, start, end):
+        from blockdrawer.size import _Edge
+
+        arc = [k / 20.0 for k in range(21)]
+        return _Edge(key, 1.0, arc, [10.0] * 21), {(key, key[0]): start, (key, key[1]): end}
+
+    def test_members_fine_at_opposite_ends_are_found(self) -> None:
+        from blockdrawer.size import _opposed_strips
+
+        a, b = edge_key("a0", "a1"), edge_key("b0", "b1")
+        ea, ba = self.edge(a, 0.001, 1.0)
+        eb, bb = self.edge(b, 1.0, 0.001)
+        options = SizeOptions(first_width=0.001, core_size=0.5, growth=1.15)
+        (found,) = _opposed_strips([{a: "a0", b: "b0"}], {a: ea, b: eb}, {**ba, **bb}, options)
+        member, fraction, ratio, members = found
+        self.assertEqual(member, a)
+        self.assertAlmostEqual(fraction, 0.5)
+        self.assertGreater(ratio, 2.5)
+        self.assertEqual(members, [a, b])
+        # Both fine at the same end: one series serves the strip.
+        eb, bb = self.edge(b, 0.001, 1.0)
+        self.assertEqual(_opposed_strips([{a: "a0", b: "b0"}], {a: ea, b: eb}, {**ba, **bb}, options), [])
+        # Oriented through the strip: b runs the other way, so its fine
+        # start is the strip's far end.
+        self.assertEqual(len(_opposed_strips([{a: "a0", b: "b1"}], {a: ea, b: eb}, {**ba, **bb}, options)), 1)
+
+    def test_the_note_names_each_uncut_strip_with_its_split(self) -> None:
+        from blockdrawer.size import _uncut_strips
+
+        model = channel()
+        edge = edge_key("v1", "v2")
+        log = {"reasons": {}, "members": {}}
+        options = SizeOptions(first_width=0.005, core_size=0.1)
+        (text,) = _uncut_strips(model, {"opposed": {edge: (0.43, 3.0)}}, options, log)
+        self.assertIn("v1-v2 (fine at opposite ends on different members, peak 3 times its ends)", text)
+        self.assertIn("`split_edge v1-v2 0.43`", text)
+        log["reasons"][edge] = "the cut leaves the piece of v1-v2 at v1 0.01 long where cells of 0.02 are wanted"
+        (text,) = _uncut_strips(model, {"two_ended": {edge: (0.5, 4.0)}, "opposed": {edge: (0.43, 3.0)}},
+                                options, log)
+        self.assertIn("fine at both ends", text)
+        self.assertIn("leaves the piece of v1-v2", text)
+        self.assertIn("`split_edge v1-v2 0.5`", text)
