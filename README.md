@@ -830,6 +830,21 @@ above 5 3 -> 9); the same build with its band 0.1001 high for 0.1 gave
 the corner of the placeholder box the agent had put where the front
 belongs. The spoke stays the mitre.
 
+What batch 13's patch held besides the spoke's direction - a vertex on the
+line it was given - is in (batch 14): a `to_box` spoke's end has its box
+side's coordinate exactly, and one within 1e-12 of a box corner is the
+corner; a row of `add_rows` at an absolute station or on the target line
+(`to_x`/`to_y`, with `spread`, `far_ratio`, `far_min`) has that coordinate
+exactly, control points of carried curves too; a station at a crossing of
+`xs=`/`ys=` (`add_stations`, an open `add_ring`) has the line's coordinate.
+`add_grid`'s Cartesian corners were exact already. Round 6 lost patch edges
+to the old arithmetic: rebuilt with exact selection boxes, the periodic tube
+pair left 4 edges out of its patches and the flap airfoil 13 (a far row at
+y = 7.999999999999999); now none. The construction of every round-3 to 6
+build replays (82 builds from a box; two stop at the same command as
+before) with the same IDs, blocks, counts, edge types and patches, no vertex
+or control point moved by more than 5.7e-13 of the model's extent.
+
 The wake of a blunt base whose corners are both open (high-lift's flap,
 rounds 3 to 5: four `add_vertex` and three `add_block_from_vertices` each
 time) needs no new operator. No carry direction lies in both corners'

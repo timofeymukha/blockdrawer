@@ -650,7 +650,9 @@ them in the canvas widgets.
   `ceil(turn/FAN_SECTOR)` kite blocks at a convex turn above `FAN_ANGLE`;
   open ends along the adjacent boundary edge when within 60 degrees of the
   normal; exact arc tangents) and rows by `growth`; `_band_to_box` snaps a
-  box corner to the nearer of the two spokes straddling it; an open
+  box corner to the nearer of the two spokes straddling it, and every spoke
+  end has its box side's coordinate exactly (one within 1e-12 of a corner
+  is the corner; round 6: a patch box missed edges 1e-12 off); an open
   chain's end on the box's edge sends its spoke along that edge to the
   corner on the band's side (a vertex at a box corner, or an inner chain
   vertex on the edge, is refused). Band blocks
@@ -764,7 +766,10 @@ them in the canvas widgets.
   lines and polyLines polyLines; arcs (except with `distance` and no
   spread or `far_ratio`, a translation) and splines become splines
   through the carried points (`unhooked_points`), straight on the target
-  line. `add_ring`
+  line: a row at an absolute station or on the target line has that
+  coordinate exactly (round 6: a `far_ratio` far row at
+  y = 7.999999999999999 left 13 edges out of a patch box), as a station at
+  a crossing of `xs=`/`ys=` (`add_stations`, an open ring) has the line's. `add_ring`
   places stations at curve corners (vertices turning more than `corner`,
   default `CORNER_ANGLE`), at `fractions`, at `points` (open and closed,
   and `add_stations`: the curve point - in the section, for an open ring

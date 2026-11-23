@@ -1264,7 +1264,14 @@ def _band_to_box(build, chain, position, spokes, box, edge_path):
         if dy < 0:
             candidates.append(((y0 - py) / dy, 0))
         t, side = min(candidates)
-        hits.append([px + t * dx, py + t * dy])
+        hit = [px + t * dx, py + t * dy]
+        # On the box side it reaches, exactly: a selection by that line (a
+        # patch by bbox) takes every edge (round 6: a corner 1e-12 off).
+        if side in (1, 3):
+            hit[0] = x1 if side == 1 else x0
+        else:
+            hit[1] = y1 if side == 2 else y0
+        hits.append(hit)
         sides.append(side)
     corners = {(0, 1): (x1, y0), (1, 2): (x1, y1), (2, 3): (x0, y1), (3, 0): (x0, y0)}
     snapped = set()
@@ -1279,7 +1286,11 @@ def _band_to_box(build, chain, position, spokes, box, edge_path):
                 "of the box: add stations so a spoke runs to each box corner"
             )
         corner = corners[pair]
-        if any(math.dist(hits[k], corner) <= 1.0e-12 * (1.0 + abs(corner[0]) + abs(corner[1])) for k in (a, b)):
+        at_corner = [k for k in (a, b)
+                     if math.dist(hits[k], corner) <= 1.0e-12 * (1.0 + abs(corner[0]) + abs(corner[1]))]
+        if at_corner:
+            # A spoke aimed at the corner ends on it exactly.
+            hits[at_corner[0]] = list(corner)
             continue
         target = a if math.dist(hits[a], corner) <= math.dist(hits[b], corner) else b
         if target in snapped:
@@ -1799,10 +1810,21 @@ def add_rows(
             along the target line, taken in proportion to the travel."""
             if row == 0:
                 return p
-            t = travel(p, *rows_at[row - 1])
+            value, absolute = rows_at[row - 1]
+            t = travel(p, value, absolute)
             widen = (spread - 1.0) * (t / reach(p)) * (p[0] * lateral[0] + p[1] * lateral[1] - middle)
             widen += shift * (t / reach(p))
-            return p[0] + t * d[0] + widen * lateral[0], p[1] + t * d[1] + widen * lateral[1]
+            x, y = p[0] + t * d[0] + widen * lateral[0], p[1] + t * d[1] + widen * lateral[1]
+            # A row on a line x = X or y = Y - an absolute station, or the
+            # target on the far row - is exactly on it: a selection by that
+            # line (a patch by bbox) takes every edge (round 6: a far row at
+            # y = 7.999999999999999 left 13 edges out of its patch).
+            line = value if absolute else (to_x if to_x is not None else to_y) if row == last else None
+            if line is not None and to_x is not None:
+                x = line
+            elif line is not None and to_y is not None:
+                y = line
+            return x, y
 
         # The far row's own distribution: each vertex's displacement along
         # the target line from the chain's image there (none by default).
@@ -2441,6 +2463,9 @@ def _open_ring(working: MeshModel, curves: Sequence[str], side: str, between: Se
         notes.append(f"{len(fractions)} station(s) by fraction")
     inside = path.inside_with_parameters(s0, s1 - s0)
     samples = [0.0, *[u for u, _p in inside], 1.0]
+    # A station where the section crosses x = X or y = Y has that coordinate
+    # exactly (arc length -> axis, value).
+    on_line: dict[float, tuple[int, float]] = {}
     for axis, values in ((0, xs), (1, ys)):
         for value in values:
             hits = _crossings(path, s0, s1 - s0, samples, axis, value)
@@ -2453,6 +2478,7 @@ def _open_ring(working: MeshModel, curves: Sequence[str], side: str, between: Se
                     "or give the station's point (points=)"
                 )
             anchors.add(s0 + hits[0] * (s1 - s0))
+            on_line.setdefault(s0 + hits[0] * (s1 - s0), (axis, value))
     if xs or ys:
         notes.append(f"{len(xs) + len(ys)} station(s) by crossing")
     if places:
@@ -2486,6 +2512,11 @@ def _open_ring(working: MeshModel, curves: Sequence[str], side: str, between: Se
     build = _Build(working, prefix)
     build.scale(path.extent + max(abs(c) for p in points for c in p))
     station_points = [_polyline_at(points, lengths, value) for value in merged]
+    for index, value in enumerate(merged):
+        line = next((item for arc, item in on_line.items() if abs(arc - value) <= 1.0e-9 * total), None)
+        if line is not None:
+            x, y = station_points[index]
+            station_points[index] = (line[1], y) if line[0] == 0 else (x, line[1])
     ids = [build.vertex(point) for point in station_points]
     if len(set(ids)) != len(ids):
         raise TopologyError("two stations of the band fall on one existing vertex")
@@ -3182,6 +3213,9 @@ def add_stations(
             return min(1.0, max(0.0, u))
 
         found: list[float] = []
+        # A station where the section crosses x = X or y = Y has that
+        # coordinate exactly (section parameter -> axis, value).
+        on_line: dict[float, tuple[int, float]] = {}
         if count:
             found += [k / count if whole_loop else k / (count - 1) for k in range(count)]
         for f in fractions:
@@ -3204,6 +3238,7 @@ def add_stations(
                         "or give the station's point (points=)"
                     )
                 found.append(hits[0])
+                on_line.setdefault(hits[0], (axis, value))
         if points:
             if whole_loop:
                 nodes = [(path.lengths[k] / total, p) for k, p in enumerate(path.points)]
@@ -3224,6 +3259,9 @@ def add_stations(
         ids = []
         for k, u in enumerate(ordered):
             x, y = path.at(s0 + u * length)
+            if u in on_line:
+                axis, value = on_line[u]
+                x, y = (value, y) if axis == 0 else (x, value)
             name = f"{prefix}_{k}" if prefix is not None else None
             ids.append(build.vertex((x + dx, y + dy), name=name))
         working.validate()
