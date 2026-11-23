@@ -135,15 +135,18 @@ CONTINUITY_SPLIT_ROUNDS = 3
 SPLITS_PER_ROUND = 8
 # Strips fine at opposite ends on different members (``_opposed_strips``):
 # the envelope is read at this many fractions along the strip; SPLIT_OPPOSED
-# makes size split them as it splits a two-ended edge (otherwise the note
-# names them with the split that would cut them).
+# makes size split them as it splits a two-ended edge, judging a round
+# against the state in which they ask only their profiles' cells (False:
+# the note names them with the split that would cut them).
 OPPOSED_POINTS = 41
-SPLIT_OPPOSED = False
-# A piece of a cut must be at least this fraction of one cell of the size
-# the field wants along it (1: one whole cell), and a cut must fold no
-# block on the count-free map or, once solved, at its counts (SPLIT_FOLDS).
-SLIVER_FRACTION = 1.0
-SPLIT_FOLDS = False
+SPLIT_OPPOSED = True
+# A field round's cut leaves no piece shorter than this fraction of one cell
+# of the size the field wants along it (1 until batch 14: round 6's tandem
+# cut at 0.986 of a cell was refused, the 30P30N one at 0.04 still is), and
+# folds no block on the count-free map or, solved, at its counts
+# (SPLIT_FOLDS). Continuity cuts keep the whole cell. Measured: README.
+SLIVER_FRACTION = 0.5
+SPLIT_FOLDS = True
 # Whether opposite sides share one grading along their strip.
 STRIP_SHARE = True
 # Opposite sides of a block share one grading only within this length ratio.

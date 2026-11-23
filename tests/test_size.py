@@ -1115,3 +1115,59 @@ class OpposedStripTests(unittest.TestCase):
         self.assertIn("fine at both ends", text)
         self.assertIn("leaves the piece of v1-v2", text)
         self.assertIn("`split_edge v1-v2 0.5`", text)
+
+
+class SplitAdmissionTests(unittest.TestCase):
+    """Batch 14: a field round's cut is refused only for a piece under half
+    a wanted cell, or for a cut that folds a block."""
+
+    def _split(self, length, folded=""):
+        from types import SimpleNamespace
+        from unittest import mock
+
+        from blockdrawer import size as size_module
+
+        model = channel()
+        refused: list[str] = []
+        splits: list[dict] = []
+        piece = SimpleNamespace(length=length, field=[0.01])
+        with mock.patch.object(size_module, "_sample_edge", return_value=piece), \
+                mock.patch.object(size_module, "_folded_new_blocks", return_value=folded):
+            made = size_module._split_strips(
+                model, None, {"two_ended": {edge_key("v1", "v2"): (0.5, 3.0)}},
+                SizeOptions(first_width=0.005, core_size=0.1), splits, refused,
+            )
+        return made, model, refused
+
+    def test_a_piece_of_more_than_half_a_cell_is_cut(self) -> None:
+        made, model, refused = self._split(0.006)
+        self.assertTrue(made)
+        self.assertEqual(len(model.blocks), 2)
+        self.assertEqual(refused, [])
+
+    def test_a_piece_under_half_a_cell_is_refused(self) -> None:
+        made, model, refused = self._split(0.004)
+        self.assertFalse(made)
+        self.assertEqual(len(model.blocks), 1)
+        self.assertIn("would leave the piece of", refused[0])
+
+    def test_a_cut_that_folds_a_block_is_refused(self) -> None:
+        made, model, refused = self._split(0.02, folded="b1 (3)")
+        self.assertFalse(made)
+        self.assertEqual(len(model.blocks), 1)
+        self.assertIn("folds b1 (3) on the count-free map", refused[0])
+
+    def test_the_continuity_rounds_keep_the_whole_cell(self) -> None:
+        from types import SimpleNamespace
+        from unittest import mock
+
+        from blockdrawer import size as size_module
+
+        model = channel()
+        refused: list[str] = []
+        with mock.patch.object(size_module, "_sample_edge", return_value=SimpleNamespace(length=0.006, field=[0.01])):
+            made = size_module._split_strips(
+                model, None, {"two_ended": {edge_key("v1", "v2"): (0.5, 3.0)}},
+                SizeOptions(first_width=0.005, core_size=0.1), [], refused, None, 1.0,
+            )
+        self.assertFalse(made)

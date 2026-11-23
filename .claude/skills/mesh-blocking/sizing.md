@@ -49,8 +49,9 @@ $$
   (default 1.25 with `directional`, unmatched with `distance`); opposite
   sides of a strip of similar blocks share one series until the field pass
   (`grading=field`, below) grades them apart; a strip fine at both ends is
-  split where its size peaks unless a
-  piece would be shorter than one wanted cell (`refused` says so); the
+  split where its size peaks - also a strip whose members are fine at
+  opposite ends - unless a piece would be shorter than half a wanted cell
+  or the cut folds a block (`refused` says so); the
   note names every strip left uncut - one edge fine at both ends, members
   fine at opposite ends, a strip coarse between finer neighbours after
   spending - with why and the `split_edge EDGE FRACTION` that would cut it

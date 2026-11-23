@@ -485,17 +485,26 @@ them in the canvas widgets.
   gradation from both bounds) and the strip fit; an edge whose profile
   peaks `SPLIT_RATIO` above both ends is two-ended and `_split_strips` cuts
   up to `SPLITS_PER_ROUND` such strips with `split_edge` at the peak,
-  refusing a cut that leaves any piece shorter than one cell of the size
-  the field wants along it (a 30P30N cut left 0.00065 where 0.017 was
-  wanted; the refusal names the piece by the existing end it runs from
-  and the edge it is of, since the undone split's vertex does not exist),
-  and undoing a round that raises the jump cost (at most
-  `SPLIT_ROUNDS`). `_opposed_strips` finds a strip no member of which is
+  refusing a cut that leaves any piece shorter than `SLIVER_FRACTION`
+  (half) of a cell of the size the field wants along it (a 30P30N cut left
+  0.00065 where 0.017 was wanted; round 6's tandem cut at 0.986 of a cell
+  was refused at one whole cell; the refusal names the piece by the
+  existing end it runs from and the edge it is of, since the undone
+  split's vertex does not exist) or that folds a block on the count-free
+  map (`SPLIT_FOLDS`, `_folded_new_blocks`), and undoing a round that
+  raises the jump cost against the state in which every strip found asks
+  only its profile's cells (`_solve(exempt_opposed=True)`: against the
+  one-series fit the Y-junction's mid-length cut was undone) or whose
+  solved counts fold a new block (at most `SPLIT_ROUNDS`). Continuity
+  cuts keep the one-cell rule. Made the default by batch 14's rule on the
+  44 delivered round-5/6 builds and four round-6 reproducers (README,
+  "Two-ended strips"). `_opposed_strips` finds a strip no member of which is
   two-ended alone but whose members are fine at opposite ends: each
   member's profile over its length, the smallest at each of
   `OPPOSED_POINTS` fractions along the oriented strip, peaking
   `SPLIT_RATIO` above both ends (round 6, Y-junction: 81,200 cells until a
-  hand split at mid-length gave 54,960; `size` had not named it).
+  hand split at mid-length gave 54,960); with `SPLIT_OPPOSED` they are
+  split like two-ended edges (50,624 cells).
   `_uncut_strips` names every strip the final state still finds
   two-ended, opposed or stranded, per count component, with the reason
   recorded when it was tried (`_split_strips`' `log`: a short piece, a

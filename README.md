@@ -1483,8 +1483,8 @@ so a sized periodic pair exports face by face (the benchmark cascade had 7 of
 its 9 pairs differ before; matching them took the agent a hand batch). A
 strip that wants fine cells at both ends is cut with `split_edge` where the
 wanted size peaks (multi-section grading is out of scope), unless a piece
-would be shorter than one cell of the size wanted along it or the strip holds
-a cyclic edge (its partner would not be cut). A strip whose members are fine at opposite
+would be shorter than half a cell of the size wanted along it, the cut folds
+a block, or the strip holds a cyclic edge (its partner would not be cut). A strip whose members are fine at opposite
 ends - none two-ended alone - is found as well, and the note names every
 strip left uncut with why and the `split_edge EDGE FRACTION` that would cut
 it (`uncut_strips` lists them all). That is the field's own state.
@@ -1806,6 +1806,61 @@ terms were not run; the default is unchanged and `failures.md` has the
 signature with the two hand remedies, measured: `keep_counts=true` after
 the polish on the blunt plate (3.91, no jump above 5) and the high-lift
 trial's pair of gradings (5.00; either alone 5.74 or 6.36).
+
+**Two-ended strips (batch 14).** Round 6's largest loss: a strip fine at
+both ends, or at opposite ends on different members, given one series;
+`size` raised its count through everything it crossed or left a jump, and
+the agents' remedy was one `split_edge` at mid-length, at strips `size` had
+refused for a piece a few percent short of one cell or had not named. Three
+changes to the field's split rounds, the continuity rounds untouched:
+strips fine at opposite ends on different members (`_opposed_strips`: each
+member's wanted size over its length, the smallest at each fraction along
+the oriented strip, peaking 2.5 times above both ends) are split as a
+two-ended edge is; a cut is refused only for a piece shorter than half a
+cell the field wants along it (`SLIVER_FRACTION`; the 30P30N cut that left
+0.04 of a cell stays refused, the tandem's at 0.986 is made) or for one
+that folds a block on the count-free map or, solved, at its counts
+(`SPLIT_FOLDS`); and a round is judged against the field state in which
+the strips found ask only their profiles' cells (as a two-ended edge
+already did), not against the state with the one-series fit the split
+removes - against that, the Y-junction's mid-length cut, the trial's own
+hand split, was undone for raising the jump cost. The rule, fixed
+beforehand, held:
+
+| reproducer (the trial's build without its hand split, its own chain) | 49ffc0d | now | the delivered hand-split session | term |
+|---|---|---|---|---|
+| tandem airfoils 6 | 228,418 cells, 40.00 (14.02), 2 jumps above 5 | 143,960, 35.73 (6.46), 0 | 127,740, 37.54 | at most 146,901 cells: held |
+| Y-junction 6 | 81,200, 31.85 (9.76) | 50,624, 24.76 (7.48) | 54,960, 24.79 | at most 63,204: held |
+| bluff body over ground 6 | 197,801, 55.47 (5.73), 2 above 5 | 183,837, 51.88 (5.02), 0 | 186,597, 51.69 | no jump above 5, at most 195,927: held |
+| splitter cylinder 6b | 82,067, 40.83, 11 above 5, first width +1627% | unchanged | 105,653, 43.15 | not reached |
+
+All with `Mesh OK` and no face above 70. On the 44 delivered builds of
+rounds 5 and 6 through their own chains (high-lift through `size` only) 40
+sessions are identical and four change, each for the better: cavity
+channel 5 95,879 -> 71,850 cells; Y-junction 5b 80,062 -> 56,869 (24.86 ->
+24.93 degrees), 5c 52,599 -> 45,338 (25.83 -> 24.63); elbow vane 6 44,048 ->
+36,267 (31.17 -> 31.40); cells summed 3,348,159 -> 3,285,895, no term of the
+rule failed. The round-6 high-lift after `size` is unchanged (46 jumps
+above 5, the main's first width 41 percent fine); the strip the trial cut
+by hand (`split_edge m_190-f_61`) is the component of `A-fw_0`, which the
+note names second with `split_edge A-fw_0 0.4` (its cut is refused: a
+piece of 0.26 of a cell). The splitter's mitre spoke is not two-ended in
+the field state - it is fine at the front only after spending, through the
+junction's strip - so its hand split before `size` stays the remedy
+(`failures.md`). Tried and dropped, each measured on the same inputs: the
+opposed strips' members exempt from the one-series fit in the solved state
+itself (high-lift 6: field cells 229,732 -> 199,258 with no split made, 6
+more jumps above 5, the slat's first width 10 points further off); and,
+for the splitter, a continuity split also of an edge the spent state misses
+at one end only, its cuts judged by the round alone (no piece rule): the
+splitter reached its term (104,063 cells, first widths within 6 percent, no
+jump above 5) but the corpus failed - maxima up by 11.6 (blunt plate 5) and
+12.7 degrees (tandem 6), a jump above 5 gained on two splitter builds.
+
+The note names what is left uncut (`uncut_strips`): on the 44 builds it
+fires on 17 sessions (more than a third), 49 strips, so it names at most
+`NAMED_STRIPS` (4), those whose members meet the most interface pairs
+above 5 first, each with why and the `split_edge` that would cut it.
 
 `method=distance` keeps item 3's sizing reachable (`size_distance.py`, as
 of commit 9a84f29): counts from the wall distance alone, wall-normal edges
