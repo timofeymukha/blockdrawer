@@ -31,7 +31,7 @@ from .commands import (
     command_specs,
     format_digest,
     format_results,
-    read_command_lines,
+    read_numbered_command_lines,
     spec_help_text,
 )
 from .describe import (
@@ -383,6 +383,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="read commands from a file (one per line, # comments); repeatable",
     )
     apply.add_argument("--stdin", action="store_true", help="read commands from stdin")
+    # Not an option: refused with how commands are given (agents typed it in
+    # three benchmark rounds).
+    apply.add_argument("-c", dest="dash_c", action="append", default=[], help=argparse.SUPPRESS)
     apply.add_argument("-o", "--output", type=Path, help="write the edited session here")
     apply.add_argument("--in-place", action="store_true", help="overwrite the input")
     apply.add_argument(
@@ -610,17 +613,37 @@ def _cmd_check(args: argparse.Namespace) -> int:
 def _cmd_apply(args: argparse.Namespace) -> int:
     if args.output and args.in_place:
         raise CliError("-o and --in-place are mutually exclusive")
+    if args.dash_c:
+        raise CliError(
+            "apply has no -c: give commands as arguments after the session (apply SESSION "
+            "'set_edge_cells v0-v1 20' 'size ...'), from a file with -f FILE, or on standard "
+            "input with --stdin (a here-document or a pipe needs --stdin)"
+        )
     commands: list[Any] = []
+    origins: list[str | None] = []
     for path in args.file:
-        commands.extend(read_command_lines(Path(path).read_text(encoding="utf-8")))
+        for number, command in read_numbered_command_lines(Path(path).read_text(encoding="utf-8")):
+            commands.append(command)
+            origins.append(f"line {number} of {path}")
     if args.stdin:
-        commands.extend(read_command_lines(sys.stdin.read()))
+        for number, command in read_numbered_command_lines(sys.stdin.read()):
+            commands.append(command)
+            origins.append(f"line {number} of stdin")
     commands.extend(args.commands)
+    origins.extend([None] * len(args.commands))
     if not commands:
-        raise CliError("No commands given; pass them as arguments, -f FILE, or --stdin")
+        try:
+            piped = not args.stdin and sys.stdin is not None and not sys.stdin.isatty()
+        except (AttributeError, ValueError):
+            piped = False
+        raise CliError(
+            "No commands given; pass them as arguments, -f FILE, or --stdin"
+            + (" (standard input is read only with --stdin: a here-document or a pipe needs it)"
+               if piped else "")
+        )
 
     model = _load(args.session)
-    batch = apply_commands(model, commands)
+    batch = apply_commands(model, commands, origins)
 
     destination: Path | None = None
     if args.in_place:

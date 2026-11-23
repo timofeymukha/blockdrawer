@@ -2370,13 +2370,16 @@ def apply_command(
 
 
 def apply_commands(
-    model: MeshModel, commands: Iterable[Any]
+    model: MeshModel, commands: Iterable[Any], origins: Sequence[str | None] | None = None
 ) -> BatchResult:
     """Apply commands to a copy of ``model`` atomically.
 
     The returned model reflects every command. If any command fails, a
     :class:`CommandError` identifying the failing step is raised and the
-    caller's model remains untouched.
+    caller's model remains untouched. ``origins`` (one per command, or
+    None) says where each came from - ``line 40 of build.txt`` - for that
+    error: a file's line number is what an agent edits, not the command's
+    number among the commands.
     """
     working = from_data(to_data(model))
     results: list[CommandResult] = []
@@ -2385,8 +2388,10 @@ def apply_commands(
             results.append(apply_command(working, command, index=index))
         except CommandError as exc:
             shown = command if isinstance(command, str) else json.dumps(command)
+            origin = origins[index] if origins is not None and index < len(origins) else None
+            where = f", {origin}" if origin else ""
             raise CommandError(
-                f"Command {index + 1} ({shown}) failed: {exc}"
+                f"Command {index + 1}{where} ({shown}) failed: {exc}"
             ) from exc
     try:
         working.validate()
@@ -2397,12 +2402,17 @@ def apply_commands(
 
 def read_command_lines(text: str) -> list[str]:
     """Split a batch file into commands, ignoring blanks and ``#`` comments."""
-    commands: list[str] = []
-    for line in text.splitlines():
+    return [command for _line, command in read_numbered_command_lines(text)]
+
+
+def read_numbered_command_lines(text: str) -> list[tuple[int, str]]:
+    """The commands of a batch file with their line numbers (from 1)."""
+    commands: list[tuple[int, str]] = []
+    for number, line in enumerate(text.splitlines(), 1):
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
-        commands.append(stripped)
+        commands.append((number, stripped))
     return commands
 
 

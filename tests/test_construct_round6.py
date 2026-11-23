@@ -1,5 +1,6 @@
 """Construction after round 6: a closed curve's closing segment in a patch
-selection, coordinates exactly on the lines they were placed on."""
+selection, coordinates exactly on the lines they were placed on, and the
+notes and refusals the trials misread."""
 
 import math
 import unittest
@@ -50,6 +51,57 @@ class ClosingSegmentTests(unittest.TestCase):
         self.assertTrue(all(model.vertices[v].y == 0.0 for v in lid[0]))
 
 
+class NoteTests(unittest.TestCase):
+    def test_closed_ring_names_the_vertex_of_each_normal_and_point(self) -> None:
+        model, results = run(MeshModel(box=(5, 5, 6, 6)), [
+            f"add_curve {circle(1.0, 90)} name=body",
+            "add_ring body 0.1 count=12 normals=45,200 points=0,-1.2 id=r",
+        ])
+        note = results[-1]["note"]
+        self.assertRegex(note, r"2 station\(s\) by normal: 45->r_\d+, 200->r_\d+")
+        self.assertRegex(note, r"1 station\(s\) at points: r_\d+")
+        named = note.split("by normal: ")[1].split(";")[0]
+        for item in named.split(", "):
+            angle, vertex = item.split("->")
+            v = model.vertices[vertex]
+            self.assertAlmostEqual(math.degrees(math.atan2(v.y, v.x)) % 360.0, float(angle), delta=0.5)
+        below = note.split("at points: ")[1].split(";")[0]
+        self.assertAlmostEqual(model.vertices[below].y, -1.0, delta=1e-3)
+
+    def test_open_ring_names_the_vertex_of_each_point(self) -> None:
+        model, results = run(MeshModel(box=(5, 5, 6, 6)), [
+            "add_curve 0,0;1,0;2,0;3,0;4,0 name=floor",
+            "add_ring floor 0.1 side=left points=2.5,0.3;0.5,-1 count=8 id=f",
+        ])
+        named = results[-1]["note"].split("at points: ")[1].split(";")[0].split(", ")
+        self.assertEqual(len(named), 2)
+        for vertex, x in zip(named, (2.5, 0.5)):
+            self.assertAlmostEqual(model.vertices[vertex].x, x, delta=1e-9)
+
+    def test_fill_names_a_block_with_a_sharp_corner(self) -> None:
+        _model, results = run(MeshModel(box=(0, 0, 1, 1)), [
+            "add_vertex 5 0 id=a", "add_vertex 1.2 1 id=b", "add_fill points=1,0;5,0;1.2,1;1,1"])
+        note = results[-1]["note"]
+        self.assertIn("within 20 degrees of 0 or 180 on the count-free map", note)
+        self.assertRegex(note, r"\(15 deg\)")
+        _model, results = run(MeshModel(box=(0, 0, 1, 1)), [
+            "add_vertex 3 0 id=a", "add_vertex 3 1 id=b", "add_fill points=1,0;3,0;3,1;1,1"])
+        self.assertNotIn("count-free map", results[-1]["note"])
+
+    def test_a_band_over_separate_chains_names_them(self) -> None:
+        with self.assertRaises(CommandError) as caught:
+            run(MeshModel(box=(0, 0, 4, 2)), [
+                f"add_curve {circle(0.5, 60, (10.0, 0.0))} name=body",
+                "add_ring body 0.1 count=8 id=r",
+                "set_boundary_by body type=wall curves=body",
+                "add_band bbox=-1,-1,12,3 height=0.1",
+            ])
+        text = str(caught.exception)
+        self.assertIn("2 separate pieces", text)
+        self.assertIn("a loop of 4 edge(s) through v0", text)
+        self.assertIn("a loop of 8 edge(s) through r_", text)
+
+
 class ExactLineTests(unittest.TestCase):
     """Round 6: a vertex an operator places on a line it was given has that
     coordinate exactly, so a selection by the line takes every edge."""
@@ -93,6 +145,27 @@ class ExactLineTests(unittest.TestCase):
             self.assertEqual(xs[value], value)
         self.assertIn(0.35, {v.y for k, v in model.vertices.items() if k.startswith("s_")})
         self.assertTrue({0.7, 2.2} <= {v.x for k, v in model.vertices.items() if k.startswith("w_")})
+
+
+class MissedLineTests(unittest.TestCase):
+    def test_a_grid_line_taken_from_a_vertex_off_its_line_names_that_vertex(self) -> None:
+        # Block A's right side has a vertex s 0.001 below y = 0.5; block C's
+        # left side a vertex at y = 0.5. The grid between them takes s's y
+        # as a station, and its corner (2, 0.499) falls inside C's edge next
+        # to C's vertex: s is the vertex off the line, not C's.
+        model, _ = run(MeshModel(box=(0, 0, 1, 1)), [
+            "set_edge_cells v1-v2 1000",
+            "split_edge v1-v2 0.499 id=s",
+            "add_vertex 2 0 id=c0", "add_vertex 3 0 id=c1", "add_vertex 3 1 id=c2", "add_vertex 2 1 id=c3",
+            "add_block_from_vertices c0,c1,c2,c3",
+            "set_edge_cells c0-c3 10",
+            "split_edge c0-c3 0.5 id=m",
+        ])
+        with self.assertRaises(CommandError) as caught:
+            run(model, ["add_grid xs=1,2 ys=0,0.5,1"])
+        text = str(caught.exception)
+        self.assertIn("move_vertex s y=0.5 carry_curves=true", text)
+        self.assertNotIn("move_vertex m ", text)
 
 
 if __name__ == "__main__":

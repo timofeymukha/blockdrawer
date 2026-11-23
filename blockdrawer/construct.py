@@ -73,7 +73,7 @@ from .domain import Block, EdgeGeometry, EdgeKey, TopologyError, Vertex, edge_ke
 from . import overlap
 from .model import MeshModel, unhooked_points
 from .preview import _block_mesh_point
-from .sampling import FOLD_CELLS
+from .sampling import FOLD_CELLS, SEVERE_ANGLE
 from .session import from_data, to_data
 
 Point = tuple[float, float]
@@ -558,6 +558,9 @@ def add_grid(
             return out, skipped
 
         cells, skipped = kept(make_cells(first_axis, second_axis))
+        # A Cartesian station taken from an existing vertex: (axis, value) ->
+        # that vertex, so a refusal can name it as the one off its line.
+        taken_from: dict[tuple[str, float], str] = {}
         if conform:
             # Existing exterior vertices on a kept cell's side become stations
             # (only there: a vertex inside a skipped region adds nothing).
@@ -587,8 +590,10 @@ def add_grid(
                             on_y = any(abs(vertex.y - y) <= build.tol for y in (b0, b1))
                             if on_x and b0 + build.tol < vertex.y < b1 - build.tol:
                                 extra_second.add(vertex.y)
+                                taken_from.setdefault(("y", vertex.y), vertex_id)
                             elif on_y and a0 + build.tol < vertex.x < a1 - build.tol:
                                 extra_first.add(vertex.x)
+                                taken_from.setdefault(("x", vertex.x), vertex_id)
                 if not extra_first and not extra_second:
                     break
                 first_axis = _merge(first_axis, extra_first, build.tol)
@@ -611,7 +616,7 @@ def add_grid(
                             f"a grid vertex at ({corner[0]:.6g}, {corner[1]:.6g}) would fall inside "
                             f"the existing edge {current[0]}-{current[1]} and leave it non-conformal: "
                             "a station from elsewhere crosses it; split that edge first or "
-                            "build the grid in parts" + _missed_end(working, current, corner)
+                            "build the grid in parts" + _missed_end(working, current, corner, taken_from)
                         )
             ids = [build.vertex(point) for point in corners]
             build.block(ids)
@@ -644,9 +649,15 @@ def add_grid(
 MISSED_END = 0.05
 
 
-def _missed_end(model: MeshModel, edge: EdgeKey, point: Point) -> str:
+def _missed_end(model: MeshModel, edge: EdgeKey, point: Point,
+                taken_from: dict[tuple[str, float], str] | None = None) -> str:
     """The refusal's hint when ``point`` lies inside ``edge`` next to one of
-    its ends: that end, how far it is, and the move that puts it on the line."""
+    its ends: that end, how far it is, and the move that puts it on the line.
+    When the point's line is a station ``add_grid`` took from another
+    existing vertex (``taken_from``: axis and value -> vertex), that vertex
+    is the one off the line through the end, and the move is its (round 6,
+    three cylinders: a spoke end 0.0012 off a box line made a grid line of
+    its own, and the hint moved the box corner onto it)."""
     ends = [model.vertices[v] for v in edge]
     length = math.dist((ends[0].x, ends[0].y), (ends[1].x, ends[1].y))
     vertex = min(ends, key=lambda v: math.dist((v.x, v.y), point))
@@ -655,6 +666,16 @@ def _missed_end(model: MeshModel, edge: EdgeKey, point: Point) -> str:
         return ""
     axis = "x" if abs(vertex.x - point[0]) >= abs(vertex.y - point[1]) else "y"
     value = point[0] if axis == "x" else point[1]
+    source = (taken_from or {}).get((axis, value))
+    if source is not None and source not in edge:
+        off = model.vertices[source]
+        line = vertex.x if axis == "x" else vertex.y
+        return (
+            f"; the grid line {axis} = {value:.12g} is a station taken from the existing vertex {source} "
+            f"at ({off.x:.6g}, {off.y:.6g}), {abs(value - line):.3g} off the line {axis} = {line:.12g} through "
+            f"{vertex.id} - if {source} was meant to be on that line, put it there first: `move_vertex "
+            f"{source} {axis}={line:.12g} carry_curves=true` (or {axis}_of={vertex.id})"
+        )
     return (
         f"; its end {vertex.id} at ({vertex.x:.6g}, {vertex.y:.6g}) is only {gap:.3g} from it - if "
         f"{vertex.id} was meant to be on that line, put it there first: `move_vertex {vertex.id} "
@@ -1346,7 +1367,10 @@ def _model_chain(model: MeshModel, edges: Sequence[EdgeKey]) -> _Chain:
             break
         order.append(current_vertex)
     if len(used) != len(edges):
-        raise TopologyError("the selected edges are not one connected chain or loop")
+        raise TopologyError(
+            "the selected edges are not one connected chain or loop: they form "
+            + _chains_text(edges, adjacency) + "; select one of them (edges=, between=, or a smaller bbox)"
+        )
     closed = not ends
     interiors, kinds = [], []
     for k, current in enumerate(used):
@@ -1382,6 +1406,36 @@ def _model_chain(model: MeshModel, edges: Sequence[EdgeKey]) -> _Chain:
                 v, o = model.vertices[vertex], model.vertices[other]
                 ends_follow[slot] = (o.x - v.x, o.y - v.y)
     return _Chain(order, interiors, kinds, closed, side, (ends_follow[0], ends_follow[1]))
+
+
+def _chains_text(edges: Sequence[EdgeKey], adjacency: dict[str, list[EdgeKey]]) -> str:
+    """The separate chains and loops among ``edges`` (none branching), each
+    with its edge count and an end vertex (a loop: its smallest vertex), for
+    the refusal of a selection that is not one chain (round 6: a box taking
+    a band's front and an unassigned wall)."""
+    seen: set[EdgeKey] = set()
+    parts = []
+    for seed in sorted(edges):
+        if seed in seen:
+            continue
+        group = {seed}
+        stack = [seed]
+        while stack:
+            current = stack.pop()
+            for vertex in current:
+                for other in adjacency.get(vertex, ()):
+                    if other not in group:
+                        group.add(other)
+                        stack.append(other)
+        seen |= group
+        vertices = {v for current in group for v in current}
+        ends = sorted(v for v in vertices if len(adjacency[v]) == 1)
+        parts.append(
+            f"a chain of {len(group)} edge(s) from {ends[0]} to {ends[-1]}" if ends
+            else f"a loop of {len(group)} edge(s) through {min(vertices)}"
+        )
+    return f"{len(parts)} separate pieces - " + ", ".join(parts[:6]) + (
+        f" and {len(parts) - 6} more" if len(parts) > 6 else "")
 
 
 def _block_side(occurrence, first: str) -> float:
@@ -2187,15 +2241,24 @@ def add_ring(
             notes.append(f"{len(corners)} corner(s) above {corner:g} degrees")
         if fractions:
             explicit.update((f % 1.0) * total for f in fractions)
+        # The stations given by normal and by point, to name their vertices
+        # in the note (round 6: two trials listed them by hand).
+        named: list[tuple[int, list[tuple[str, float]]]] = []
+        by_normal = []
         for index, angle in enumerate(normals):
-            explicit.add(_normal_station(loop, lengths, turning, orientation, corner_angle, angle,
-                                         near[index] if near else None))
+            value = _normal_station(loop, lengths, turning, orientation, corner_angle, angle,
+                                    near[index] if near else None)
+            explicit.add(value)
+            by_normal.append((f"{angle:g}", value))
         if normals:
+            named.append((len(notes), by_normal))
             notes.append(f"{len(normals)} station(s) by normal")
         if points:
             nodes = [(lengths[k] / total, loop[k]) for k in range(n)]
             extent = _extent(loop)
-            explicit.update(u * total for u in _station_points(nodes, True, points, extent, 1.0e-3 * extent))
+            by_point = [u * total for u in _station_points(nodes, True, points, extent, 1.0e-3 * extent)]
+            explicit.update(by_point)
+            named.append((len(notes), [("", value) for value in by_point]))
             notes.append(f"{len(points)} station(s) at points")
         if facing:
             closed_loop = list(loop) + [loop[0]]
@@ -2240,6 +2303,8 @@ def add_ring(
         build = _Build(working, prefix)
         build.scale(_extent(loop) + max(abs(c) for p in loop for c in p))
         ids = [build.vertex(at(value)) for value in ordered]
+        for slot, labelled in named:
+            notes[slot] += ": " + _station_names(labelled, ordered, ids, total)
         interiors = []
         for k, first in enumerate(ordered):
             last = ordered[(k + 1) % len(ordered)] + (total if k + 1 == len(ordered) else 0.0)
@@ -2481,11 +2546,14 @@ def _open_ring(working: MeshModel, curves: Sequence[str], side: str, between: Se
             on_line.setdefault(s0 + hits[0] * (s1 - s0), (axis, value))
     if xs or ys:
         notes.append(f"{len(xs) + len(ys)} station(s) by crossing")
+    by_point = []
     if places:
         nodes = [(0.0, path.at(s0)), *inside, (1.0, path.at(s1))]
         for u in _station_points(nodes, False, places, path.extent, path.tolerance):
             anchors.add(s0 + u * (s1 - s0))
+            by_point.append(("", s0 + u * (s1 - s0)))
         notes.append(f"{len(places)} station(s) at points")
+        point_note = len(notes) - 1
     if facing:
         anchors.update(_facing_parameters(working, curves, points, lengths, s0, s1, facing, corner_angle))
         notes.append(f"{len(facing)} station(s) facing")
@@ -2520,6 +2588,8 @@ def _open_ring(working: MeshModel, curves: Sequence[str], side: str, between: Se
     ids = [build.vertex(point) for point in station_points]
     if len(set(ids)) != len(ids):
         raise TopologyError("two stations of the band fall on one existing vertex")
+    if by_point:
+        notes[point_note] += ": " + _station_names(by_point, merged, ids, None)
     tolerance = path.tolerance * 1.0e-3
     interiors = []
     for first, last in zip(merged, merged[1:]):
@@ -2542,6 +2612,28 @@ def _open_ring(working: MeshModel, curves: Sequence[str], side: str, between: Se
             working, curves, points[0] if slot == 0 else points[-1], normal, path.tolerance)
     chain.ends = (ends[0], ends[1])
     return build, chain, notes, len(merged), follows
+
+
+# The ring note names at most this many stations given by normal or point.
+NAMED_STATIONS = 12
+
+
+def _station_names(labelled: Sequence[tuple[str, float]], ordered: Sequence[float], ids: Sequence[str],
+                   total: float | None) -> str:
+    """The vertex each station given by normal or by point became, in the
+    order given: ``45->r_3, 135->r_9`` (a point's station by its ID alone),
+    at most ``NAMED_STATIONS``. ``ordered`` are the stations' arc lengths
+    (cyclic with ``total`` round a closed curve), ``ids`` their vertices."""
+    def gap(a: float, b: float) -> float:
+        return _cyclic_gap(a, b, total) if total else abs(a - b)
+
+    parts = []
+    for label, value in labelled[:NAMED_STATIONS]:
+        index = min(range(len(ordered)), key=lambda k: gap(ordered[k], value % total if total else value))
+        parts.append(f"{label}->{ids[index]}" if label else ids[index])
+    if len(labelled) > NAMED_STATIONS:
+        parts.append(f"and {len(labelled) - NAMED_STATIONS} more")
+    return ", ".join(parts)
 
 
 def _check_counts(counts: Sequence[int], starts: Sequence[float]) -> None:
@@ -3442,12 +3534,18 @@ def add_fill(
                 line += " - NOT the only reading: it also bounds a region " + " or ".join(shown)
             described.append(line)
         result.note = f"{shape}; " + "; ".join(described)
-        folds = _uniform_folds(working, result.blocks)
+        folds, sharp = _uniform_folds(working, result.blocks)
         if folds:
             result.note += (
                 f"; NOTE: block(s) fold on the count-free map ({FOLD_CELLS} even fractions a "
                 f"side): {folds} - a side bends further than the transfinite map follows; "
                 "move a station or fill in parts"
+            )
+        if sharp:
+            result.note += (
+                f"; NOTE: block(s) with a cell corner within {SEVERE_ANGLE:g} degrees of 0 or 180 on the "
+                f"count-free map: {sharp} - checkMesh's faces above 70 degrees start there; move a "
+                "station or a corner, or fill in parts"
             )
         return result
 
@@ -3461,14 +3559,32 @@ def _id_list(identifiers: Sequence[str], limit: int = 8) -> str:
     return f"{', '.join(identifiers[:3])}, ... {', '.join(identifiers[-3:])} ({len(identifiers)})"
 
 
-def _uniform_folds(model: MeshModel, blocks: Sequence[str]) -> str:
+# add_fill names at most this many blocks with a sharp count-free corner.
+SHARP_BLOCKS_NAMED = 4
+
+
+def _uniform_folds(model: MeshModel, blocks: Sequence[str]) -> tuple[str, str]:
     """The blocks among ``blocks`` folding on the count-free map, as
-    ``sampling.folded_blocks`` names them; empty when none."""
+    ``sampling.folded_blocks`` names them, and those that do not fold but
+    have a cell corner within ``SEVERE_ANGLE`` of 0 or 180 degrees there,
+    the sharpest first with that corner (round 6: a slot fill's block with
+    a 16-degree corner, built without a word); empty when none."""
     from .sampling import folded_blocks, sample_model
 
     if not blocks:
-        return ""
-    return folded_blocks(sample_model(model, uniform=FOLD_CELLS, blocks=blocks))
+        return "", ""
+    sample = sample_model(model, uniform=FOLD_CELLS, blocks=blocks)
+    sharp = sorted(
+        (min(item.min_angle, 180.0 - item.max_angle), item.block_id, item.min_angle, item.max_angle)
+        for item in sample.blocks
+        if not item.folded_cells and (item.min_angle < SEVERE_ANGLE or item.max_angle > 180.0 - SEVERE_ANGLE)
+    )
+    text = ", ".join(
+        f"{block} ({low:.0f} deg)" if low < SEVERE_ANGLE else f"{block} ({high:.0f} deg)"
+        for _margin, block, low, high in sharp[:SHARP_BLOCKS_NAMED])
+    if len(sharp) > SHARP_BLOCKS_NAMED:
+        text += f" and {len(sharp) - SHARP_BLOCKS_NAMED} more block(s)"
+    return folded_blocks(sample), text
 
 
 def _build_quad(working: MeshModel, build: _Build, corners: list[str], resolved: list[_FillSide],

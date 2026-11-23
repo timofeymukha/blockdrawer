@@ -28,7 +28,7 @@ from .commands import (
     batch_digest,
     command_specs,
     format_results,
-    read_command_lines,
+    read_numbered_command_lines,
 )
 from .describe import (
     QUERY_SECTIONS,
@@ -252,16 +252,20 @@ def edit_session(
     if output and in_place:
         raise ToolFailure("output and in_place are mutually exclusive")
     batch_commands: list[Any] = []
+    origins: list[str | None] = []
     if commands_file:
         source = Path(commands_file)
         if not source.is_file():
             raise ToolFailure(f"commands_file {source} does not exist")
-        batch_commands.extend(read_command_lines(source.read_text(encoding="utf-8")))
+        for number, command in read_numbered_command_lines(source.read_text(encoding="utf-8")):
+            batch_commands.append(command)
+            origins.append(f"line {number} of {source}")
     batch_commands.extend(commands or [])
+    origins.extend([None] * len(commands or []))
     if not batch_commands:
         raise ToolFailure("No commands given")
     model = load_session(path)
-    batch = _apply_commands(model, batch_commands)
+    batch = _apply_commands(model, batch_commands, origins)
     destination: Path | None = None
     if in_place:
         destination = Path(path)

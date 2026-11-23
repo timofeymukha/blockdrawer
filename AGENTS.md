@@ -123,7 +123,10 @@ them in the canvas widgets.
   model mutation is a named `CommandSpec` with typed parameters; commands are
   parsed from shell-like text (`set_edge_cells v0-v1 20`) or JSON objects
   (`{"op": ..., ...}`), coerced against the current model, and applied.
-  `apply_commands()` works on a copy and is atomic for the whole batch. This is
+  `apply_commands()` works on a copy and is atomic for the whole batch; its
+  `origins` (one per command: `line 40 of build.txt`, from
+  `read_numbered_command_lines`; the CLI's `-f`/`--stdin` and the MCP
+  `commands_file`) name a failing command's line beside its number. This is
   the single vocabulary shared by the CLI, batch files, and any future MCP
   server; add new model operations here as well as to the model.
   `batch_digest()` is the quiet account of a batch the MCP `edit_session`
@@ -669,7 +672,9 @@ them in the canvas widgets.
   its corners' mean falls, which a thin block on a curved edge has across
   the curve ("blocks on both sides" for one side, "not strictly convex"
   alone); a chain with blocks on both sides is refused naming the edges of
-  each. A front offset edge leaving an end more than `HOOK_TURN` (45
+  each. A selection that is not one chain or loop (a box taking a
+  band's front and an unassigned wall, round 6) is refused naming each
+  separate piece with its edge count and an end vertex (`_chains_text`). A front offset edge leaving an end more than `HOOK_TURN` (45
   degrees) from the wall edge's own end direction has the points that make
   it turn dropped from that end (`_offset_interior`): a concave mitre or a
   tilted end spoke put the end where the offset points do not lead
@@ -679,7 +684,12 @@ them in the canvas widgets.
   vertices on six builds and made u_bend trial 3c reuse its `new --box`
   corner, failing batch 11's rule); instead a grid or row vertex falling
   inside an existing edge next to one of its ends names that end and the
-  `move_vertex` that puts it on the line (`_missed_end`, `MISSED_END`).
+  `move_vertex` that puts it on the line (`_missed_end`, `MISSED_END`) -
+  unless the grid line through the vertex is a station `add_grid` took from
+  another existing vertex (`taken_from`): that vertex is the one off the
+  line through the end and the hint moves it (round 6, three cylinders: a
+  spoke end 0.0012 off a box line made a grid line of its own, and the hint
+  moved the box corner onto it).
   `add_band`'s note says which vertex `start=`/`end=` set (the chain's
   order, not `between=`'s). A no-height band fold on an edge turning more
   than 90 degrees names the missing station. Box selection (`bbox=` of
@@ -801,6 +811,9 @@ them in the canvas widgets.
   curve's first point (`_check_counts` refuses another number of
   sections, naming where each starts) -, reporting the stations in its
   `note`, and which front vertex stands over which wall station
+  - each `normals=` angle and `points=` entry with the vertex it became,
+  in the order given (`45->r_3, 200->r_9`; `_station_names`, at most
+  `NAMED_STATIONS`, closed and open rings) -
   (`_over_note`, from `_band`'s `build.over`): single spokes as runs
   `W_a..W_b->F_c..F_d` where both IDs run in step (the first two fronts
   are made swapped, `r_0->r_9, r_1->r_8`), each open corner's two spoke
@@ -887,7 +900,10 @@ them in the canvas widgets.
   edges whose block lies inside (at most `MAX_FILL_REASONS`). The note
   names the standalone vertices each open side took, and adds a NOTE when
   a block it built folds on the count-free map (`sampling.FOLD_CELLS`
-  fractions a side; `_uniform_folds`) - a note, not a refusal. Opposite sides must have as many
+  fractions a side; `_uniform_folds`) - a note, not a refusal - or has a
+  cell corner within `SEVERE_ANGLE` of 0 or 180 there (the sharpest first,
+  at most `SHARP_BLOCKS_NAMED`; on the 173 fills of the round-3 to 6 builds
+  it names blocks on 6). Opposite sides must have as many
   edges (`_mismatch_message` names the short side's segments facing the
   long side's extra stations: `split_edge` or a station). Interior
   vertices are blockMesh's edge-weighted transfinite interpolation
@@ -974,7 +990,10 @@ them in the canvas widgets.
   count differs from the session's is refused.
 - `blockdrawer/cli.py`: argparse front end over the modules above. Every
   subcommand supports `--json`; failures exit 1 with `error: ...` on stderr or
-  a JSON object carrying an `error` key.
+  a JSON object carrying an `error` key. `apply -c` is refused saying how commands are given
+  (arguments, `-f FILE`, `--stdin`), and no commands with standard input
+  piped says that a here-document needs `--stdin` (agents typed both in
+  three rounds).
 - `blockdrawer/mcp_server.py`: Model Context Protocol server (`blockdrawer-mcp`,
   stdio by default) exposing the same operations as typed tools:
   `describe_session`, `list_commands`, `edit_session`, `quality_report`,

@@ -201,6 +201,11 @@ class ToolFunctionTests(unittest.TestCase):
         empty.write_text("# nothing\n", encoding="utf-8")
         with self.assertRaisesRegex(ToolFailure, "No commands"):
             edit_session(str(self.session), commands_file=str(empty))
+        # A failing command is named by its line in the file (round 6).
+        failing = self.root / "failing.txt"
+        failing.write_text("# header\nset_edge_cells v0-v1 6\n\nset_edge_cells v0-v9 3\n", encoding="utf-8")
+        with self.assertRaisesRegex(Exception, f"Command 2, line 4 of {failing}"):
+            edit_session(str(self.session), commands_file=str(failing))
 
     def test_quality_report_summary_and_worst(self) -> None:
         edit_session(str(self.session), ["add_block v1-v2", "add_block v2-v5"], in_place=True)

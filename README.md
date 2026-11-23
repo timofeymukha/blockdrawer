@@ -627,7 +627,9 @@ was 3.6e-5 of the extent):
   neighbour (a station just past a curve point), so the control point at
   the end of such a segment beside its longer neighbour is left out, pass
   by pass until nothing hooks (`model.unhooked_points`). The result's note lists
-  the stations and which front vertex stands over which wall station: the
+  the stations - each `normals=` angle and `points=` entry with the vertex
+  it became, in the order given (`45->r_3, 200->r_9`; two round-6 trials
+  listed them by hand) - and which front vertex stands over which wall station: the
   single spokes as runs (`r_0->r_9, r_1->r_8, r_2..r_7->r_10..r_15`: the
   first two fronts are made swapped), each open corner's two spoke ends,
   each fan's front and each mitre's front vertex (a spoke at a corner
@@ -731,7 +733,10 @@ was 3.6e-5 of the extent):
   vertex inside or the side edge whose block lies inside. The note names
   the standalone vertices each open side took, and says when a block it
   built folds on the count-free map (32 even fractions a side) - a note,
-  not a refusal. Three or five corners give that many blocks round a centre vertex
+  not a refusal - and names a block with a cell corner within 20 degrees of
+  0 or 180 there, where checkMesh's faces above 70 start (round 6: a slot
+  fill's 16-degree corner went unannounced; of the 173 fills of the round-3
+  to 6 builds as delivered, 6 get the note). Three or five corners give that many blocks round a centre vertex
   (the triangle and pentagon templates): side k is split where spokes k-1
   and k+1 meet it, which needs its edge count to equal the sum of their
   counts - an even total, and in a triangle each side shorter than the
@@ -787,7 +792,9 @@ lies outside it, naming the blocks (the elbow's polar grid over the vane's
 band: 50 blocks and a validated session before, 8 cells left out now). A
 chain's band side and a fill side's blocks are read from the block's own
 traversal, not its corners' mean (a thin block on a curved edge: "blocks on
-both sides", "would lie over", now built). A band front leaving its end
+both sides", "would lie over", now built). A box selection that is not one
+chain or loop (round 6: a band's front and an unassigned wall) is refused
+naming each piece with its edge count and an end vertex. A band front leaving its end
 more than 45 degrees from the wall's own direction loses the points that
 turn it (the splitter's concave mitres and the high-lift band beside a
 tilted `end=`: 20 and 1354 cells folding on the count-free map before, 0
@@ -799,7 +806,10 @@ a normal occurs; `render --bbox` is `--bounds`, both in the comma form;
 `bbox=` chain selection takes edges lying on the box's sides within the
 operators' tolerance and names the edges at its ends it left out. A grid or
 row vertex falling inside an existing edge beside one of its ends names
-that end and the `move_vertex` putting it on the line: the U-bend front
+that end and the `move_vertex` putting it on the line (and where the grid
+line itself is a station `add_grid` took from another vertex off its line,
+that vertex and the move that puts it on the end's line: round 6's three
+cylinders were told to move a correct box corner): the U-bend front
 0.0013 off a line/arc joint, which a spoke on the straight stretch's own
 normal would have removed but which moved vertices on six round-3/4 builds
 and made one fail to replay, so the spoke stays the mitre.
@@ -899,7 +909,11 @@ JSON objects; edges are written `first-second` in either order, a grading
 value or split fraction is read along the edge in the order you wrote it
 (`set_edge_grading v9-v2 start_width 0.01` puts the small cell at `v9`), and
 several commands may be given at once, read from a file with `-f`, or piped through
-`--stdin`. If any command fails nothing is written. `--quiet` reports a
+`--stdin`. If any command fails nothing is written, and the error names its
+line in the file beside its number among the commands (`Command 12, line 40
+of build.txt (...) failed`). There is no `-c`: `apply -c` is refused saying
+so, and a here-document without `--stdin` is answered that standard input is
+read only with it. `--quiet` reports a
 generated batch of thousands of commands in a few lines: the commands
 counted by name, the vertex, block, curve and patch IDs created and removed
 (runs written `v4..v93`) and the results worth reading - repairs, splits,

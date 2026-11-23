@@ -415,3 +415,35 @@ class CliTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ApplyMessagesTests(unittest.TestCase):
+    """Round 6: the failing command's line in its file, and how commands are given."""
+
+    def setUp(self) -> None:
+        self._directory = tempfile.TemporaryDirectory()
+        self.root = Path(self._directory.name)
+        self.session = self.root / "session.json"
+        save_session(MeshModel(), self.session)
+
+    def tearDown(self) -> None:
+        self._directory.cleanup()
+
+    def test_a_failing_command_names_its_line_in_the_file(self) -> None:
+        batch = self.root / "build.txt"
+        batch.write_text("# header\n\nset_edge_cells v0-v1 4\n# comment\nset_edge_cells v0-v9 3\n")
+        code, _, err = run_cli("apply", str(self.session), "-f", str(batch))
+        self.assertEqual(code, 1)
+        self.assertIn(f"Command 2, line 5 of {batch}", err)
+
+    def test_dash_c_says_how_commands_are_given(self) -> None:
+        code, _, err = run_cli("apply", str(self.session), "-c", "set_edge_cells v0-v1 4")
+        self.assertEqual(code, 1)
+        self.assertIn("apply has no -c", err)
+        self.assertIn("--stdin", err)
+
+    def test_no_commands_from_a_pipe_points_at_stdin(self) -> None:
+        code, _, err = run_cli("apply", str(self.session), stdin="set_edge_cells v0-v1 4\n")
+        self.assertEqual(code, 1)
+        self.assertIn("No commands given", err)
+        self.assertIn("needs it", err)
