@@ -1,0 +1,13 @@
+#!/bin/bash
+# Low-profile runner: two pinned cores, lowest priority, single-threaded BLAS/OpenMP,
+# OpenFOAM v2606 on the path. Usage: lp COMMAND [ARGS...]
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1
+if [ -z "$WM_PROJECT_DIR" ]; then
+  # In a function: OpenFOAM's bashrc reads the positional parameters and sources
+  # any that is a file (so `lp bd ...` ran bd without arguments, silently).
+  _foam() { source /tmp/timofey/code/OpenFOAM-v2606/etc/bashrc >/dev/null 2>&1; }
+  _foam
+fi
+export BLOCKMESH_COMMAND=blockMesh
+export PYTHONPATH=/tmp/timofey/code/blockDrawer${PYTHONPATH:+:$PYTHONPATH}
+exec nice -n 19 taskset -c 22,23 "$@"

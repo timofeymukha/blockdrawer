@@ -1,0 +1,535 @@
+--- a/blockdrawer/size.py
++++ b/blockdrawer/size.py
+@@ -151,10 +151,26 @@
+ # screen's first count) or above the spent state's worst where it touches.
+ JUMP_LIMIT = 2.5
+ # How far a strip goes from its shared ratio to its members' own, tried in
+-# turn: all the way, half, a quarter.
++# turn: all the way, half, a quarter (the aspect repair's releases).
+ FIELD_MODES = (1.0, 0.5, 0.25)
++# The same for grading=field's pass (``settle``), with three quarters: it
++# took a ground band's spokes from 9.4 to 4.8 percent off the first width
++# asked where all the way raised a jump.
++SETTLE_MODES = (1.0, 0.75, 0.5, 0.25)
+ # Rounds of lowering bounds to the partners' widths (_FieldGrading.tighten).
+ TIGHTEN_ROUNDS = 20
++# grading=field shears no block for nothing (``_FieldGrading.settle``): a
++# strip whose own gradings raise the worst face of its blocks by more than
++# FIELD_FACE_GAIN degrees moves only when that buys a wall spoke's first
++# height nearer the one asked (by FIELD_GAIN of it) or fewer interface
++# jumps above JUMP_LIMIT at its members' ends.
++FIELD_BUYS = True
++FIELD_GAIN = 0.01
++FIELD_FACE_GAIN = 0.25
++# A field pass the verification finds worse is undone where it is worse -
++# the strips through the offending blocks, then their neighbours' - before
++# it is dropped as a whole (``_field_pass``).
++FIELD_PARTIAL_UNDO = True
+ 
+ 
+ # checkMesh's aspect ratio limit as size keeps it (shared with smooth's polish).
+@@ -687,16 +703,19 @@
+         )]))
+     if field_grading is not None:
+         off = _off_walls(result.bands, 0.10)
+-        refused_strips = field_grading["refused_by_jumps"] + field_grading["refused_by_grid"]
+         cause = (
+-            "the field pass was dropped (the verification found it worse than the spent state)"
+-            if field_grading.get("dropped")
+-            else f"{refused_strips} strip(s) kept their shared ratio (refused by the jump or grid guard)"
+-            if refused_strips else ""
++            "the field pass was dropped (it was worse than the spent state)" if field_grading.get("dropped")
++            else f"the field pass was undone on {field_grading['undone_strips']} strip(s) where it was worse"
++            if field_grading.get("undone_strips")
++            else f"{field_grading['refused_by_jumps'] + field_grading['refused_by_grid']} strip(s) kept "
++                 "their shared ratio (refused by the jump or grid guard)"
++            if field_grading["refused_by_jumps"] + field_grading["refused_by_grid"] else ""
+         )
+         if off and cause:
+             result.note = " ".join(filter(None, [result.note, (
+-                f"{cause}: first widths more than 10 percent off the one asked on {'; '.join(off)}"
++                f"{cause}: first widths more than 10 percent off the one asked on {', '.join(off)}"
++                + (f" (undone: {', '.join(field_grading['undone_edges'][:6])})"
++                   if field_grading.get("undone_edges") else "")
+             )]))
+     field_faces = result.verification.get("field", {}).get("severe_faces", 0)
+     if field_faces:
+@@ -725,9 +744,12 @@
+     gradings at the final counts where the sampled grid and the interface
+     jumps allow (``_FieldGrading``). Counts and the spent shared ratios are
+     the starting point, so the cells are the spent state's. The result is
+-    verified like spending's; a pass that adds a face above 70 degrees, a
+-    fold, more than ``VERIFY_TOLERANCE`` on the worst face or skewness past
+-    4 is dropped whole."""
++    verified like spending's; where it adds a face above 70 degrees, a fold,
++    more than ``VERIFY_TOLERANCE`` on the worst face, skewness past 4 or
++    cells past aspect ratio 1000, the strips through the offending blocks go
++    back to their shared ratios, then those through their neighbours, until
++    it holds (``FIELD_PARTIAL_UNDO``; ``undone_strips`` in the record); a
++    pass that still does not hold is dropped whole."""
+     grader = _FieldGrading(working, state["strips"], state["edges"], state["bounds"], options, state["ratios"],
+                            state.get("released"))
+     grader.tighten(state["counts"], state["links"])
+@@ -742,19 +764,78 @@
+         "shared": sum(1 for mode in grader.mode if mode == 0.0),
+         "refused_by_jumps": grader.refused["jump"],
+         "refused_by_grid": grader.refused["grid"],
++        "kept_shared_buying_nothing": grader.refused.get("nothing", 0),
+     }
+     spent = state.get("verification", {}).get("result")
+     if spent is None:
+         return trial_state, record
++
++    def worse(summary) -> bool:
++        return (summary["severe_faces"] > spent["severe_faces"]
++                or summary["folded_cells"] > spent["folded_cells"]
++                or summary["max_non_orthogonality"] > spent["max_non_orthogonality"] + VERIFY_TOLERANCE
++                or summary["max_skewness"] > SKEWNESS_LIMIT >= spent["max_skewness"]
++                or _aspect_worse(spent["max_aspect_ratio"], spent["high_aspect_cells"],
++                                 summary["max_aspect_ratio"], summary["high_aspect_cells"]))
++
+     trial = from_data(to_data(working))
+     _write(trial, trial_state, options)
+-    summary = _verify(trial, _neighbours(trial))[1]
+-    if (summary["severe_faces"] > spent["severe_faces"]
+-            or summary["folded_cells"] > spent["folded_cells"]
+-            or summary["max_non_orthogonality"] > spent["max_non_orthogonality"] + VERIFY_TOLERANCE
+-            or summary["max_skewness"] > SKEWNESS_LIMIT >= spent["max_skewness"]
+-            or _aspect_worse(spent["max_aspect_ratio"], spent["high_aspect_cells"],
+-                             summary["max_aspect_ratio"], summary["high_aspect_cells"])):
++    neighbours = _neighbours(trial)
++    blocks, summary = _verify(trial, neighbours)
++    if worse(summary) and FIELD_PARTIAL_UNDO:
++        # Undo the pass where it is worse: the strips through each offending
++        # block (a block worse than in the spent state, as spending's
++        # verification judges), then through their neighbours, as long as
++        # anything is left to undo; the rest of the pass stays.
++        spent_model = from_data(to_data(working))
++        _write(spent_model, state, options)
++        spent_blocks, _summary = _verify(spent_model, neighbours)
++        strips_of_block: dict[str, set[int]] = {}
++        by_id = {block.id: block for block in trial.blocks}
++        for block in trial.blocks:
++            for k in range(4):
++                index = grader.strip_of.get(edge_key(*block.directed_edge(k)))
++                if index is not None:
++                    strips_of_block.setdefault(block.id, set()).add(index)
++        undone: set[int] = set()
++        for _round in range(VERIFY_ROUNDS):
++            offenders = sorted(
++                block for block, item in blocks.items()
++                if item["severe_faces"] > spent_blocks[block]["severe_faces"]
++                or item["folded_cells"] > spent_blocks[block]["folded_cells"]
++                or item["max_non_orthogonality"] > spent["max_non_orthogonality"] + VERIFY_TOLERANCE
++                or item["max_skewness"] > SKEWNESS_LIMIT >= spent["max_skewness"]
++                or _aspect_worse(spent_blocks[block]["max_aspect_ratio"], spent_blocks[block]["high_aspect_cells"],
++                                 item["max_aspect_ratio"], item["high_aspect_cells"])
++            )
++            these: set[int] = set()
++            for ring in range(2):
++                if ring == 1:
++                    offenders = sorted({other for block in offenders for other in neighbours.get(block, ())})
++                these = {index for block in offenders for index in strips_of_block.get(block, ())
++                         if grader.mode[index] != 0.0 and index not in grader.fixed}
++                if these:
++                    break
++            if not these:
++                break
++            for index in these:
++                grader.mode[index] = 0.0
++            undone |= these
++            ratios = dict(state["ratios"])
++            ratios.update(grader.ratios(state["counts"]))
++            trial_state = {**state, "ratios": ratios}
++            _write(trial, trial_state, options)
++            blocks, summary = _verify(trial, neighbours)
++            if not worse(summary):
++                break
++        if undone:
++            record["undone_strips"] = len(undone)
++            record["undone_edges"] = sorted("-".join(member) for index in undone for member in grader.strips[index])
++            record["own"] = sum(1 for mode in grader.mode if mode == 1.0)
++            record["part"] = sum(1 for mode in grader.mode if 0.0 < mode < 1.0)
++            record["shared"] = sum(1 for mode in grader.mode if mode == 0.0)
++        del by_id
++    if worse(summary):
+         record["dropped"] = "the verification at 256 cells a side found the pass worse than the spent state"
+         return state, record
+     trial_state["verification"] = {**state["verification"], "result": _brief(summary)}
+@@ -777,8 +858,7 @@
+ 
+ def _off_walls(bands: list[dict], limit: float) -> list[str]:
+     """Wall patches whose first heights at the band spokes leave the one
+-    asked by more than ``limit`` (a fraction): "PATCH LOW..HIGH for ASKED
+-    (-X%..+Y%)"."""
++    asked by more than ``limit`` (a fraction): "PATCH LOW..HIGH (-X%..+Y%)"."""
+     found = []
+     for band in bands:
+         asked = band.get("asked")
+@@ -1277,7 +1357,7 @@
+         than either tilt (a column from a blunt base read 50 degrees with
+         each pair within 20). Strips are taken finest bound first, from the
+         spent state where every strip shares one ratio; a strip goes the
+-        first of ``FIELD_MODES`` of the way to its members' own gradings for
++        first of ``SETTLE_MODES`` of the way to its members' own gradings for
+         which the worst interface jump at its members' ends stays within the
+         spent state's there (or ``JUMP_LIMIT``), and its blocks and their
+         neighbours, sampled at ``GUARD_CELLS`` a side, gain no fold, no face
+@@ -1320,6 +1400,20 @@
+                 neighbours.setdefault(block, set()).update(ids)
+ 
+         cap = self.options.interface_growth or 1.25
++        # Each wall spoke end among the members: (vertex, cosine of its
++        # angle to the wall's normal, the first width asked for its patch).
++        spoke_ends: dict[EdgeKey, list[tuple[str, float, float]]] = {}
++        if FIELD_BUYS:
++            from .quality import _tangent, band_spokes
++
++            overrides = dict(self.options.patch_first_widths)
++            found, _rejected = band_spokes(model)
++            for current, vertex, name, normal in found:
++                tx, ty = _tangent(model, current, vertex)
++                spoke_ends.setdefault(current, []).append(
++                    (vertex, max(0.0, tx * normal[0] + ty * normal[1]),
++                     overrides.get(name, self.options.first_width)))
++        self.refused["nothing"] = 0
+ 
+         def width(key: tuple[EdgeKey, str]) -> float:
+             current, vertex = key
+@@ -1335,11 +1429,26 @@
+                         found[tuple(sorted(((member, vertex), partner)))] = max(a / b, b / a)
+             return found
+ 
+-        def verdict(blocks):
+-            summary = sample_model(trial, GUARD_CELLS, blocks=blocks, planar=True).summary()
++        def first_off(members) -> float:
++            """The worst relative miss of the first height asked at the
++            members' wall spoke ends."""
++            worst = 0.0
++            for member in members:
++                for vertex, cosine, wanted in spoke_ends.get(member, ()):
++                    worst = max(worst, abs(width((member, vertex)) * cosine / wanted - 1.0))
++            return worst
++
++        def over_limit(members) -> int:
++            return sum(1 for value in jumps(members).values() if value > JUMP_LIMIT * (1.0 + 1.0e-9))
++
++        def verdict(blocks, own=()):
++            sampled = sample_model(trial, GUARD_CELLS, blocks=blocks, planar=True)
++            summary = sampled.summary()
++            mine = max((item.max_non_orthogonality for item in sampled.blocks if item.block_id in own),
++                       default=0.0)
+             return (summary.get("folded_cells", 0), summary.get("severe_faces", 0),
+                     summary.get("max_skewness", 0.0), summary.get("max_non_orthogonality", 0.0),
+-                    summary.get("max_aspect_ratio", 0.0), summary.get("high_aspect_cells", 0))
++                    summary.get("max_aspect_ratio", 0.0), summary.get("high_aspect_cells", 0), mine)
+ 
+         def finest(strip: int) -> float:
+             return min(min(self.bounds[(member, member[0])], self.bounds[(member, member[1])])
+@@ -1380,10 +1489,11 @@
+             local = sorted({other for block in blocks for other in neighbours.get(block, ())})
+             for strip in group:
+                 self.mode[strip] = 0.0
+-            before = verdict(local)
++            before = verdict(local, set(blocks))
+             jumps_before = max(jumps(members).values(), default=1.0)
++            off_before, over_before = first_off(members), over_limit(members)
+             reason = "jump"
+-            for mode in FIELD_MODES:
++            for mode in SETTLE_MODES:
+                 for strip in group:
+                     self.mode[strip] = mode
+                     write(strip)
+@@ -1392,12 +1502,22 @@
+                 if max(jumps(members).values(), default=1.0) > max(jumps_before, cap, JUMP_LIMIT) * (1.0 + 1.0e-9):
+                     continue
+                 reason = "grid"
+-                after = verdict(local)
++                after = verdict(local, set(blocks))
+                 if (after[0] <= before[0] and after[1] <= before[1]
+                         and not (after[2] > SKEWNESS_LIMIT >= before[2])
+                         and not _aspect_worse(before[4], before[5], after[4], after[5])
+                         and after[3] <= max(ceiling, before[3] + VERIFY_TOLERANCE)):
+-                    return None
++                    # Graded apart, the members shear the blocks between
++                    # them: a move that raises the worst face of the strip's
++                    # own blocks is taken only for a first height nearer the
++                    # one asked or a jump brought within its limit (a band's
++                    # long sides, along the wall, bought neither and sheared
++                    # 5 x 0.15 blocks to 28 degrees).
++                    if (not FIELD_BUYS or after[6] <= before[6] + FIELD_FACE_GAIN
++                            or first_off(members) < off_before - FIELD_GAIN
++                            or over_limit(members) < over_before):
++                        return None
++                    reason = "nothing"
+             for strip in group:
+                 self.mode[strip] = 0.0
+                 write(strip)
+--- a/blockdrawer/commands.py
++++ b/blockdrawer/commands.py
+@@ -2373,6 +2373,10 @@
+         # the way, or kept on their shared ratio.
+         "field_grading": (
+             "{own} own, {part} part, {shared} shared of {strips} strips".format(**data["field_grading"])
++            + (f", {data['field_grading']['undone_strips']} undone where worse"
++               if data["field_grading"].get("undone_strips") else "")
++            + (f", {data['field_grading']['kept_shared_buying_nothing']} kept shared (buying nothing)"
++               if data["field_grading"].get("kept_shared_buying_nothing") else "")
+             + (f" ({data['field_grading']['dropped']})" if data["field_grading"].get("dropped") else "")
+             if data.get("field_grading") else None
+         ),
+--- a/blockdrawer/quality.py
++++ b/blockdrawer/quality.py
+@@ -567,27 +567,13 @@
+ _TANGENT_FRACTION = 1.0e-4
+ 
+ 
+-def wall_first_widths(
+-    model: MeshModel, asked: dict[str, float] | None = None
+-) -> list[dict[str, Any]]:
+-    """Per wall patch: the first cell height normal to the wall at its spokes.
+-
+-    At every vertex of a wall patch each edge that is on no wall patch is a
+-    candidate spoke. It is a band spoke of the wall edge at that vertex whose
+-    inward normal (towards the edge's block, at the vertex, curved edges by
+-    their end tangent) is closest to the spoke's leaving direction, when that
+-    angle is at most :data:`SPOKE_CONE`; the spoke is reported under that
+-    wall edge's patch. Its first width is the height of its first mesh node
+-    above the wall edge's tangent line at the vertex: the first cell height
+-    normal to the wall, not the width along the edge. An edge with both ends
+-    on a wall is measured from each end.
+-
+-    Each entry gives ``patch``, ``spokes``, ``cells`` (fewest and most on
+-    the spokes), ``first_width`` (smallest and largest height),
+-    ``first_width_edges`` (the spokes with those two heights), ``other_edges``
+-    (non-wall edges at the patch's vertices that are no spoke by the cone
+-    rule) and, when ``asked`` names the patch, ``asked``.
+-    """
++def band_spokes(model: MeshModel):
++    """The band spokes of every wall patch, as ``wall_first_widths`` reads
++    them: ``(edge, wall vertex, patch, inward unit normal)`` for each edge on
++    no wall patch leaving a wall vertex within ``SPOKE_CONE`` of the inward
++    normal of one of the wall edges there (the closest), and, for each edge
++    end at a wall vertex outside the cone, the set of patches at that vertex
++    (counted as ``other_edges``)."""
+     walls = {name for name, boundary in model.boundaries.items() if boundary.kind == "wall"}
+     occurrences = model.edge_occurrences()
+     # Every wall vertex: its wall edges as (patch, tangent, inward normal).
+@@ -603,8 +589,8 @@
+             # start and against it from its end.
+             normal = (-ty, tx) if vertex == directed[0] else (ty, -tx)
+             normals.setdefault(vertex, []).append((name, (tx, ty), normal))
+-    spokes: dict[str, list[tuple[float, str, int]]] = {}
+-    others: dict[str, int] = {}
++    found = []
++    rejected = []
+     for current in model.edges():
+         if model.edge_boundaries.get(current) in walls:
+             continue
+@@ -621,15 +607,46 @@
+             # Inclusive, so the bisector of a right-angled convex corner
+             # (45 degrees from both walls' normals) is a spoke of both.
+             if angle > SPOKE_CONE + 1.0e-6:
+-                for patch in {item[0] for item in normals[vertex]}:
+-                    others[patch] = others.get(patch, 0) + 1
++                rejected.append({item[0] for item in normals[vertex]})
+                 continue
+-            cells = model.edge_cells[current]
+-            index = 1 if vertex == current[0] else cells - 1
+-            px, py = model.edge_point(current, model.edge_node_fraction(current, index))
+-            origin = model.vertices[vertex]
+-            height = (px - origin.x) * normal[0] + (py - origin.y) * normal[1]
+-            spokes.setdefault(name, []).append((height, edge_text(current), cells))
++            found.append((current, vertex, name, normal))
++    return found, rejected
++
++
++def wall_first_widths(
++    model: MeshModel, asked: dict[str, float] | None = None
++) -> list[dict[str, Any]]:
++    """Per wall patch: the first cell height normal to the wall at its spokes.
++
++    At every vertex of a wall patch each edge that is on no wall patch is a
++    candidate spoke. It is a band spoke of the wall edge at that vertex whose
++    inward normal (towards the edge's block, at the vertex, curved edges by
++    their end tangent) is closest to the spoke's leaving direction, when that
++    angle is at most :data:`SPOKE_CONE`; the spoke is reported under that
++    wall edge's patch. Its first width is the height of its first mesh node
++    above the wall edge's tangent line at the vertex: the first cell height
++    normal to the wall, not the width along the edge. An edge with both ends
++    on a wall is measured from each end.
++
++    Each entry gives ``patch``, ``spokes``, ``cells`` (fewest and most on
++    the spokes), ``first_width`` (smallest and largest height),
++    ``first_width_edges`` (the spokes with those two heights), ``other_edges``
++    (non-wall edges at the patch's vertices that are no spoke by the cone
++    rule) and, when ``asked`` names the patch, ``asked``.
++    """
++    spokes: dict[str, list[tuple[float, str, int]]] = {}
++    others: dict[str, int] = {}
++    found, rejected = band_spokes(model)
++    for current, vertex, name, normal in found:
++        cells = model.edge_cells[current]
++        index = 1 if vertex == current[0] else cells - 1
++        px, py = model.edge_point(current, model.edge_node_fraction(current, index))
++        origin = model.vertices[vertex]
++        height = (px - origin.x) * normal[0] + (py - origin.y) * normal[1]
++        spokes.setdefault(name, []).append((height, edge_text(current), cells))
++    for patches in rejected:
++        for patch in patches:
++            others[patch] = others.get(patch, 0) + 1
+     result = []
+     for name in sorted(set(spokes) | set(others)):
+         items = spokes.get(name, [])
+--- a/tests/test_size.py
++++ b/tests/test_size.py
+@@ -829,8 +829,114 @@
+         self.assertEqual(to_data(model), before)
+ 
+ 
++def band_row() -> MeshModel:
++    """A wall 5 long under a band 0.15 high, a wall at its left end and a
++    skewed core above: the band's long sides (along the wall) would take
++    different along-wall series and shear the band's cells."""
++    points = {"a0": (0.0, 0.0), "a1": (5.0, 0.0), "c0": (0.0, 0.15), "c1": (5.0, 0.15),
++              "d0": (0.0, 1.0), "d1": (4.0, 1.0)}
++    quads = [("a0", "a1", "c1", "c0"), ("c0", "c1", "d1", "d0")]
++    model = _blocks(points, quads, ["a0-a1", "a0-c0", "c0-d0"])
++    return apply_commands(model, ["set_export_settings z_min_patch_type=empty z_max_patch_type=empty"]).model
++
++
++class FieldPassTests(unittest.TestCase):
++    OPTIONS = dict(first_width=0.002, core_size=0.08, growth=1.15, wall_aspect=25.0)
++
++    def _sized(self, **patches):
++        from unittest import mock
++
++        from blockdrawer import size as size_module
++
++        model = band_row()
++        with mock.patch.multiple(size_module, FIELD_GAIN=size_module.FIELD_GAIN, **patches):
++            result = size_model(model, SizeOptions(**self.OPTIONS))
++        return model, result
++
++    def test_a_strip_that_buys_nothing_keeps_one_ratio(self) -> None:
++        import math
++
++        def logs(model):
++            # The band's long sides in one direction (a0 -> a1, c0 -> c1).
++            return [math.log(model.edge_total_expansion(edge_key(*pair))) * (1 if pair[0] < pair[1] else -1)
++                    for pair in (("a0", "a1"), ("c0", "c1"))]
++
++        sheared, old = self._sized(FIELD_BUYS=False)
++        kept, new = self._sized()
++        wall, front = logs(sheared)
++        self.assertGreater(abs(wall - front), 0.05)
++        wall, front = logs(kept)
++        self.assertAlmostEqual(wall, front, places=9)
++        self.assertGreaterEqual(new.field_grading["kept_shared_buying_nothing"], 1)
++        # The wall spokes still get the first width asked.
++        from blockdrawer.quality import wall_first_widths
++
++        (band,) = [item for item in wall_first_widths(kept) if item["spokes"]]
++        low, high = band["first_width"]
++        self.assertLess(max(abs(low / 0.002 - 1), abs(high / 0.002 - 1)), 0.02)
++
++    def _with_verify(self, change, **patches):
++        """Size the band row with ``_verify`` changed by ``change(look,
++        blocks, summary)`` on the field pass's looks only (look 0: the pass,
++        1: the spent state, 2...: the pass after each undo)."""
++        from unittest import mock
++
++        from blockdrawer import size as size_module
++
++        real_verify, real_pass = size_module._verify, size_module._field_pass
++        looks = []
++
++        def verify(model, neighbours):
++            blocks, summary = real_verify(model, neighbours)
++            if looks:
++                look = looks[0]
++                looks[0] += 1
++                return change(look, blocks, summary)
++            return blocks, summary
++
++        def field_pass(working, state, options):
++            looks.append(0)
++            try:
++                return real_pass(working, state, options)
++            finally:
++                looks.clear()
++
++        with mock.patch.object(size_module, "_verify", side_effect=verify), \
++                mock.patch.object(size_module, "_field_pass", side_effect=field_pass), \
++                mock.patch.multiple(size_module, FIELD_BUYS=False, **patches):
++            return size_model(band_row(), SizeOptions(**self.OPTIONS))
++
++    def test_a_pass_worse_in_one_block_is_undone_there_only(self) -> None:
++        def change(look, blocks, summary):
++            # The first look at the pass finds b1 worse; once its strips are
++            # back on their shared ratios the pass holds.
++            if look == 0:
++                blocks = {**blocks, "b1": {**blocks["b1"], "severe_faces": blocks["b1"]["severe_faces"] + 1}}
++                summary = {**summary, "severe_faces": summary["severe_faces"] + 1}
++            return blocks, summary
++
++        record = self._with_verify(change).field_grading
++        self.assertNotIn("dropped", record)
++        self.assertGreaterEqual(record["undone_strips"], 1)
++        self.assertLess(record["undone_strips"], record["strips"])
++        self.assertTrue(record["undone_edges"])
++        # Without the partial undo the same pass is dropped whole.
++        record = self._with_verify(change, FIELD_PARTIAL_UNDO=False).field_grading
++        self.assertIn("dropped", record)
++
++    def test_dropping_the_whole_pass_stays_the_last_resort(self) -> None:
++        def change(look, blocks, summary):
++            if look == 1:
++                return blocks, summary
++            # Every look at the pass is worse, wherever it was undone.
++            return ({name: {**item, "severe_faces": item["severe_faces"] + 5} for name, item in blocks.items()},
++                    {**summary, "severe_faces": summary["severe_faces"] + 10})
++
++        self.assertIn("dropped", self._with_verify(change).field_grading)
++
++
+ class SizeNoteTests(unittest.TestCase):
+-    def test_the_raised_components_and_the_walls_off(self) -> None:
++    def test_the_raised_components_are_listed(self) -> None:
+         from blockdrawer.size import _off_walls, _raised
+ 
+         moves = [
+@@ -842,28 +948,13 @@
+         self.assertEqual(_raised(moves), ["v4-v7 20->22 +400", "v1-v2 10->13 +320"])
+         bands = [{"patch": "wall", "first_width": [0.0016, 0.002], "asked": 0.002},
+                  {"patch": "top", "first_width": [0.0019, 0.002], "asked": 0.002}]
+-        self.assertEqual(_off_walls(bands, 0.10), ["wall 0.0016..0.002 for 0.002 (-20%..+0%)"])
+-
+-    def test_a_dropped_pass_names_the_walls_it_leaves_off(self) -> None:
+-        from unittest import mock
+-
+-        from blockdrawer import size as size_module
+-
+-        def dropped(working, state, options):
+-            return state, {"strips": 1, "own": 0, "part": 0, "shared": 1, "refused_by_jumps": 0,
+-                           "refused_by_grid": 0, "dropped": "worse than the spent state"}
+-
+-        with mock.patch.object(size_module, "_field_pass", side_effect=dropped):
+-            result = size_model(band(), SizeOptions(0.001, 0.1, growth=1.2))
+-        self.assertIn("the field pass was dropped", result.note)
+-        self.assertIn("first widths more than 10 percent off the one asked on wall", result.note)
++        (off,) = _off_walls(bands, 0.10)
++        self.assertTrue(off.startswith("wall 0.0016..0.002 for 0.002 (-20%..+0%)"))
+ 
+-    def test_the_digest_carries_them_flat(self) -> None:
+-        batch = apply_commands(o_grid(), ["size 0.01 0.4 growth=1.2 budget=40000"])
++    def test_the_digest_carries_them(self) -> None:
++        batch = apply_commands(band_row(), ["size first_width=0.002 core_size=0.08 growth=1.15 wall_aspect=25"])
+         (note,) = batch_digest(batch.model, batch)["notes"]
+-        result = batch.results[0].result
+-        self.assertIn("raised", result)
+-        self.assertIn("field_cells_after_splits", result)
++        self.assertIn("field_grading", note)
+         for value in note.values():
+             self.assertTrue(isinstance(value, (int, float, str, bool)) or (
+                 isinstance(value, list) and all(not isinstance(item, (list, dict)) for item in value)), value)

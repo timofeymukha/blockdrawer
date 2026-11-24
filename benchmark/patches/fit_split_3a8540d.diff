@@ -1,0 +1,341 @@
+diff --git a/blockdrawer/commands.py b/blockdrawer/commands.py
+index 9e100a3..c1d9b81 100644
+--- a/blockdrawer/commands.py
++++ b/blockdrawer/commands.py
+@@ -765,7 +765,7 @@ def _run_smooth(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
+ 
+ 
+ def _run_size(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
+-    from .size import SizeOptions, size_model
++    from .size import FIT_SPLIT_RATIO, SizeOptions, size_model
+ 
+     overrides = []
+     for item in (args.get("first_widths") or "").replace(";", ",").split(","):
+@@ -791,6 +791,7 @@ def _run_size(model: MeshModel, args: dict[str, Any]) -> dict[str, Any]:
+         budget=args["budget"] or None,
+         patch_first_widths=tuple(overrides),
+         split=args["split"],
++        fit_split=FIT_SPLIT_RATIO if args["fit_split"] < 0 else args["fit_split"],
+         keep_counts=args["keep_counts"],
+         method=args["method"],
+         grading=args["grading"],
+@@ -1421,6 +1422,10 @@ _register(CommandSpec(
+                   required=False, default=None),
+         Parameter("split", "bool", "split two-ended strips where their size peaks",
+                   required=False, default=True),
++        Parameter("fit_split", "float",
++                  "also split a strip where its one geometric series needs more than this many "
++                  "times the cells of the best single split (0: off; default size.FIT_SPLIT_RATIO)",
++                  required=False, default=-1.0),
+         Parameter("method", "choice",
+                   "directional (default) or distance: item 3's wall-distance sizing, "
+                   "no budget spending; compare the two by check when the directional "
+diff --git a/blockdrawer/size.py b/blockdrawer/size.py
+index 4465c0f..470c20e 100644
+--- a/blockdrawer/size.py
++++ b/blockdrawer/size.py
+@@ -96,6 +96,12 @@ from .smooth import VERIFY_CELLS  # the verification's resolution, smooth's
+ # both its ends by this factor (measured in the README).
+ SPLIT_RATIO = 2.5
+ SPLIT_ROUNDS = 8
++# A strip is also cut where its one geometric series needs more than this
++# many times the cells of the best single split of its count component
++# (``_fit_cuts``; measured in the README). 0 turns the rule off.
++FIT_SPLIT_RATIO = 1.5
++# Cut positions tried along the fit-setting member, at most.
++FIT_CUT_SAMPLES = 64
+ # Without a budget, continuity may spend this multiple of the cells the
+ # field alone asks for (measured in the README).
+ DEFAULT_BUDGET = 1.5
+@@ -172,6 +178,9 @@ class SizeOptions:
+     budget: int | None = None
+     patch_first_widths: tuple[tuple[str, float], ...] = ()
+     split: bool = True
++    # Cut a strip where its one series needs more than this many times the
++    # cells of a single split (``_fit_cuts``); 0 keeps only the two-ended rule.
++    fit_split: float = FIT_SPLIT_RATIO
+     minimum_cells: int = 1
+     maximum_cells: int = 2000
+     # Keep every count and recompute the gradings from the current
+@@ -201,6 +210,8 @@ class SizeOptions:
+             raise TopologyError("method must be directional or distance")
+         if self.method == "distance" and self.keep_counts:
+             raise TopologyError("keep_counts applies to method=directional only")
++        if self.fit_split < 0.0 or 0.0 < self.fit_split <= 1.0:
++            raise TopologyError("fit_split must be 0 (off) or above 1")
+         if self.grading not in ("strip", "field"):
+             raise TopologyError("grading must be strip or field")
+         for name, width in self.patch_first_widths:
+@@ -601,7 +612,7 @@ def size_model(
+     state = _solve(working, field_, options, blocks, bbox)
+     if options.split and not options.keep_counts:
+         for _attempt in range(SPLIT_ROUNDS):
+-            if not state["two_ended"]:
++            if not state["two_ended"] and not state["fit_cuts"]:
+                 break
+             saved = from_data(to_data(working))
+             made = len(splits)
+@@ -846,9 +857,13 @@ def _solve(working, field_, options, blocks, bbox) -> dict:
+     counts: dict[EdgeKey, int] = dict(working.edge_cells)
+     factor = 1.0
+     two_ended: dict[EdgeKey, tuple[float, float]] = {}
++    fit_cuts: dict[EdgeKey, tuple[float, float]] = {}
+     if not options.keep_counts:
+         ratios = _ratios(strips, edges, bounds, options)
+-        targets = _targets(edges, bounds, sized, slope, options, _strip_targets(strips, edges, bounds, ratios, options), two_ended)
++        needed = _strip_targets(strips, edges, bounds, ratios, options)
++        targets = _targets(edges, bounds, sized, slope, options, needed, two_ended)
++        if options.split and options.fit_split:
++            fit_cuts = _fit_cuts(working, edges, bounds, sized, needed, two_ended, options)
+         factor = _budget_factor(working, sized, targets, options)
+         for members, target in zip(sized, targets):
+             value = int(min(options.maximum_cells, max(options.minimum_cells, math.ceil(target * factor - 1.0e-9))))
+@@ -859,9 +874,124 @@ def _solve(working, field_, options, blocks, bbox) -> dict:
+         "components": len(sized), "factor": factor, "links": links, "seeds": seeds,
+         "ratios": _ratios(strips, edges, bounds, options),
+         "two_ended": {key: value for key, value in two_ended.items() if key in scope},
++        "fit_cuts": {key: value for key, value in fit_cuts.items() if key in scope},
+     }
+ 
+ 
++def _component_orientation(model: MeshModel, members) -> dict[EdgeKey, str]:
++    """Each member's begin vertex, carried through the blocks (a side's end
++    faces the corner across the block) and across cyclic pairs: the
++    direction ``split_edge`` cuts the component in, with no length filter."""
++    inside = set(members)
++    pairs: dict[tuple[EdgeKey, str], list[tuple[EdgeKey, str]]] = {}
++    for block in model.blocks:
++        keys = [edge_key(*block.directed_edge(index)) for index in range(4)]
++        corners = block.vertices
++        for k in range(2):
++            first, second = keys[k], keys[k + 2]
++            if first not in inside:
++                continue
++            for here, there in ((corners[k], corners[(k + 3) % 4]),
++                                (corners[(k + 1) % 4], corners[(k + 2) % 4])):
++                pairs.setdefault((first, here), []).append((second, there))
++                pairs.setdefault((second, there), []).append((first, here))
++    seed = min(members)
++    orientation = {seed: seed[0]}
++    stack = [seed]
++    while stack:
++        current = stack.pop()
++        begin = orientation[current]
++        end = current[0] if current[1] == begin else current[1]
++        for vertex, keeps in ((begin, True), (end, False)):
++            for other, other_vertex in pairs.get((current, vertex), ()):
++                if other in orientation:
++                    continue
++                other_end = other[0] if other[1] == other_vertex else other[1]
++                orientation[other] = other_vertex if keeps else other_end
++                stack.append(other)
++    return orientation
++
++
++def _piece_count(length: float, start: float, end: float, options: SizeOptions) -> int:
++    """Fewest cells of one geometric series within end widths ``start`` and
++    ``end`` over ``length``, growing at most ``growth`` from cell to cell."""
++    if length <= 0.0:
++        return 1
++    cells = _fit_count(length, end / start, start, end, options.maximum_cells)
++    ratio = max(start, end) / min(start, end)
++    if ratio > 1.0:
++        cells = max(cells, 1 + math.ceil(math.log(ratio) / math.log(options.growth) - 1.0e-9))
++    return min(cells, options.maximum_cells)
++
++
++def _fit_cuts(model, edges, bounds, components, needed, two_ended, options) -> dict[EdgeKey, tuple[float, float]]:
++    """Strips one geometric series cannot follow: per count component, the
++    member whose series sets the count (``_strip_targets``) against the best
++    single split of the component - over cut positions along that member,
++    every member cut at the same fraction of its length (in the direction
++    the cut runs through the blocks) into two series, each within its end
++    bounds and the width the profile wants at the cut, the count per side
++    the largest any member needs. A component whose fit needs more than
++    ``fit_split`` times that is cut there: ``{member: (fraction, ratio)}``
++    in the member's canonical direction. One series per edge cannot grow
++    from a wall's first width and then level off at the core size (a wake
++    row 19 long needed 280 cells where its profile asks 80), nor follow a
++    profile fine at both ends below ``SPLIT_RATIO``. Components holding a
++    cyclic edge are left out: ``_split_strips`` would refuse them."""
++    cyclic = {edge for match in _cyclic_matches(model) for edge in (match.first, match.second)}
++    slope = options.growth - 1.0
++    found: dict[EdgeKey, tuple[float, float]] = {}
++    for members in components:
++        if any(member in cyclic for member in members):
++            continue
++        candidates = [member for member in members if member not in two_ended]
++        if not candidates:
++            continue
++        setter = max(candidates, key=lambda member: (needed[member], member))
++        fit = needed[setter]
++        profiles = {}
++        demand = 0.0
++        for member in members:
++            item = edges[member]
++            profiles[member] = _profile(
++                item, bounds[(member, member[0])], bounds[(member, member[1])], slope, options.core_size)
++            demand = max(demand, _demand(item, profiles[member]))
++        # A split needs at least about the profile's own demand.
++        if fit <= options.fit_split * max(1.0, demand):
++            continue
++        orientation = _component_orientation(model, members)
++        item = edges[setter]
++        total = item.arc[-1]
++        indices = [index for index, s in enumerate(item.arc) if 0.05 < s / total < 0.95]
++        if len(indices) > FIT_CUT_SAMPLES:
++            step = len(indices) / FIT_CUT_SAMPLES
++            indices = [indices[int(k * step)] for k in range(FIT_CUT_SAMPLES)]
++        setter_forward = orientation[setter] == setter[0]
++        best = None
++        for index in indices:
++            canonical = item.arc[index] / total
++            along = canonical if setter_forward else 1.0 - canonical
++            before = after = 0
++            for member in members:
++                sample = edges[member]
++                length = sample.arc[-1]
++                forward = orientation[member] == member[0]
++                position = (along if forward else 1.0 - along) * length
++                nearest = min(range(len(sample.arc)), key=lambda k: abs(sample.arc[k] - position))
++                width = profiles[member][nearest]
++                first = _piece_count(position, bounds[(member, member[0])], width, options)
++                second = _piece_count(length - position, width, bounds[(member, member[1])], options)
++                if not forward:
++                    first, second = second, first
++                before, after = max(before, first), max(after, second)
++            cells = before + after
++            if best is None or cells < best[0]:
++                best = (cells, canonical)
++        if best is not None and fit > options.fit_split * best[0]:
++            found[setter] = (best[1], fit / best[0])
++    return found
++
++
+ def _field_seeds(edges: dict[EdgeKey, _Edge]) -> dict[tuple[EdgeKey, str], float]:
+     return {
+         **{(current, current[0]): item.field[0] for current, item in edges.items()},
+@@ -1545,15 +1675,34 @@ def _budget_factor(model, components, targets, options: SizeOptions) -> float:
+     return low
+ 
+ 
++def _rounds(first, second, made_any):
++    """``first``'s candidates, then ``second``'s when none of ``first`` was split."""
++    yield from first
++    if not made_any():
++        yield from second
++
++
+ def _split_strips(model, field_, state, options, splits, refused) -> bool:
+     """Split the two-ended strips found, the most two-ended first, at most
+     one per count component; ``True`` when one was split."""
+-    candidates = sorted(state["two_ended"].items(), key=lambda item: (-item[1][1], item[0]))
++    two_ended = [
++        (current, fraction, ratio, f"two-ended strip of {'-'.join(current)} (peak {ratio:.3g} times its ends)")
++        for current, (fraction, ratio) in sorted(state["two_ended"].items(), key=lambda item: (-item[1][1], item[0]))
++    ][:SPLITS_PER_ROUND * 4]
++    # The strips one series cannot follow (``_fit_cuts``), worst first, in a
++    # round of their own: only when no two-ended strip was split, so a round
++    # undone for its jump cost never takes a two-ended split with it.
++    fit = [
++        (current, fraction, ratio,
++         f"strip of {'-'.join(current)} (one series {ratio:.3g} times a split's cells)")
++        for current, (fraction, ratio) in sorted(
++            state.get("fit_cuts", {}).items(), key=lambda item: (-item[1][1], item[0]))
++    ][:SPLITS_PER_ROUND * 4]
+     cyclic = {edge for match in _cyclic_matches(model) for edge in (match.first, match.second)}
+     done: set[EdgeKey] = set()
+     split_any = False
+     made = 0
+-    for current, (fraction, ratio) in candidates[:SPLITS_PER_ROUND * 4]:
++    for current, fraction, ratio, label in _rounds(two_ended, fit, lambda: split_any):
+         if current in done or current not in model.edge_cells:
+             continue
+         component = model.edge_constraint_component(current)
+@@ -1563,7 +1712,7 @@ def _split_strips(model, field_, state, options, splits, refused) -> bool:
+         coupled = sorted(component & cyclic)
+         if coupled:
+             text = (
+-                f"two-ended strip of {'-'.join(current)} (peak {ratio:.3g} times its ends) not "
++                f"{label} not "
+                 f"split: it holds the cyclic edge {'-'.join(coupled[0])}, whose partner a split "
+                 "would not cut"
+             )
+@@ -1578,7 +1727,7 @@ def _split_strips(model, field_, state, options, splits, refused) -> bool:
+             split = model.split_edge(current, fraction)
+         except (TopologyError, ValueError) as exc:
+             model.__dict__.update(saved.__dict__)
+-            text = f"two-ended strip of {'-'.join(current)} (peak {ratio:.3g} times its ends) not split: {exc}"
++            text = f"{label} not split: {exc}"
+             if text not in refused:
+                 refused.append(text)
+             continue
+@@ -1603,7 +1752,7 @@ def _split_strips(model, field_, state, options, splits, refused) -> bool:
+             end = next(v for v in sliver[0] if v not in split.split_vertex_ids)
+             parent = next((member for member in sorted(component) if end in member), current)
+             text = (
+-                f"two-ended strip of {'-'.join(current)} not split: cutting it at {fraction:.3g} "
++                f"{label.split(' (')[0]} not split: cutting it at {fraction:.3g} "
+                 f"would leave the piece of {'-'.join(parent)} at {end} {sliver[1]:.3g} long where "
+                 f"cells of {sliver[2]:.3g} are wanted"
+             )
+@@ -1614,6 +1763,9 @@ def _split_strips(model, field_, state, options, splits, refused) -> bool:
+             "edge": "-".join(current),
+             "fraction": fraction,
+             "peak_over_ends": ratio,
++            # "two-ended" (the profile peaks inside) or "fit" (one series
++            # needs ``ratio`` times a single split's cells, ``_fit_cuts``).
++            "rule": "fit" if label.startswith("strip of") else "two-ended",
+             "new_vertices": list(split.split_vertex_ids),
+             "new_blocks": list(split.new_block_ids),
+         })
+diff --git a/tests/test_size.py b/tests/test_size.py
+index 2cd94a0..6b10eb3 100644
+--- a/tests/test_size.py
++++ b/tests/test_size.py
+@@ -827,3 +827,45 @@ class FoldTests(unittest.TestCase):
+         self.assertIn("v0-v1 (segment 3 of 3", text)
+         self.assertIn("control point 1", text)
+         self.assertEqual(to_data(model), before)
++
++
++def long_row() -> MeshModel:
++    """One block 20 long and 1 high with a wall at its left end: the long
++    sides grow from the wall's first width and level off at the core size,
++    which one geometric series per edge cannot follow."""
++    points = {"a0": (0.0, 0.0), "a1": (20.0, 0.0), "b1": (20.0, 1.0), "b0": (0.0, 1.0)}
++    return _blocks(points, [("a0", "a1", "b1", "b0")], ["a0-b0"])
++
++
++class FitSplitTests(unittest.TestCase):
++    OPTIONS = dict(first_width=0.001, core_size=0.2, growth=1.2)
++
++    def test_a_strip_one_series_cannot_follow_is_cut(self) -> None:
++        plain = long_row()
++        off = size_model(plain, SizeOptions(**self.OPTIONS, fit_split=0.0))
++        self.assertEqual(off.splits, [])
++        cut = long_row()
++        on = size_model(cut, SizeOptions(**self.OPTIONS))
++        rules = [item["rule"] for item in on.splits]
++        self.assertIn("fit", rules)
++        self.assertEqual(len(cut.blocks), 1 + rules.count("fit") + rules.count("two-ended"))
++        # The cut row needs far fewer cells than one series over 20.
++        self.assertLess(on.field_cells, 0.5 * off.field_cells)
++        self.assertLess(on.total_cells, 0.5 * off.total_cells)
++        self.assertEqual(on.jumps.get("above_2_5", 0), 0)
++        # Each split names its new vertices and blocks, as the two-ended ones do.
++        for item in on.splits:
++            self.assertTrue(item["new_vertices"] and item["new_blocks"])
++
++    def test_the_option_and_its_check(self) -> None:
++        from blockdrawer.size import FIT_SPLIT_RATIO
++
++        self.assertGreater(FIT_SPLIT_RATIO, 1.0)
++        default = apply_commands(long_row(), ["size 0.001 0.2 growth=1.2"])
++        named = apply_commands(long_row(), [f"size 0.001 0.2 growth=1.2 fit_split={FIT_SPLIT_RATIO}"])
++        self.assertEqual(to_data(default.model), to_data(named.model))
++        off = apply_commands(long_row(), ["size 0.001 0.2 growth=1.2 fit_split=0"])
++        self.assertEqual(off.results[0].result["splits"], [])
++        for bad in (-1.0, 0.5, 1.0):
++            with self.assertRaises(TopologyError):
++                size_model(long_row(), SizeOptions(**self.OPTIONS, fit_split=bad))

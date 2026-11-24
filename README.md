@@ -455,6 +455,11 @@ also makes BlockDrawer usable by scripts and coding agents. The entry point is
 accepts `--json` for machine-readable output and exits with status 1 and an
 `error:` line (or a JSON object with an `error` key) on failure.
 
+The measurements quoted below as "benchmark round N" come from a held-out
+benchmark of the agent workflow - one fresh agent per case, working from the
+meshing skill alone. Its protocol, per-round ledgers and case generator are
+in [`benchmark/`](benchmark/README.md).
+
 ```bash
 blockdrawer-cli new case.json
 blockdrawer-cli new layout.json --box -5 0 0 1   # first block where the layout wants it

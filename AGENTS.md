@@ -64,6 +64,15 @@ them in the canvas widgets.
   as it starts, with the seconds since the run began (`pipeline.PROGRESS`,
   set only by `run`; `mark` for a stage, `stage` for an opt-in trial
   enclosing others, two levels shown).
+- Agent-workflow benchmark: `benchmark/` holds the record of the six
+  held-out rounds the skill and the operators were measured on - the
+  protocol (`TRIAL.md`), the best result per case (`REFERENCE.md`), one
+  ledger per round (`ROUND1.md` to `ROUND6.md`, each with the fix batches
+  it led to, their rules and verification numbers), the case generator
+  (`make_cases.py`, NumPy and Matplotlib) and the low-profile wrappers
+  (`bin/`). It is a record: paths in it name the machine it ran on, and
+  the case folders and trial deliverables are not in the repository; see
+  `benchmark/README.md`. Nothing in `blockdrawer/` or `tests/` uses it.
 
 ## Architecture
 

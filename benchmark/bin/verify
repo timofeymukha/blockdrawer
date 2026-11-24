@@ -1,0 +1,8 @@
+#!/bin/bash
+# Independent re-check of a trial: verify CASE [TRIAL]. Runs through the low-profile runner.
+here="$(dirname "$(readlink -f "$0")")"; case_name="$1"; trial="${2:-trial1}"
+session="$here/../$case_name/$trial/session.json"
+out="/tmp/garbage/blockdrawer-bench/$case_name/verify-$trial"; rm -rf "$out"; mkdir -p "$out"
+echo "== describe"; "$here/bd" describe "$session" --unassigned --section summary 2>&1 | head -40
+echo "== check";    "$here/bd" check "$session" --case "$out/case" 2>&1 | head -40
+echo "== quality";  "$here/bd" quality "$session" --summary-only --max-warnings 5 2>&1 | head -60
